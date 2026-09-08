@@ -61,16 +61,41 @@ else ok "VKS_LAB_STATE_DIR pointing at a FILE does not resolve"; fi
 # resolver returned 1" -- is MEASURED FALSE: jumpbox-launch.sh calls the hint from its own
 # `[ -s "$_sup" ]` guard and never calls the resolver, so a non-empty candidate genuinely arrives.
 printf '12345\n' > "$T/present"; : > "$T/empty"
+# The ABSENT arm rides on VKS_LAB_STATE_DIR, not KUBECONFIG. $KUBECONFIG stopped being a candidate
+# on 2026-09-08 (B547 mode 1: it is by construction the GUEST, and the resolver was promoting it to
+# "the Supervisor" with rc=0 on any box lacking a Supervisor file). This case is about the LABELLER,
+# not about that variable, so it is re-pointed at a candidate that still exists rather than deleted.
+mkdir -p "$T/labmiss"
 lbl=$(run supervisor_kubeconfig_hint VKS_SUPERVISOR_KUBECONFIG="$T/present" \
-                                     ARGOCD_KUBECONFIG="$T/empty" KUBECONFIG=/does/not/exist)
+                                     ARGOCD_KUBECONFIG="$T/empty" VKS_LAB_STATE_DIR="$T/labmiss")
 if printf '%s' "$lbl" | grep -q "present .*$T/present"; then ok "label: a NON-empty file reads 'present'"
 else bad "label: a NON-empty file reads 'present'" "$(printf '%s' "$lbl" | grep -F "$T/present")"; fi
 
 if printf '%s' "$lbl" | grep -qF "EMPTY (0 bytes) $T/empty"; then ok "label: a 0-byte file reads 'EMPTY (0 bytes)'"
 else bad "label: a 0-byte file reads 'EMPTY (0 bytes)'" "$(printf '%s' "$lbl" | grep -F "$T/empty")"; fi
 
-if printf '%s' "$lbl" | grep -q "absent .*does/not/exist"; then ok "label: a missing file reads 'absent'"
+if printf '%s' "$lbl" | grep -q "absent .*labmiss/kubeconfig"; then ok "label: a missing file reads 'absent'"
 else bad "label: a missing file reads 'absent'" "not labelled absent"; fi
+
+# 🔴 B547 MODE 1: $KUBECONFIG must NOT be promoted to "the Supervisor". It is by construction the
+# GUEST cluster, and while it was the last candidate the resolver returned it -- with rc=0 -- on any
+# box with no Supervisor file, so no downstream emptiness test could tell. Two consumers of this
+# resolver CREATE and DESTROY clusters.
+printf 'apiVersion: v1\n' > "$T/guest-kc"
+_promoted=$(env -u VKS_SUPERVISOR_KUBECONFIG -u SUPERVISOR_KUBECONFIG -u ARGOCD_KUBECONFIG \
+  KUBECONFIG="$T/guest-kc" VKS_LAB_STATE_DIR="$T/nolab" REPO_ROOT=/nonexistent SKIP_DOTENV=1 \
+  bash -c '. scripts/lib/os.sh 2>/dev/null; supervisor_kubeconfig || true' 2>/dev/null)
+if [ -z "$_promoted" ]; then
+  ok "a REAL \$KUBECONFIG file is NOT promoted to the Supervisor (B547 mode 1)"
+else
+  bad "a REAL \$KUBECONFIG file is NOT promoted to the Supervisor (B547 mode 1)" \
+      "resolver returned [$_promoted] -- that is the GUEST, and rc=0 means nothing downstream can tell"
+fi
+if printf '%s' "$(run supervisor_kubeconfig_hint KUBECONFIG="$T/guest-kc")" | grep -qF "$T/guest-kc"; then
+  bad "the hint still ADVERTISES \$KUBECONFIG as a search location" "it is no longer a candidate"
+else
+  ok "...and the hint no longer advertises it as a search location"
+fi
 
 # --- 5. or_die must PRINT the derived list, never a hand-typed one ------------------------------
 # The hand-typed version named FIVE entries where candidates emitted SIX AT THE TIME (FIVE since

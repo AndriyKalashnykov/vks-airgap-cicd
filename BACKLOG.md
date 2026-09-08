@@ -6725,7 +6725,53 @@ VARIABLE"). Measured: every live `VKS_PASSWORD` reader is in the vsphere arm
 If the wording is revisited a third time, lead with the variable NAME rather than `<not set`, and
 treat it as a third attempt after two refutations — with its own round.
 
-## B547 — 🔴 `supervisor_kubeconfig` can promote a GUEST or a FOREIGN LAB's Supervisor, and rc is always 0
+## B547 — 🟡 MODE 1 CLOSED 2026-09-08; mode 2 is DISCLOSED at both destructive callers; the rest is B467
+
+**(1) SHIPPED — `$KUBECONFIG` is no longer a candidate.** One line. It is by construction the GUEST
+(`30-vks-login.sh` tells the operator to put their WORKLOAD kubeconfig there), so while it sat last
+the resolver returned a GUEST and labelled it "the Supervisor" — with rc=0, so nothing downstream
+could tell. It also makes `Makefile:263-267` (*"KUBECONFIG= does not work for Supervisor-scoped
+targets"*) TRUE rather than approximately true.
+
+**MEASURED BEFORE REMOVING, because the failure direction flips.** The row warned that five non-test
+callers would go from silently receiving `$KUBECONFIG` to receiving empty. All five were already
+defended: `09-argocd-address.sh` has a fallback AND a `[ -f ]` die; `24-vks-k8s-version.sh` uses the
+`_or_die` variant; `43-install-istio-package.sh` declines to call it at all (its own comment says
+so); `creds.sh`'s four sites each handle empty explicitly. And no test asserted KUBECONFIG-as-winner
+— `test-supervisor-kubeconfig.sh` uses `env -u KUBECONFIG` and a `/does/not/exist` path throughout.
+⚠️ The row's cited line numbers (`creds.sh:1580`, `:1690`) are STALE; the real sites are `:496`,
+`:1113`, `:1231`, `:1858`.
+
+Pinned by two new cases (14 -> 16), RED-proven by restoring the slot: a real `$KUBECONFIG` file must
+not be promoted, and the hint must not advertise it. One existing case asserted the labeller THROUGH
+`KUBECONFIG=/does/not/exist`; it was re-pointed at a candidate that still exists rather than deleted,
+because its subject is the labeller, not that variable.
+
+**(4) SHIPPED — mode 2 is now DISCLOSED at both destructive callers.** `CONFIRM=$VKS_CLUSTER_NAME`
+proves the operator knows the cluster NAME; it proves nothing about WHICH SUPERVISOR the resolver
+just picked, and the confirmation happens BEFORE the resolver runs. Both
+`25-vks-cluster-create.sh` and `98-uninstall-all.sh` now print the resolved PATH and the ENDPOINT it
+points at. It reads the server out of the FILE (`state_kubeconfig_server` parses it — no network, no
+RBAC, works on a torn-down cluster), so it costs nothing and cannot fail the run. Smoke-tested both
+ways: a real file yields `https://192.168.101.128:443`; a missing one degrades to a named
+"could not read" rather than crashing.
+
+**(2) IS NOT THIS ROW'S — it is B467.** The prescription said to wire `kubeconfig_is_supervisor` at
+the two `creds.sh` sites. Measured: that function is called from `creds.sh` **zero** times, and
+`lib/os.sh:1077` states in as many words that wiring it is B467. Doing it here would be a new design
+needing its own round, under the wrong row.
+
+**(3) NOT built, deliberately** — the identity test stays refuted (see below), and the diagnostic
+that replaces it is what (4) ships.
+
+**Residual:** mode 2 is disclosed, not prevented. A foreign Supervisor still answers and
+authenticates; the operator now sees which endpoint before the destructive step, which is the most a
+resolver-level change can honestly offer. The one measured "foreign lab" on this box was a different
+PATH TO THE SAME ESTATE.
+
+---
+
+## B547 (original) — `supervisor_kubeconfig` can promote a GUEST or a FOREIGN LAB's Supervisor, and rc is always 0
 
 Measured 2026-09-07, two ways, both on a real box.
 

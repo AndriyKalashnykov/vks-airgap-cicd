@@ -972,7 +972,7 @@ supervisor_kubeconfig_candidates() {
   # nested-vsphere-lab -- not at its targets, its files, or its output." Guarding the EMITTER fixes
   # both consumers at once and makes the claim above true. Behaviour-preserving for the resolver:
   # if the directory does not exist the file cannot exist, so [ -s ] was already false.
-  # ⚠️ THE LAB SLOT IS EMPTIED, NEVER REMOVED. `printf` emits FIVE lines (it was SIX until the
+  # ⚠️ THE LAB SLOT IS EMPTIED, NEVER REMOVED. `printf` emits FOUR lines (SIX until the
   # unprefixed SUPERVISOR_KUBECONFIG alias was dropped, 2026-08-24); the 4th is EMPTY when there is
   # no lab dir rather than absent. MEASURED: both consumers (supervisor_kubeconfig,
   # supervisor_kubeconfig_hint) use `for c in $(...)`, which drops empty fields, and there is no
@@ -994,9 +994,27 @@ supervisor_kubeconfig_candidates() {
   # `git log -S` for the name searched a corpus that by construction cannot contain the only file
   # an operator can set it in. Exposure is bounded to operators who ALREADY had it set, since
   # .env.example no longer teaches the name. Do not re-add a guard without re-deciding that.
+  # 🔴 $KUBECONFIG IS NOT A CANDIDATE (B547 mode 1, removed 2026-09-08). It is by construction the
+  # GUEST cluster -- 30-vks-login.sh tells the operator to put their WORKLOAD kubeconfig there -- so
+  # keeping it last still meant that on any box with no Supervisor file the resolver returned a
+  # GUEST and labelled it "the Supervisor", with rc=0, so no emptiness test downstream could tell.
+  # Two consumers of this resolver CREATE (25-vks-cluster-create.sh) and DESTROY
+  # (98-uninstall-all.sh) clusters. Removing it also makes Makefile:263-267 ("KUBECONFIG= does not
+  # work for Supervisor-scoped targets") TRUE rather than approximately true.
+  #
+  # MEASURED BEFORE REMOVING, because the failure direction flips: five non-test callers take this
+  # resolver, and they previously received $KUBECONFIG silently where they now receive empty. All
+  # five were already defended -- 09-argocd-address.sh has a fallback AND a [ -f ] die,
+  # 24-vks-k8s-version.sh uses the _or_die variant, 43-install-istio-package.sh declines to call it
+  # at all (its comment says so), and creds.sh's four sites each handle empty explicitly. No test
+  # asserted KUBECONFIG-as-winner either: test-supervisor-kubeconfig.sh uses env -u KUBECONFIG and
+  # a /does/not/exist path throughout.
+  #
+  # ⚠️ FOUR SLOTS NOW, not five. The lab slot is still EMPTIED-not-removed (see above); this one is
+  # genuinely gone, so a future indexed consumer sees four.
   printf '%s\n' "${VKS_SUPERVISOR_KUBECONFIG:-}" \
     "${REPO_ROOT}/secrets/supervisor.kubeconfig" "${ARGOCD_KUBECONFIG:-}" \
-    "${_lab:+$_lab/kubeconfig}" "${KUBECONFIG:-}"
+    "${_lab:+$_lab/kubeconfig}"
 }
 
 # supervisor_kubeconfig_hint — what to print when the resolver returns 1.

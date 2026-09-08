@@ -59,6 +59,16 @@ done
 # the prefixed name always agreed. Collapsed to one name; do not reintroduce a second.
 SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
 [ -f "$SUP" ] || { supervisor_kubeconfig_hint >&2; die "no Supervisor kubeconfig — see the search order above"; }
+# 🔴 SAY WHICH ESTATE. CONFIRM proves the operator knows the cluster NAME; it proves nothing about
+# WHICH SUPERVISOR the resolver just picked (B547 mode 2). The name is typed from memory, the estate
+# is resolved from a candidate ladder, and those are different facts. This reads the server URL out
+# of the kubeconfig FILE (state_kubeconfig_server: kubectl config view PARSES it -- no network, no
+# RBAC, works on a torn-down cluster), so it costs nothing and cannot itself fail the run.
+_sup_srv="$(state_kubeconfig_server "$SUP" 2>/dev/null || true)"
+log_warn "about to act on the Supervisor resolved from: ${SUP}"
+log_warn "  which points at: ${_sup_srv:-<could not read a server URL from that file>}"
+log_warn "  If that is not the estate you meant, STOP now: the resolver picks the first EXISTING"
+log_warn "  candidate, and a different lab's kubeconfig answers and authenticates just as well."
 # </dev/null and --request-timeout are LOAD-BEARING, not hygiene. MEASURED: kubectl against an
 # endpoint it cannot authenticate to emits `Please enter Username:` — an INTERACTIVE PROMPT. Every
 # call here is `>/dev/null 2>&1`, so the prompt is INVISIBLE, and the step-4 wait loop polls for up
