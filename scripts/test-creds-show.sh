@@ -236,8 +236,12 @@ fi
 # complaint that produced the change was, verbatim, "what is this shit" over a fully-serving lab.
 # What must still hold is the ORIGINAL intent: the human is told, not just the machine token. Grep a
 # one-line fragment of the replacement that states the actual reason.
-if printf '%s' "$out" | grep -qi 'carries no cluster stamp'; then
-  ok "...and tells the HUMAN why (no cluster stamp), not just the token"
+# ⚠️ KEYED ON THE PROPERTY, NOT THE PHRASE. This grepped 'carries no cluster stamp' — the exact
+# wording — so it fired RED when that phrase was replaced for being internal jargon a reader cannot
+# parse ("cluster stamp" is our word, not theirs). The intent above is that the human is told the
+# REASON; assert THAT, so the reason can be worded better without breaking the control.
+if printf '%s' "$out" | grep -qiE 'which cluster they came from|carries no cluster stamp'; then
+  ok "...and tells the HUMAN why (it cannot tell which cluster), not just the token"
 else
   bad "...but the human is not told WHY. The token alone is not the deliverable."
 fi
@@ -1267,10 +1271,31 @@ else
 fi
 # THE CONTROL, and it is what stops this becoming a blanket ban: the UNAUTHORIZED arm names
 # `make vks-login` CORRECTLY, because a kubeconfig that EXISTS and was REJECTED is a DECIDABLE state.
-if grep -q 'the Supervisor REJECTED this kubeconfig. Re-run: make vks-login' "${_CREDS_REPO}/scripts/creds.sh"; then
-  ok "B548: the DECIDABLE arm (UNAUTHORIZED) still prescribes it — the rule is decidability, not the string"
+# ⚠️ KEYED ON THE PROPERTY, NOT ON ONE LITERAL. This used to grep
+# 'the Supervisor REJECTED this kubeconfig. Re-run: make vks-login' — and that exact string was
+# MEASURED WRONG on 2026-09-07: under VKS_AUTH_METHOD=kubeconfig, `make vks-login` verifies the
+# GUEST kubeconfig (30-vks-login.sh:42-45) and never touches the Supervisor, so the remedy was a
+# no-op for the failure it was printed for. A control pinned to a defective literal fires RED on the
+# FIX and green on the defect, so it now asserts what B548 actually adjudicated — the decidable arm
+# still points somewhere actionable — plus the specific regression, so the no-op cannot come back.
+_ua="$(sed -n '/UNAUTHORIZED)/,/;;/p' "${_CREDS_REPO}/scripts/creds.sh")"
+if printf '%s' "$_ua" | grep -q 'REJECTED this kubeconfig'; then
+  ok "B548: the DECIDABLE arm (UNAUTHORIZED) still says what happened"
 else
-  bad "B548: the UNAUTHORIZED arm lost its remedy. A rejected kubeconfig IS decidable and re-auth is right."
+  bad "B548: the UNAUTHORIZED arm lost its diagnosis. A rejected kubeconfig IS a decidable state."
+fi
+if printf '%s' "$_ua" | grep -qE 'GUEST kubeconfig|docs/scenario-1'; then
+  ok "B548: ...and points somewhere actionable without prescribing a bare 'make vks-login'"
+else
+  bad "B548: the arm names no way forward. Naming only the diagnosis leaves the reader knowing they
+      are broken with no path (lib/os.sh:1964-1965 records that as its own defect)."
+fi
+if printf '%s' "$_ua" | grep -qE 'Re-run: make vks-login'; then
+  bad "the arm prescribes a bare 'make vks-login' again. MEASURED 2026-09-07: under
+      VKS_AUTH_METHOD=kubeconfig that renews the GUEST kubeconfig and does NOTHING for the
+      Supervisor — it is a no-op for the very failure it is printed for."
+else
+  ok "B548: ...and has not regressed to the no-op remedy"
 fi
 
 if [ "$fail" != 0 ]; then
