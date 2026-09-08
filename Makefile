@@ -1101,7 +1101,7 @@ verify: check-env prune-runs ## e2e: push a change → Tekton build → Harbor �
 # the build-side pods do not exist, the gate finds zero containers and passes VACUOUSLY. Its own
 # INCOMPLETE arm refuses that, but the ordering is what makes the assertion meaningful rather than
 # merely non-fatal.
-verify-workload-images: ## LIVE: every running container in the namespaces WE build in came from OUR registry (B563)
+verify-workload-images: ## LIVE: every running container in the namespaces WE build in (ci, tekton) came from OUR registry
 	@./scripts/97-verify-workload-images.sh
 
 .PHONY: verify-gateway-image
