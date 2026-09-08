@@ -6854,3 +6854,58 @@ the re-check. Assert `rc=7`, not 1.
 
 **Done when:** the shim exists as a helper in `test-fetch-ca-name.sh`, `rc=7` is asserted, and
 reverting the remap to `exit "$_ep_rc"` turns that case RED.
+
+## B556 — ✅ `make creds` hedged on a dead token, and its remedy was a DEAD CITATION
+
+**SHIPPED in #1156.** Three adversary rounds; rounds 1 and 2 each **refuted** the commit before it,
+and two of round 2's HIGHs were defects *introduced by round 1's fixes*. `make ci` was **rc=0 over
+every one of them** — no gate saw any of it.
+
+**The original defect.** `kubectl` reports an expired token and a revoked one identically as
+`Unauthorized`, so the report hedged ("usually an EXPIRED token"). The token's own `exp` claim
+separates them offline, without spending one of the THREE vCenter SSO attempts before permanent
+lockout. `kube_token_expiry` (lib/os.sh) reads it.
+
+**The remedy was worse than the diagnosis.** All four sites cited
+`docs/scenario-1.md, Supervisor token` — **a section that does not exist** (grep: 0 hits). And the
+command is *not* a bare `make vks-login`: scenario-1 Step 6 leaves `.env` on
+`VKS_AUTH_METHOD=kubeconfig`, so a bare run renews the **guest** kubeconfig.
+
+**Verified END-TO-END on the live lab**, not on a fixture: a real kubeconfig re-signed with `exp` in
+the past drew a real `Unauthorized` from the real Supervisor; all four sites named the same
+timestamp; `VKS_AUTH_METHOD=vcf make vks-login` re-minted (`exp` 13:24Z → 15:34Z, `.env`
+byte-identical); the next `make creds` was 12/12 serving and identical to baseline modulo
+timestamps. It re-mints **unconditionally** — `30-vks-login.sh:360` deletes the context, `:400`
+re-creates it; the CLI's `Token is still active. Skipped the token refresh` is the `use` step.
+
+**What the rounds caught, all measured:**
+
+| | |
+|---|---|
+| `{.users[0]}` without `--minify` read the **wrong user's** token — a live *guest* token makes a dead *Supervisor* token report `VALID`. 11 of 11 other `[0]`-index reads in `scripts/` already minify | HIGH |
+| `VALID` fell into the "no readable expiry" hedge — a false sentence about an expiry just read, discarding the one discrimination `kubectl` cannot make | HIGH |
+| the SSH note was keyed on **rendered display text**, which `creds.sh:1503-1507` forbids after its own measured incident | HIGH |
+| scoping the remedy by `VKS_AUTH_METHOD` **INVERTED** it — scenario-1's operator, who *has* the command, was told there isn't one | HIGH |
+| dropping the comma split let a greedy `.*` take the **last** `"exp"` — a dead token reported live, **re-opening the failure direction `--minify` had just closed, in the same commit** | HIGH |
+| the width guard was off by one (bash `[` errors at **19** digits, not 20), and the new `VALID` arm then upgraded `VALID ?` into a confident wrong verdict | HIGH |
+
+**Residuals — NOT closed, named honestly:**
+
+- **`creds.sh` still has ~26 `tr` uses**, two of them bare assignments under `set -euo pipefail`.
+  Bare `photon:5.0` has **no `tr`** (measured), so on such a box `make creds` would *die*, not
+  degrade. Only the two base64url decoders were de-`tr`'d here. Whether this is reachable in
+  practice is unsettled: CLAUDE.md says the air-gap box provisions coreutils from its internal
+  mirror, so `tr` is expected there — the exposure is a bare container, not a provisioned box.
+- **The nested-`exp` case is proven as a PARSER divergence, not as an observed lab failure.** No
+  real vCenter OIDC JWT was checked for a nested `"exp"`. Settle it: decode a live token's payload
+  and `grep -c '"exp":'`.
+- **`_ssh_vrc != 0` with buffered addresses** is structurally derived, not reproduced — `kubectl`
+  appears to buffer jsonpath output.
+- The `sed 's/,/\n/g'` split **was** verified portable: measured `111` (the first `exp`) on
+  `photon:5.0`'s toybox sed, so the fix is not inert on the air-gap OS.
+
+**Also fixed here:** the SSH row's `(+2 more — see note)` cited a note that did not exist (the
+emitter scans `$rows` and is blind to `$_lab_rows`); the ArgoCD cell's "see the note below" resolved
+to *Harbor's* note; and `kube_token_expiry` had **zero** tests, so all four fixes were unguarded —
+`scripts/test-kube-token-expiry.sh` now pins 17 cases, each a measured defect from one of the rounds
+rather than a hypothetical, RED-proven by three separate mutations.
