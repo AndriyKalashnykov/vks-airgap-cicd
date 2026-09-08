@@ -578,7 +578,23 @@ correctly; saying it failed is the same wrong-cause class, inverted.` The test f
 path is the obvious candidate, unverified). Start there; the reproduction is one command and needs
 no cluster.
 
-#### 🔴 the third failure is now DIAGNOSED, and it is a PRODUCT bug, not fixture hygiene
+#### ⛔ CORRECTED — I called the third failure a PRODUCT bug; it was the FIXTURE
+
+⚠️ **The heading below and its "every real operator takes the branch that misreports" are WRONG, and
+I am leaving them visible rather than quietly deleting them.** MEASURED afterwards:
+`supervisor_kubeconfig()` requires **`[ -s "$c" ]`**, so the fixture's EMPTY `$t/sup` was correctly
+REJECTED and the resolver fell through to the sibling lab repo's kubeconfig — which exists only on
+my box. **Both product branches are correct**: with no Supervisor the report says so and does not
+name `make vks-login` (a round refuted that); with one it asks and classifies. The fixture simply
+never set up the state its assertions describe.
+
+What misled me: my own attempted fix (pinning `VKS_LAB_STATE_DIR`) made the test fail HERE too, and
+I read that as "the product is wrong" when it actually meant "the fixture was never exercising this
+branch at all". A failing test after a hermeticity fix is evidence about the FIXTURE first.
+
+✅ Fixed in the fixture, reviewed by an implementation round before merge.
+
+#### 🔴 the original (WRONG) diagnosis follows, kept so it is not re-derived
 
 MEASURED, deterministic (3 runs each): `HOME=$(mktemp -d) bash scripts/test-creds-show.sh` →
 **`FAIL STATE 14: rc=0 + empty was reported as a failure`**; with the real `$HOME` → **pass**.
