@@ -608,7 +608,8 @@ env_validate() {
           # 5 = HARBOR_CA_FILE exists but is EMPTY (the `-f` guard above passed, `-s` did not).
           # Distinct from 9 (not configured at all) and from 1 (configured and wrong).
           5) log_error "HARBOR_CA_FILE='${HARBOR_CA_FILE}' exists but is EMPTY, so nothing can be
-  verified. This is NOT a stale anchor — re-fetch it:  make fetch-harbor-ca"; errs=$((errs+1)) ;;
+  verified. This is NOT a stale anchor — re-fetch it:  make fetch-harbor-ca  (which as of B553
+  REFUSES unless HARBOR_URL is an address the certificate presents)"; errs=$((errs+1)) ;;
           *) log_error "Harbor TLS not trusted at $scheme://$HARBOR_URL (curl exit $rc) — set HARBOR_CA_FILE for a self-signed Harbor, or the cert is not publicly trusted"; errs=$((errs+1)) ;;
         esac
       else

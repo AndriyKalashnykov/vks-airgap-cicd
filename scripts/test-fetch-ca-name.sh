@@ -37,8 +37,15 @@ bad() { fail=$((fail+1)); printf 'FAIL  %s\n' "$1" >&2; }
 # measured nothing.
 if ! command -v openssl >/dev/null 2>&1; then echo "SKIP: openssl absent"; exit 0; fi
 
-T="$(mktemp -d)"; SRVS=""
-cleanup() { rm -rf "$T"; for p in $SRVS; do kill "$p" 2>/dev/null; done; }
+T="$(mktemp -d)"
+# ⚠️ PIDS GO TO A FILE, NOT A VARIABLE. `_serve` is invoked as `P="$(_serve ...)"` — a command
+# substitution, i.e. a SUBSHELL — so a `SRVS="$SRVS $!"` inside it never reaches the parent and
+# cleanup iterates an empty list. Measured: this leaked 3 `openssl s_server` listeners PER RUN,
+# each holding an ephemeral port for the life of the box. A global cannot cross a subshell; a file can.
+cleanup() {
+  if [ -f "$T/pids" ]; then while read -r _p; do kill "$_p" 2>/dev/null; done < "$T/pids"; fi
+  rm -rf "$T"
+}
 trap cleanup EXIT
 
 _selfsigned() {
@@ -53,7 +60,7 @@ _serve() {  # $1=cert $2=key [$3=chain] -> prints the port
     p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()' 2>/dev/null || echo "")"
     if [ -z "$p" ]; then return 1; fi
     openssl s_server -accept "$p" -cert "$1" -key "$2" ${3:+-cert_chain "$3"} -www -quiet >/dev/null 2>&1 &
-    SRVS="$SRVS $!"
+    echo "$!" >> "$T/pids"
     sleep 1
     if kill -0 "$!" 2>/dev/null; then printf '%s' "$p"; return 0; fi
   done
@@ -106,9 +113,23 @@ else
   ok "...and does NOT prescribe the setting that would fail closed"
 fi
 
+# The refusal must be on STDERR: `make fetch-argocd-ca > log` otherwise swallows it whole, which is
+# the lesson fetch-ca.sh:229 already paid for in 2026-08. `_said` greps BOTH streams and is blind to
+# this, so it needs its own assertion — without it, reverting the `>&2` leaves the suite fully green.
+if grep -qF 'REFUSING TO WRITE' "$T/r.crt.err" 2>/dev/null \
+   && ! grep -qF 'REFUSING TO WRITE' "$T/r.crt.out" 2>/dev/null; then
+  ok "...and the refusal is on STDERR, where a stdout redirect cannot swallow it"
+else
+  bad "the refusal is on stdout (or missing from stderr). 'make fetch-argocd-ca > log' then hides it
+      entirely and rc is the only signal — fetch-ca.sh:229 records paying for this once already."
+fi
+
 # ── 3. A REFUSAL MUST NOT TOUCH THE OPERATOR'S FILE. ──
 _selfsigned good "/CN=Operator Good CA"
-cp "$T/good.c" "$T/keep.crt"; before="$(_fp "$T/keep.crt")"
+cp "$T/good.c" "$T/keep.crt" 2>/dev/null || true
+before="$(_fp "$T/keep.crt" 2>/dev/null || true)"
+# Without this the comparison is empty==empty and reports `ok` having measured NOTHING.
+if [ -z "$before" ]; then bad "case 3 fixture missing — this assertion measured NOTHING"; fi
 r="$(_run "$D" "127.0.0.1:$P" keep.crt)"
 if [ "$(_fp "$T/keep.crt")" = "$before" ]; then
   ok "a refusal leaves a pre-existing anchor UNCHANGED"
@@ -136,6 +157,37 @@ if P2="$(_serve "$T/nosan.c" "$T/nosan.k")"; then
   fi
 else
   echo "SKIP: s_server did not start for the no-SAN case"
+fi
+
+# ── 4b. A SAN OF THE WRONG TYPE. The realistic half-done shape: CN is the name, SAN carries only
+# the IP. openssl's -verify_hostname falls back to the CN, so requiring merely that SOME SAN exists
+# let this through. Go: "x509: certificate is not valid for any names, but wanted to match localhost".
+_selfsigned iponly "/CN=localhost" "subjectAltName=IP:10.9.9.9"
+if P2b="$(_serve "$T/iponly.c" "$T/iponly.k")"; then
+  r="$(_run "$(_fp "$T/iponly.c")" "localhost:$P2b" i.crt)"
+  if [ "$r" != 0 ]; then
+    ok "a SAN of the WRONG TYPE (IP-only, addressed by name) -> refused"
+  else
+    bad "a cert whose only SAN is an IP was PRESCRIBED for a NAME address. openssl accepts it via the
+      CN fallback; every Go consumer refuses it. This is the incident, surviving inside its own fix."
+  fi
+else
+  echo "SKIP: s_server did not start for the wrong-SAN-type case"
+fi
+
+# ── 4c. CONTROL against over-correcting: the repo's own KinD Harbor shape is CN=IP + SAN=IP:<addr>
+# (lib/tls.sh:41-45). It must still be ACCEPTED, or the type check is a blanket refusal.
+_selfsigned kindshape "/CN=127.0.0.1" "subjectAltName=IP:127.0.0.1"
+if P2c="$(_serve "$T/kindshape.c" "$T/kindshape.k")"; then
+  r="$(_run "$(_fp "$T/kindshape.c")" "127.0.0.1:$P2c" k.crt)"
+  if [ "$r" = 0 ]; then
+    ok "...and an IP SAN addressed BY IP is still accepted (no blanket refusal)"
+  else
+    bad "the type check refuses the repo's own KinD shape (CN=IP + IP SAN, addressed by IP, rc=$r).
+      That is a false REFUSE and would break make e2e-kind."
+  fi
+else
+  echo "SKIP: s_server did not start for the KinD-shape control"
 fi
 
 # ── 5. A CHAIN: the SANs must come from the LEAF, not the CA (which carries none). ──

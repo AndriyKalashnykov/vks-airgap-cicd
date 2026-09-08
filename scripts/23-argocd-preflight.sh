@@ -209,8 +209,9 @@ if have argocd && [ -n "${ARGOCD_SERVER:-}" ] && [ -n "${ARGOCD_AUTH_TOKEN:-}" ]
          log_info "argocd API: COULD NOT DETERMINE (${_ra#*|}) — argocd-server never received the
              request, so this is NOT a permissions answer and an AppProject role will not fix it.
              If the reason is a trust anchor: ARGOCD_SERVER must first be a NAME the certificate
-             presents — 'make fetch-argocd-ca' REFUSES a bare IP (no IP SAN), so fetching before
-             fixing the address just loops. Then: make fetch-argocd-ca, then set ARGOCD_CA_FILE." ;;
+             presents — 'make fetch-argocd-ca' REFUSES an address the certificate does not carry,
+             and argocd-server's DEFAULT cert has DNS SANs only, so fetching before fixing the
+             address just loops. Then: make fetch-argocd-ca, then set ARGOCD_CA_FILE." ;;
   esac
 else
   log_info "argocd API: not probed — set ARGOCD_SERVER + ARGOCD_AUTH_TOKEN (and install the argocd CLI) to test the tenant path."

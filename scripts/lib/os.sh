@@ -1897,7 +1897,8 @@ argocd_tls_opts() {
   if [ ! -s "$ARGOCD_CA_FILE" ]; then
     log_warn "ARGOCD_CA_FILE is set to '${ARGOCD_CA_FILE}' but that file is empty or missing — argocd
   will fall back to the system trust store and will NOT verify a self-signed ArgoCD. Re-fetch it:
-  make fetch-argocd-ca"
+  make fetch-argocd-ca — but only once ARGOCD_SERVER is an address the certificate presents; as of
+  B553 that command REFUSES to write an anchor that cannot verify the address it was fetched from."
     return 0
   fi
   case " ${ARGOCD_OPTS:-} " in

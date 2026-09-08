@@ -83,7 +83,7 @@ else
   # the operator to a tool that says "do NOT set ARGOCD_CA_FILE" and back here unchanged. This
   # script already knows the shape ten lines up; use it.
   if [ "$_srv_is_ip" = yes ]; then
-    say "  what this costs" "a pass below proves the CREDENTIAL only, NOTHING about trust — and you cannot close that gap from here: 'make fetch-argocd-ca' will REFUSE while ARGOCD_SERVER is a bare IP, because the certificate carries no IP SAN. Fix the ADDRESS first (point ARGOCD_SERVER at a name the cert presents, /etc/hosts if it does not resolve), THEN fetch and set ARGOCD_CA_FILE."
+    say "  what this costs" "a pass below proves the CREDENTIAL only, NOTHING about trust — and you cannot close that gap from here: 'make fetch-argocd-ca' REFUSES an address the certificate does not present — and argocd-server's DEFAULT cert carries DNS SANs only, no IP SAN. Fix the ADDRESS first (point ARGOCD_SERVER at a name the cert presents, /etc/hosts if it does not resolve), THEN fetch and set ARGOCD_CA_FILE."
   else
     say "  what this costs" "a pass below proves the CREDENTIAL only, NOTHING about trust. Run 'make fetch-argocd-ca' and re-run to cover the path that fails on a real lab."
   fi
