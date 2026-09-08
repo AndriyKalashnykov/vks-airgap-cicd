@@ -386,6 +386,29 @@ Both directions are therefore broken, and the workaround is undocumented: **`gh 
 never `--failed`**. Worth a line in the gate's header at minimum; a real fix needs the attempt's job
 list to be merged with the previous attempt's, which is a design question.
 
+### 🔴 SHARPENED the same day — there is a SECOND race, on the HAPPY PATH, and it is the common one
+
+The `--failed` case above is self-inflicted. This one is not, and it hit **two consecutive PRs**
+(#1167 and #1170) within an hour:
+
+    ci-pass  FAIL  static-check-fast  unrecognised conclusion=none — refusing to guess
+    ci-pass: REFUSED
+
+`ci-pass` `needs:` those jobs, so GitHub does not start it until they complete — but the gate reads
+the **jobs API**, and the API **lags the `needs` context**. So `ci-pass` starts (correctly), queries,
+and gets `conclusion: null` for a job GitHub already considers finished. Measured both times against
+`static-check-fast`, the longest job in the set (1m24s and 1m53s) — exactly the one whose completion
+the API is most likely to still be flushing.
+
+The gate's `none` arm is RIGHT to refuse: guessing is how a skipped job reads as a pass. But it means
+**a fully green run needs a manual full re-run**, twice in an hour here, and the operator has to know
+that `--failed` makes it worse rather than better.
+
+**Done when — NEEDS AN IDEA ROUND (RULE ZERO-A).** The obvious repair is to poll the API until no
+required job reports `none`, with a bounded timeout — but that trades a false REFUSE for a possible
+hang, and the timeout's expiry is then a THIRD state the current two-state verdict cannot express.
+Do not line-edit it.
+
 ### The original row follows
 
 ## 🔴 B482 (original) — `verify-gateway-image` WORKS, and can never run on the lab path 🔴 open
