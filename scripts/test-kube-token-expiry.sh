@@ -59,16 +59,21 @@ esac
 # MEASURED: bash `[` errors (rc=2) at NINETEEN digits, and `if` consumes that error as FALSE, so the
 # value fell through to the VALID branch and rendered `VALID ?` — a test error stated as a verdict.
 _kc "$_T/huge" 'u:{"exp":9223372036854775808}'
-[ "$(kube_token_expiry "$_T/huge")" = UNKNOWN ] \
-  && ok  '19-digit exp: refuses to judge (a bracket-test error must not become a verdict)' \
-  || bad "19-digit exp: judged it — `[` errors at 19 digits and the error is read as false"
+if [ "$(kube_token_expiry "$_T/huge")" = UNKNOWN ]; then
+  ok  '19-digit exp: refuses to judge (a bracket-test error must not become a verdict)'
+else
+  bad '19-digit exp: judged it — the bracket test errors at 19 digits and the error is read as false'
+fi
 
 # ── 4. a wrong-UNIT epoch must REFUSE, not render a nonsense date as fact ───────────────────────
 # MEASURED: 1757000000000000 rendered `VALID 55679083-07-23T03:33Z`.
 for _u in 1757000000000 1757000000000000 1757000000000000000; do
-  [ "$(kube_token_expiry "$(_kc "$_T/u$_u" "u:{\"exp\":$_u}"; echo "$_T/u$_u")")" = UNKNOWN ] \
-    && ok  "epoch in the wrong unit ($_u): refuses" \
-    || bad "epoch in the wrong unit ($_u): rendered a date as fact"
+  _kc "$_T/u$_u" "u:{\"exp\":$_u}"
+  if [ "$(kube_token_expiry "$_T/u$_u")" = UNKNOWN ]; then
+    ok  "epoch in the wrong unit ($_u): refuses"
+  else
+    bad "epoch in the wrong unit ($_u): rendered a date as fact"
+  fi
 done
 
 # ── 5. the ordinary verdicts ────────────────────────────────────────────────────────────────────
@@ -82,9 +87,9 @@ _kc "$_T/noexp" 'u:{"sub":"x"}'
 printf 'apiVersion: v1\nkind: Config\nusers:\n- {name: u, user: {client-certificate-data: eA==}}\n' > "$_T/cert"
 for _c in "$_T/junk::junk file" "$_T/empty::empty file" "$_T/noexp::no exp claim" "$_T/cert::client-cert (no token)" "/nope/nope::missing file" "::empty arg"; do
   _f="${_c%%::*}"; _d="${_c##*::}"
-  [ "$(kube_token_expiry "$_f")" = UNKNOWN ] && ok "$_d -> UNKNOWN" || bad "$_d did not degrade to UNKNOWN"
+  if [ "$(kube_token_expiry "$_f")" = UNKNOWN ]; then ok "$_d -> UNKNOWN"; else bad "$_d did not degrade to UNKNOWN"; fi
 done
-[ "$(kube_token_expiry)" = UNKNOWN ] && ok "no argument -> UNKNOWN" || bad "no argument did not degrade"
+if [ "$(kube_token_expiry)" = UNKNOWN ]; then ok "no argument -> UNKNOWN"; else bad "no argument did not degrade"; fi
 
 # ── 7. it must not kill a `set -e` caller ───────────────────────────────────────────────────────
 # The call sites wrap it in `|| printf 'UNKNOWN'`; this pins that the function itself is survivable.
