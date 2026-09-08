@@ -6812,3 +6812,32 @@ re-measurement must source `lib/os.sh` before `lib/apps.sh` and must NOT silence
 
 **Done when:** both bumped, each app's tests green, the builder stamp re-derived, and the alerts
 closed by GitHub rather than dismissed.
+
+## B555 — 🟡 three `fetch-ca.sh` refusal arms are reachable only via a MID-FETCH endpoint change, so nothing pins them
+
+Round 4 (B553) cleared the fix and found that four of that commit's changes were pinned by nothing —
+the same defect round 3 had found one commit earlier, recurring inside its own fix. Two were pinned
+afterwards (`ca_addr_kind`, and the remedy scoping verified by driving the block). Three are NOT:
+
+| arm | why it is unreachable from a normal test |
+|---|---|
+| `rc=1` -> `exit 7` remap | the chain verifies on dial 1 and fails on dial 2 |
+| `rc=4` ("served NO TLS certificate") | the endpoint must present a cert on dial 1 and speak plaintext on dial 2 |
+| `rc=5` | `ca_fingerprint` already died at `:168`; effectively unreachable |
+
+**The rc=1->7 remap is the consequential one:** it is a caller-visible contract change, asserted by a
+comment, with ZERO coverage — so a future edit restoring `exit "$_ep_rc"` re-collides the chain arm
+with `die()` = `exit 1` and nothing reddens.
+
+⚠️ **TWO CANDIDATE TESTS WERE WRITTEN AND BOTH WERE VACUOUS** — each passed against the commit that
+HAD the defect. A plaintext listener gives `rc=2` (accept-then-close), which does not refuse at all;
+a banner-sending listener reaches `ca_verifies_endpoint` rc=4 but fetch-ca.sh dies at extraction with
+rc=1 long before its own rc=4 arm, because a plaintext endpoint presents no certificate to extract.
+They were removed rather than shipped: a vacuous assertion is worse than an absent one.
+
+**The recipe that does work** (round 4 reached rc=7 with it in ~30 lines): a TCP shim that serves
+cert A to the first dial and cert B to the second, so the chain verifies at fetch time and fails on
+the re-check. Assert `rc=7`, not 1.
+
+**Done when:** the shim exists as a helper in `test-fetch-ca-name.sh`, `rc=7` is asserted, and
+reverting the remap to `exit "$_ep_rc"` turns that case RED.

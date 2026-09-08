@@ -245,5 +245,25 @@ else
   echo "SKIP: s_server did not start for the chain case"
 fi
 
+# ── 6. NOT TESTED HERE, AND SAYING SO RATHER THAN SHIPPING A GREEN THAT MEASURES NOTHING.
+# The shared address remedy is now scoped to rc=3|6, so rc=1/4/5 no longer print "Point the address
+# at one of those" — which on rc=4 told the operator the endpoint served NO certificate and then
+# handed them that certificate's names. I could not pin it from here: the rc=4 and rc=1 arms are
+# reachable ONLY when the endpoint CHANGES BETWEEN THE TWO DIALS (a plaintext listener presents no
+# certificate at all, so the script dies at extraction with rc=1 long before the arm). I wrote two
+# candidate cases; BOTH passed against the commit that HAS the defect, i.e. both were vacuous, and a
+# vacuous assertion is worse than an absent one. Pinning it needs a TCP shim serving cert A to dial 1
+# and cert B to dial 2 — see BACKLOG B555, which carries the recipe. Verified by hand instead:
+# driving fetch-ca.sh:301-349 at each rc shows the remedy on 3 and 6 only.
+
+# ── 7. ca_addr_kind is single-sourced; assert both classes so the refactor cannot silently regress.
+if [ "$(bash -c '. scripts/lib/os.sh; . scripts/lib/tls.sh; ca_addr_kind example.test' 2>/dev/null)" = name ] \
+   && [ "$(bash -c '. scripts/lib/os.sh; . scripts/lib/tls.sh; ca_addr_kind 10.0.0.1' 2>/dev/null)" = ip ]; then
+  ok "ca_addr_kind classifies a name and an IPv4 literal (one definition, two consumers)"
+else
+  bad "ca_addr_kind misclassified. lib/tls.sh picks the openssl flag from this and fetch-ca.sh picks
+      the required SAN TYPE from it; a disagreement is a FALSE REFUSE of a working anchor."
+fi
+
 printf '\nfetch-ca name check: %s passed, %s failed\n' "$pass" "$fail"
 if [ "$fail" -ne 0 ]; then exit 1; fi

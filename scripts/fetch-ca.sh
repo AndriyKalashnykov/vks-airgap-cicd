@@ -332,13 +332,23 @@ if [ "$_ep_rc" -ne 0 ] && [ "$_ep_rc" -ne 2 ]; then
          printf '     usually a certificate that ROTATED between the two probes (02-env.sh:570-575\n'
          printf '     documents that case). Retry; if it repeats, the anchor is genuinely wrong.\n' ;;
     esac
-    if [ -n "$_sans" ]; then
-      printf '     The certificate presents: %s\n' "$_sans"
-      printf '     Point the address at one of those (add it to /etc/hosts if it does not resolve),\n'
-      printf '     re-run this, and THEN set %s_CA_FILE.\n' "$UPPER"
-    else
-      printf '     Ask whoever issued it for a certificate carrying a SAN for the address you use.\n'
-    fi
+    # ⚠️ THIS REMEDY IS ONLY TRUE FOR 3 AND 6 — the two "the cert is fine, the ADDRESS is wrong"
+    # causes. Printed unconditionally it CONTRADICTS the arm above it: rc=4 says "the endpoint served
+    # NO TLS certificate" and was then handed that certificate's names, and rc=1 told an operator
+    # whose address IS already a SAN to go and re-address it when the remedy is "retry". The rc=4
+    # contradiction was introduced by the arm added one commit ago; the 1/5 misfire predates it. Same
+    # class as the duplicate SAN line fixed last commit — that fixed the INSTANCE, not the scoping.
+    case "$_ep_rc" in
+      3|6)
+        if [ -n "$_sans" ]; then
+          printf '     The certificate presents: %s\n' "$_sans"
+          printf '     Point the address at one of those (add it to /etc/hosts if it does not resolve),\n'
+          printf '     re-run this, and THEN set %s_CA_FILE.\n' "$UPPER"
+        else
+          printf '     Ask whoever issued it for a certificate carrying a SAN for the address you use.\n'
+        fi
+        ;;
+    esac
     printf '\n     %s is UNCHANGED — nothing was written.\n' "$OUT"
     # ⚠️ NO MECHANISM CLAIM HERE. This script is SHARED by fetch-harbor-ca and fetch-argocd-ca, and
     # the two behave OPPOSITELY when the CA is unset: lib/argocd.sh:388 falls back to `-k` (unverified
