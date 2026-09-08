@@ -59,13 +59,20 @@ run_block() {
   # Stub gh: pops the next fetch rc; writes a plausible TSV on success.
   # shellcheck disable=SC2016  # single quotes REQUIRED: these are the STUB's own $vars, which must
   # reach the generated file literally rather than expanding in this harness.
-  printf '#!/usr/bin/env bash\nn=$(cat "%s/fetchn" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "%s/fetchn"\nrc=$(echo "%s" | cut -d" " -f"$n"); [ -n "$rc" ] || rc=0\necho "FETCH $n rc=$rc" >> "%s/trace"\n[ "$rc" = 0 ] || exit "$rc"\nprintf "changes\\tsuccess\\t3\\n" > /tmp/ci-jobs.tsv\n' "$d" "$d" "$fetches" "$d" > "$d/gh"
+  printf '#!/usr/bin/env bash\nn=$(cat "%s/fetchn" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "%s/fetchn"\nrc=$(echo "%s" | cut -d" " -f"$n"); [ -n "$rc" ] || rc=0\necho "FETCH $n rc=$rc" >> "%s/trace"\n[ "$rc" = 0 ] || exit "$rc"\nprintf "changes\\tsuccess\\t3\\n" > "%s/ci-jobs.tsv"\n' "$d" "$d" "$fetches" "$d" "$d" > "$d/gh"
   mkdir -p "$d/scripts"
   # shellcheck disable=SC2016  # ditto — the stub's own $vars
   printf '#!/usr/bin/env bash\nn=$(cat "%s/vn" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "%s/vn"\nrc=$(echo "%s" | cut -d" " -f"$n"); [ -n "$rc" ] || rc=0\necho "VERDICT $n rc=$rc" >> "%s/trace"\nexit "$rc"\n' "$d" "$d" "$verdicts" "$d" > "$d/scripts/ci-pass-verdict.sh"
   chmod +x "$d/sleep" "$d/gh" "$d/scripts/ci-pass-verdict.sh"
   # Substitute GitHub's ${{ }} expressions -- they are not shell, and the block cannot run with them.
-  printf '%s\n' "$BLOCK" | sed -e 's/\${{ github.repository }}/o\/r/g' -e 's/\${{ github.run_id }}/1/g' > "$d/step.sh"
+  # ⚠️ /tmp/ci-jobs.tsv IS A FIXED PATH IN ci.yml, and it is correct THERE -- a GitHub runner is a
+  # fresh VM with one job in it. It is NOT safe here: two gate runs in parallel worktrees would
+  # share the one file and silently read each other's fixture (the B566 class). Redirect it into
+  # this run's own dir. The substitution is a PATH only; the logic under test is untouched, and the
+  # `sanity` check above still proves the block was extracted whole.
+  printf '%s\n' "$BLOCK" \
+    | sed -e 's/\${{ github.repository }}/o\/r/g' -e 's/\${{ github.run_id }}/1/g' \
+          -e "s#/tmp/ci-jobs.tsv#${d}/ci-jobs.tsv#g" > "$d/step.sh"
   ( cd "$d" && PATH="$d:$PATH" bash -e step.sh > "$d/out" 2>&1 )
   _RC=$?
   _TRACE="$(cat "$d/trace" 2>/dev/null | tr '\n' ';')"
