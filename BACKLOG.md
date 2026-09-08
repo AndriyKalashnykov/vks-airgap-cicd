@@ -4629,7 +4629,84 @@ verified.** A run that legitimately verified the KinD stand-in and a run that ve
 produce the same success text. Printing the resolved context/server alongside the LB IP is cheap and
 would remove the ambiguity that made this finding plausible.
 
-## 🔴 B521 — the registry lock is per-WORKTREE, so the serialization it promises "on this host" is not host-wide
+## ✅ B557 — the SSO arm scanner is DELETED; the property is measured on the RENDERED report
+
+Shipped 2026-09-08. Eleven adversary rounds on one property; ten refuted the PREVIOUS round's fix.
+The enumerated thing moved every round — label character class -> whitespace test -> `^[^(]*\)` ->
+the `;;` terminator set -> COMMENT CONTENT (an apostrophe in a trailing comment hid the terminator
+and merged the next arm into EXPIRED). Round 11 measured that closing that opens the complementary
+hole: there is no correct fix at that layer.
+
+**The finding that ended it was not a bug.** `scripts/check-vks-login-requires.sh:14-15` already
+said, in its own header: *"arm-scoping a shell parser is exactly the tractability problem that got
+derivation refuted."* This repo had run the idea round (B207), refuted the design, and written the
+conclusion down one file over. It was built anyway.
+
+**What replaces it** asks the question directly instead of parsing the code that answers it: render
+each consumer against each verdict `kube_token_expiry` can return, and COUNT mentions of
+`make vks-login` in the output an operator actually sees. 2 binaries x EXPIRED/VALID/UNKNOWN. No
+shell parsing, no arm list, no ratchet — an arm's TEXT is now irrelevant; only what PRINTS matters.
+Measured 1/0/0 per binary. Suite 1616 -> 1480 lines, assertions 88 -> 89 (the count MOVED, so the
+change is visible to the suite).
+
+RED-proven four ways, each restored after:
+
+| mutation | result |
+|---|---|
+| `creds.sh` VALID arm names the command | FAIL — the dangerous defect |
+| `argocd-password.sh` VALID arm names it | FAIL |
+| `kube_token_expiry` pinned to UNKNOWN | FAIL, 4 cells "VACUOUS" |
+| a FOURTH verdict shape added | FAIL, "add its cell" |
+
+The third is the positive control: two of three cells expect a count of ZERO, the classic shape that
+passes by not looking, so each cell asserts its arm was ENTERED before its count is trusted.
+
+**One defect found in my own instrument, by asking it the question I had put to the reviewer:** the
+stub's first arm was `*"config view"*`, which is not specific to the token — FIVE other sites read
+that subcommand for `.clusters[0].cluster.server` (`lib/argocd.sh:42`, `lib/state.sh:52`,
+`lib/os.sh:957`) and every one was handed a JWT. Narrowed to `*user.token*`; both REDs re-verified
+after the change, not assumed.
+
+**Residual, named:** the grid covers exactly the three verdicts the function can return, pinned by a
+`printf '<VERDICT>` shape count. A verdict emitted via a variable or a helper would evade that count.
+Adding a `REVOKED*)` arm to a consumer does NOT turn the grid red — correctly, since it is
+unreachable dead code — so the grid measures BEHAVIOUR, not arm hygiene. If you want the latter, it
+is a different (and, on this evidence, intractable) control.
+
+---
+
+## ✅ B521 — SHIPPED 2026-09-08. The lock now lives in the SHARED git dir; the fix I designed was REFUTED first
+
+The round CLEARED the defect and **refuted my implementation**, HIGH: `git rev-parse
+--git-common-dir` returns `../../../.git` with **rc=0** from a non-repo nested inside a repo, so my
+`case` would have anchored the lock into a **stranger's** `.git` — and if that repo is unwritable,
+`exec 9>` fails and a working `make mirror-push` becomes a hard `die`. Two more against the git
+route: `GIT_DIR`/`GIT_COMMON_DIR` silently override `-C` (and a `--show-toplevel` guard does NOT
+catch it), and `22-builder-push.sh:8-10` states the air-gap toolchain verbatim as *"tar + curl +
+sha256sum + the carried crane"* — git is not in it, and three of this lock's four callers run there.
+
+Shipped instead: a **pure-shell** `_registry_common_dir` reading `$REPO_ROOT/.git` (dir, or the
+`gitdir:`/`commondir` files of a linked worktree). It cannot walk up, cannot be redirected by an env
+var, and adds no binary — `os.sh` already uses `sed` 9x and `cat` 6x. Verified end-to-end through the
+REAL function: main holds -> worktree **REFUSED**; after release -> worktree succeeds; a different
+repo is never blocked. The legacy per-worktree lock is also taken (undated, because taking it costs
+one fd, cannot deadlock, and a dated removal note would rot), so a process started before this
+change is still seen. Path is normalised because it is PRINTED in a `rm -f` remedy.
+
+`scripts/test-registry-lock.sh` (8 cases) — the control had **no test at all** despite its absence
+having caused the 2026-07-13 incident. The worktree fixture is HAND-BUILT per
+`test-namespace-gates.sh:19-22` (worktrees race on `.git/worktrees/` and `git worktree add` is
+blocked by the read-only hook). One case FALSE-RED on first run: `\bgit\b` matched the `.git` in a
+path, not the git binary — fixed to a command-position match and given a positive control.
+
+**Residual, in the header:** two separate CLONES against one Harbor are still not serialized.
+Keying on registry identity was considered and rejected (needs a host-wide writable dir; a
+predictable path in world-writable `/tmp` lets any local user hold it forever; `HARBOR_URL` is empty
+at lock time in a fresh worktree; and the incident shape shares a kind CLUSTER, not only a registry).
+
+---
+
+## B521 (original) — the registry lock is per-WORKTREE, so the serialization it promises "on this host" is not host-wide
 
 Surfaced 2026-08-28 by the adversary round that refuted the `gate-at` worktree wrapper, as a finding
 neither the brief nor I asked for — and confirmed independently.
@@ -6599,7 +6676,20 @@ REPO's lab state dir, which exists on a maintainer box — so every assertion pa
 printing ok. The fixture now sets `VKS_LAB_STATE_DIR=/nonexistent`. An end user has no such
 directory; a maintainer does, which is exactly B547's measured split.
 
-## B549 — 🔴 SSO HAZARD: a klog THREAD-ID of `401` makes an UNREACHABLE cluster classify UNAUTHORIZED
+## B549 — ✅ SSO HAZARD: a klog THREAD-ID of `401` makes an UNREACHABLE cluster classify UNAUTHORIZED
+
+**✅ FIXED — verified both directions 2026-09-08.** `lib/os.sh:2335` no longer carries a bare `401`;
+it anchors on `(401)` / `"code":401` / `code: 401`, none of which a klog thread-id can match.
+MEASURED with `classify_kube_failure`:
+
+| errfile | classifies |
+|---|---|
+| `E0908 05:34:23.123456     401 memcache.go:265] ... connect: connection refused` | **UNREACHABLE** ✓ |
+| `error: You must be logged in to the server (Unauthorized)` | **UNAUTHORIZED** ✓ |
+
+The hazard was that an unreachable cluster reading as UNAUTHORIZED tells the operator their
+credential is bad — and acting on that costs one of the THREE vCenter SSO attempts before
+permanent lockout.
 
 **Reproduced deterministically, twice, by two independent parties.** `lib/os.sh:2273` anchors the
 unauthorized arm as `*"Unauthorized"*|*" 401 "*|…`. The ` 401 ` anchor was added to stop a
@@ -6813,6 +6903,41 @@ re-measurement must source `lib/os.sh` before `lib/apps.sh` and must NOT silence
 **Done when:** both bumped, each app's tests green, the builder stamp re-derived, and the alerts
 closed by GitHub rather than dismissed.
 
+⚠️ **THE BUMP ALONE DOES NOT REMEDIATE — measured 2026-09-08.** Both affected apps ship a
+`Dockerfile.builder` that BAKES their dependencies for the offline build, and
+`lib/apps.sh:255`'s `BUILDER_INPUT_MANIFESTS` hashes exactly `package-lock.json` and
+`requirements.txt`. So editing the manifest makes the builder **stale** (which
+`make builder-freshness` now correctly reports) and `build-apps` keeps using the OLD builder with
+the OLD dependency — the CVE stays live in the produced image while the source reads as fixed.
+
+**Current alerts (measured via the API, not the push banner):**
+
+| severity | package | fix | manifest |
+|---|---|---|---|
+| medium x2 | `qs` 6.15.3 (transitive, via express) | 6.16.0 | `apps/nodejs/nodejswebapp/package-lock.json` |
+| low | `Flask==3.1.2` | 3.1.3 | `apps/python/pythonwebapp/requirements.txt` |
+
+**Done when:** the manifests are bumped AND the two builders are rebuilt and pushed
+(`make builder-build` + `make builder-push`, or `make builder-image` dual-homed) AND
+`make builder-freshness` is clean AND the alerts close. Doing only the first step is the half-fix
+this note exists to prevent — and it is worse than inert: Dependabot keys on the MANIFEST, so the
+alerts would CLOSE while the built image still ships the vulnerable dependency.
+
+**The bump itself is settled — MEASURED 2026-09-08, so do not re-derive it:**
+
+    # qs: transitive via express 5.2.0, which allows ^6.14.0 -- so 6.16.0 is IN RANGE and needs
+    # no `overrides` entry. `npm view express@5.2.0 dependencies.qs` -> ^6.14.0
+    cd apps/nodejs/nodejswebapp && npm update qs --package-lock-only     # 6.15.3 -> 6.16.0, rc=0
+    sed -i 's/^Flask==3\.1\.2$/Flask==3.1.3/' apps/python/pythonwebapp/requirements.txt
+
+Both were applied and reverted in a dry run. `make builder-freshness` then reported **exactly**
+`nodejswebapp` and `pythonwebapp` STALE and the other four fresh — the stamp discriminating
+correctly, which is the confirmation that the rebuild is genuinely required and not optional.
+
+⚠️ **`make builder-image` rebuilds ALL SIX builders and mutates Harbor**, so it is serial work: do
+not run it alongside anything else that touches the registry, and not while editing `scripts/`
+(it sources `lib/os.sh` mid-run — see the never-edit-a-script-mid-run rule).
+
 ## B555 — 🟡 three `fetch-ca.sh` refusal arms are reachable only via a MID-FETCH endpoint change, so nothing pins them
 
 Round 4 (B553) cleared the fix and found that four of that commit's changes were pinned by nothing —
@@ -6841,3 +6966,74 @@ the re-check. Assert `rc=7`, not 1.
 
 **Done when:** the shim exists as a helper in `test-fetch-ca-name.sh`, `rc=7` is asserted, and
 reverting the remap to `exit "$_ep_rc"` turns that case RED.
+
+## B556 — ✅ `make creds` hedged on a dead token, and its remedy was a DEAD CITATION
+
+**SHIPPED in #1156.** Three adversary rounds; rounds 1 and 2 each **refuted** the commit before it,
+and two of round 2's HIGHs were defects *introduced by round 1's fixes*. `make ci` was **rc=0 over
+every one of them** — no gate saw any of it.
+
+**The original defect.** `kubectl` reports an expired token and a revoked one identically as
+`Unauthorized`, so the report hedged ("usually an EXPIRED token"). The token's own `exp` claim
+separates them offline, without spending one of the THREE vCenter SSO attempts before permanent
+lockout. `kube_token_expiry` (lib/os.sh) reads it.
+
+**The remedy was worse than the diagnosis.** All four sites cited
+`docs/scenario-1.md, Supervisor token` — **a section that does not exist** (grep: 0 hits). And the
+command is *not* a bare `make vks-login`: scenario-1 Step 6 leaves `.env` on
+`VKS_AUTH_METHOD=kubeconfig`, so a bare run renews the **guest** kubeconfig.
+
+**Verified END-TO-END on the live lab**, not on a fixture: a real kubeconfig re-signed with `exp` in
+the past drew a real `Unauthorized` from the real Supervisor; all four sites named the same
+timestamp; `VKS_AUTH_METHOD=vcf make vks-login` re-minted (`exp` 13:24Z → 15:34Z, `.env`
+byte-identical); the next `make creds` was 12/12 serving and identical to baseline modulo
+timestamps. It re-mints **unconditionally** — `30-vks-login.sh:360` deletes the context, `:400`
+re-creates it; the CLI's `Token is still active. Skipped the token refresh` is the `use` step.
+
+**What the rounds caught, all measured:**
+
+| | |
+|---|---|
+| `{.users[0]}` without `--minify` read the **wrong user's** token — a live *guest* token makes a dead *Supervisor* token report `VALID`. 11 of 11 other `[0]`-index reads in `scripts/` already minify | HIGH |
+| `VALID` fell into the "no readable expiry" hedge — a false sentence about an expiry just read, discarding the one discrimination `kubectl` cannot make | HIGH |
+| the SSH note was keyed on **rendered display text**, which `creds.sh:1503-1507` forbids after its own measured incident | HIGH |
+| scoping the remedy by `VKS_AUTH_METHOD` **INVERTED** it — scenario-1's operator, who *has* the command, was told there isn't one | HIGH |
+| dropping the comma split let a greedy `.*` take the **last** `"exp"` — a dead token reported live, **re-opening the failure direction `--minify` had just closed, in the same commit** | HIGH |
+| the width guard was off by one (bash `[` errors at **19** digits, not 20), and the new `VALID` arm then upgraded `VALID ?` into a confident wrong verdict | HIGH |
+
+**Residuals — NOT closed, named honestly:**
+
+- ⚠️ **CORRECTED — this row first said "~26 `tr` uses … the remaining ~10 are table separators".
+  Measured at round 4: 12 sites, and THREE were VALUE-BEARING, not separators.** All three are now
+  fixed: the state stamp (`:624` — empty made a correctly-stamped overlay fall through to the "may
+  be from a lab that no longer exists" banner, the exact false alarm its own comment says was
+  fixed), the sole-candidate secret NAME (`:1808`), and the candidate list in the "set
+  VKS_CLUSTER_NAME to one of these" message (`:1874`), which would have named no options. The **9**
+  that remain really are table separators (`printf | tr ' ' '-'`), and a `tr`-less box renders them
+  blank — cosmetic. Bare `photon:5.0` has **no `tr`** (measured); reachability is still unsettled,
+  since CLAUDE.md says the air-gap box provisions coreutils from its internal mirror, so the
+  exposure is a bare container rather than a provisioned box.
+- **The SSO-lockout property was guarded by PROSE for three commits and regressed twice.**
+  Re-applying the regression left the suite byte-identically green (77 ok / 0 FAIL) because the
+  delegation-follower pulls the helper's whole body, which names the command in one branch. It now
+  has a behavioural control (render both states, assert zero `make vks-login` on the undecidable
+  one) plus a structural one. **The general lesson: a refactor that makes a POSITIVE control robust
+  can make the NEGATIVE control unexpressible by the same technique.**
+- **A padding mutation is UNDETECTABLE on GNU `base64`**, which recovers unpadded input — so that
+  half of the decoder looked like dead code. On **busybox** (the air-gap class) unpadded input is
+  TRUNCATED: `{"a":"x","exp":1000000000}` loses its last digit and renders **1973-03-03 as fact**.
+  The test now decodes through busybox. Arm 2 remains **unprovable** and says so: it loses one
+  byte, and valid JSON's last byte is always `}`, never a digit.
+- **The nested-`exp` case is proven as a PARSER divergence, not as an observed lab failure.** No
+  real vCenter OIDC JWT was checked for a nested `"exp"`. Settle it: decode a live token's payload
+  and `grep -c '"exp":'`.
+- **`_ssh_vrc != 0` with buffered addresses** is structurally derived, not reproduced — `kubectl`
+  appears to buffer jsonpath output.
+- The `sed 's/,/\n/g'` split **was** verified portable: measured `111` (the first `exp`) on
+  `photon:5.0`'s toybox sed, so the fix is not inert on the air-gap OS.
+
+**Also fixed here:** the SSH row's `(+2 more — see note)` cited a note that did not exist (the
+emitter scans `$rows` and is blind to `$_lab_rows`); the ArgoCD cell's "see the note below" resolved
+to *Harbor's* note; and `kube_token_expiry` had **zero** tests, so all four fixes were unguarded —
+`scripts/test-kube-token-expiry.sh` now pins 17 cases, each a measured defect from one of the rounds
+rather than a hypothetical, RED-proven by three separate mutations.

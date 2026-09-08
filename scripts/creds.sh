@@ -351,6 +351,21 @@ if [ "$_have_sink" = 1 ] && [ "${_VKS_STATE_SOURCED-1}" = "0" ]; then _sink_refu
 # overlay. Telling a KinD operator to go and set a password is inventing a chore for them, and it is the
 # same defect as the old ArgoCD note. Only a REAL LAB must supply one (there, Harbor/ArgoCD are given to
 # you, not created by us).
+
+# `_renew_how` now lives in lib/os.sh as `supervisor_renew_how` — argocd-password.sh needs the
+# SAME sentence and cannot source creds.sh, so a hand-duplicated copy drifted (a round measured the
+# two DISAGREEING on the undecidable arm, and the "locks out PERMANENTLY" clause missing from one).
+_renew_how() { supervisor_renew_how "$@"; }
+
+# newline-joined -> space-joined, without `tr` (photon:5.0 has none). The consumer is the
+# "none is <cluster>-ssh-password: <LIST>" message; an empty LIST there names no options at all.
+# ⚠️ KEEPS THE TRAILING SPACE. The format it feeds is `...: %s— set VKS_CLUSTER_NAME...`, so the
+# old `tr '\n' ' '` supplied a trailing space that ran the last name into the em-dash without one.
+# A `sed 's/$/ /'` was tried to restore it and DOUBLED every internal separator — and made the
+# blank-line skip below dead, because a blank line became " ", which is non-empty. Emit the
+# trailing space here instead: one join, one separator, blank lines still skipped.
+tr_free_join() { local _l _o=""; while IFS= read -r _l || [ -n "${_l:-}" ]; do [ -n "$_l" ] || continue; _o="${_o}${_l} "; done; printf '%s' "$_o"; }
+
 _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per flow
   # ⚠️ "check the state overlay" IS THE FOURTH FALSE CLAIM, and the most dangerous of them: under a
   # REFUSAL the password WAS published -- for another cluster -- so this sent the operator to read a
@@ -472,7 +487,21 @@ else
   # argocd-initial-admin-secret at 19:42:37Z). This printer passes --wait 0 by design, so "absent
   # right now" and "absent for good" are indistinguishable HERE; name the target that can tell them
   # apart rather than inventing a chore.
-  [ "$_have_sink" = 1 ] && argo_pw="<not read — run: make argocd-password (it waits)>"
+  # ...but "it waits" is a DEAD END when the Supervisor token is expired: argocd-password reads the
+  # secret from the SAME Supervisor, so it will fail the same way, and the operator learns that only
+  # after the wait. `_kube_classify` is defined LATER in this file (line ~1091) and so cannot be
+  # called here; `kube_token_expiry` comes from lib/os.sh, is offline, and answers the one question
+  # that decides which of the two sentences is true.
+  if [ "$_have_sink" = 1 ]; then
+    _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
+    case "$_ap_exp" in
+      EXPIRED*) argo_pw="<not read — Supervisor token EXPIRED ${_ap_exp#EXPIRED }; renew that credential first, then: make argocd-password>" ;;
+      # A LIVE token that the Supervisor rejects is rotated/revoked, not expired — and waiting
+      # cannot fix that, so do not send the reader into `argocd-password`'s wait.
+      VALID*)   argo_pw="<not read — the Supervisor token is still valid (${_ap_exp#VALID }); if it is being REJECTED the credential was rotated — ask whoever owns the lab>" ;;
+      *)        argo_pw="<not read — run: make argocd-password (it waits)>" ;;
+    esac
+  fi
 fi
 
 # THE ArgoCD USERNAME WAS HARDCODED TO `admin`, AND THAT IS FALSE FOR A TENANT.
@@ -585,7 +614,10 @@ fi
 # ⚠️ `|| true` IS REQUIRED. An UNSTAMPED overlay is the COMMON case and the one this tri-state
 # exists for — grep then exits 1, the assignment returns 1, and `set -e` kills the report before it
 # prints anything. Measured: `make creds` died with "Error 1" and no output at all.
-_stamp="$(grep -m1 '^VKS_STATE_SERVER=' "$_sink" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
+# sed, not tr: on a tr-less box this would be EMPTY, and an empty stamp falls through to the
+# "may be from a lab that no longer exists" banner over a correctly-stamped overlay — the exact
+# false alarm the comment below says was fixed.
+_stamp="$(grep -m1 '^VKS_STATE_SERVER=' "$_sink" 2>/dev/null | cut -d= -f2- | sed 's/"//g' || true)"
 # ⚠️ Read the live server through THE SAME FUNCTION THAT WROTE THE STAMP (state.sh's
 # state_kubeconfig_server), not a hand-rolled jsonpath. The stamp is minified and this read was NOT,
 # so on any multi-cluster kubeconfig they compared DIFFERENT servers and could never be equal —
@@ -735,7 +767,9 @@ if [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
 elif [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
-  echo "    ${INGRESS_LB_IP}  $(ingress_infra_hosts)$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
+  # The trailing space the per-app loop leaves is TRIMMED: this line is COPIED into /etc/hosts.
+  _hosts_line="$(printf '%s' "$(ingress_infra_hosts)$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)" | sed 's/[[:space:]]*$//')"
+  echo "    ${INGRESS_LB_IP}  ${_hosts_line}"
 fi
 
 # --- table ----------------------------------------------------------------------------
@@ -971,10 +1005,13 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
     # the JWT's own `exp` reports what the API SERVER granted, not what we asked for — the request
     # is a ceiling and a cluster with a lower --service-account-max-token-expiration silently
     # clamps it. The exp is NOT a secret; only the token is, and that stays masked above.
-    _hl_p="${_hl_t#*.}"; _hl_p="${_hl_p%%.*}"
-    case $(( ${#_hl_p} % 4 )) in 2) _hl_p="${_hl_p}==" ;; 3) _hl_p="${_hl_p}=" ;; esac
-    _hl_exp="$(printf '%s' "$_hl_p" | tr '_-' '/+' | base64 -d 2>/dev/null \
-                 | sed -n 's/.*"exp":\([0-9]*\).*/\1/p' | head -1)"
+    # ⚠️ ONE PARSER, shared with kube_token_expiry. This was a hand-rolled COPY and the two
+    # diverged: it kept a greedy `.*` (LAST match wins, so a nested `exp` beat the real one), a
+    # `[0-9]*` (zero-or-more), and no sanity ceiling — so a microsecond epoch rendered
+    # "valid until 55679083-07-23T03:33Z" as a stated fact. A round found them disagreeing on the
+    # same input. `jwt_exp_seconds` refuses on ambiguity rather than picking; empty => we simply
+    # do not print an expiry, which is the pre-existing behaviour for an unparseable token.
+    _hl_exp="$(jwt_exp_seconds "$_hl_t")"
     # ⚠️ WARN WHEN THE COOKIE WILL OUTLIVE THE TOKEN DURATION. `-session-ttl` is a DEPLOY-TIME
     # flag: it cannot track a token minted here. So `make creds HEADLAMP_TOKEN_DURATION=8h` against
     # a Deployment still at 24h hands the operator an 8h token in a 24h cookie, and for the other
@@ -1055,6 +1092,36 @@ esac
 # (env_publish_all writes BOTH keys, and since B202 F4 it REFUSES to overwrite a robot$ pair).
 # test-creds-show.sh asserts this mechanically — a comment alone is not the control.
 add_row "Harbor (registry)" "$harbor_url" "$harbor_user" "$harbor_pw" "$(_reach_harbor)"
+# ── _rejected_why — say WHEN the token died, not "usually an EXPIRED token" ──────────────────────
+# kubectl reports an expired token and a revoked/rotated credential IDENTICALLY as `Unauthorized`,
+# so the classifier cannot separate them and this used to hedge. The token's own `exp` claim can,
+# offline and without spending one of the THREE vCenter SSO attempts before permanent lockout —
+# which is exactly why the hedge was the right call until kube_token_expiry existed.
+# Naming the renewal is safe ONLY on the EXPIRED branch, where the cause is a fact. Everywhere else
+# it degrades to the hedge rather than guess.
+_rejected_why() {
+  local kc _e
+  kc="$(supervisor_kubeconfig 2>/dev/null || true)"
+  _e="$(kube_token_expiry "$kc" 2>/dev/null || printf 'UNKNOWN')"
+  case "$_e" in
+    EXPIRED*)
+      printf 'the Supervisor token EXPIRED at %s. %s' "${_e#EXPIRED }" "$(_renew_how)" ;;
+    VALID*)
+      # The DEFINITIVE rotated/revoked signal, and the whole reason to read `exp` at all: the
+      # Supervisor rejected a token that has NOT expired. Sending this to the hedge below would
+      # assert "carries no readable expiry" about an expiry we just read — a false sentence — and
+      # would discard the one discrimination kubectl cannot make.
+      # Delegates like the others, so the wording cannot drift between the two consumers.
+      # (An earlier version of this comment said a hand-written arm is "invisible to the structural
+      # control" — that stopped being true when the control began matching the LITERAL command as
+      # well as the call, so a hand-written prescription is now caught either way. Delegation is
+      # about single-sourcing the sentence, not about evading a blind spot that no longer exists.)
+      printf 'the token has NOT expired (valid until %s), so the Supervisor rejected a LIVE token — this is a ROTATED or REVOKED credential, not an expiry. Re-authenticating will NOT help. %s' "${_e#VALID }" "$(_renew_how --ask-only)" ;;
+    *)
+      printf 'the Supervisor REJECTED this kubeconfig, and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this is NOT necessarily expiry — it may be a rotated or revoked credential. Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. %s' "$(_renew_how --no-command)" ;;
+  esac
+}
+
 # ── _kube_classify <errfile> <prefix> — ONE mapping of a kube failure class to (token, sentence) ──
 # BOTH call sites in the SSH probe go through this. The first version had two: a full case at the
 # listing site and a THREE-ARM case at the read site, whose `*)` swallowed five real classes. The
@@ -1077,13 +1144,18 @@ _kube_classify() {
     # MEASURED 2026-09-07: with VKS_AUTH_METHOD=kubeconfig that arm (30-vks-login.sh:42-45) is a
     # [ -s ] test on the GUEST kubeconfig plus `kubectl cluster-info`; it never touches the
     # Supervisor. docs/scenario-1.md:616-626 already said so and this file had not heard.
-    # 🔴 IT DELIBERATELY NAMES NO SSO COMMAND. The obvious remedy — VKS_AUTH_METHOD=vcf make
-    # vks-login — performs a vSphere SSO BIND (30-vks-login.sh:397). Today's message costs ZERO
+    # 🔴 IT NAMES THE SSO COMMAND ON EXACTLY ONE ARM: EXPIRED, where the cause is a FACT read from
+    # the token's own `exp`. Every other arm names NO command at all; the one arm that must EXPLAIN
+    # the absence calls `_renew_how --no-command` (exactly one call site). The obvious remedy —
+    # VKS_AUTH_METHOD=vcf make vks-login — performs a vSphere SSO BIND (30-vks-login.sh:397), and
+    # vCenter locks out PERMANENTLY after 3 failures, so it must never be prescribed for a state
+    # this report cannot decide. (This comment said "DELIBERATELY NAMES NO SSO COMMAND" and was
+    # falsified by the commit that added the EXPIRED arm; a round caught it.) The message costs ZERO
     # attempts; prescribing that one costs >=1 PER INVOCATION of a report people re-run, and this
     # arm cannot tell "token expired, password fine" from "password rotated" (30-vks-login.sh:582-585
     # says so), so on the second it burns an attempt every time. vCenter locks out PERMANENTLY at 3.
     # The NEGATIVE below is decidable and free, and it is the half that actually unblocks the reader.
-    UNAUTHORIZED)        _kube_tok="<auth failed>";   _kube_state="${_p} — the Supervisor REJECTED this kubeconfig (usually an EXPIRED token). Note a bare 'make vks-login' renews the GUEST kubeconfig, NOT this one; docs/scenario-1.md (Supervisor token) has the renewal for your auth method." ;;
+    UNAUTHORIZED)        _kube_tok="<auth failed>";   _kube_state="${_p} — $(_rejected_why)" ;;
     STALE_CA)            _kube_tok="<stale CA>";      _kube_state="${_p} — the Supervisor answered but its CA does not verify (kubeconfig from a destroyed lab?)" ;;
     UNREACHABLE)         _kube_tok="<unreachable>";   _kube_state="${_p} — the Supervisor is unreachable from here" ;;
     PLAINTEXT)           _kube_tok="<plaintext>";     _kube_state="${_p} — the Supervisor endpoint answered PLAINTEXT where TLS was expected" ;;
@@ -1737,7 +1809,8 @@ _ssh_pick() {
   fi
   if [ -n "$_hit" ]; then printf '%s' "$_hit"; return 0; fi
   _n="$(printf '%s' "$_list" | grep -c . || true)"
-  if [ "${_n:-0}" -eq 1 ]; then printf '%s' "$(printf '%s' "$_list" | tr -d '\n')"; fi
+  # sed, not tr — this is the sole-candidate secret NAME; empty silently disables the path.
+  if [ "${_n:-0}" -eq 1 ]; then printf '%s' "$(printf '%s' "$_list" | sed '/^$/d' | head -1)"; fi
   return 0
 }
 
@@ -1803,7 +1876,7 @@ else
         _ssh_tok="<ambiguous>"
         _ssh_state="$(printf '%s candidates in %s and none is %s-ssh-password: %s— set VKS_CLUSTER_NAME in .env to one of these' \
                         "$_ssh_nc" "${VKS_NAMESPACE}" "${VKS_CLUSTER_NAME:-<unset>}" \
-                        "$(printf '%s' "$_ssh_cands" | tr '\n' ' ')")"
+                        "$(printf '%s' "$_ssh_cands" | tr_free_join)")"
       fi
       # GUARD ON "WE HAVE A NAME", NOT ON THE COUNT (adversary CRITICAL, 2026-09-05).
       # It read `[ -z "$_ssh_sec" ] && [ "$_ssh_nc" -eq 0 ]`, so the AMBIGUOUS case (>=2 candidates,
@@ -1860,7 +1933,10 @@ else
                    -n "$VKS_NAMESPACE" get vm -l "cluster.x-k8s.io/cluster-name=${VKS_CLUSTER_NAME:-}" \
                    -o jsonpath='{range .items[*]}{.status.network.primaryIP4}{" "}{end}' \
                    </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
-    if [ "${_ssh_vrc:-1}" -eq 0 ] && [ -z "$(printf '%s' "${_ssh_addr:-}" | tr -d ' \n\t')" ]; then
+    # sed, not tr: bare photon:5.0 has NO tr, and on such a box this substitution would be empty,
+    # making the emptiness test ALWAYS true — a silent wrong branch. (MEASURED: photon:5.0 ships
+    # base64/date/sed/head/cut and no tr; the script that would install it is internet-side only.)
+    if [ "${_ssh_vrc:-1}" -eq 0 ] && [ -z "$(printf '%s' "${_ssh_addr:-}" | sed 's/[[:space:]]//g')" ]; then
       _ssh_scoped=0
       _ssh_addr="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
                      -n "$VKS_NAMESPACE" get vm \
@@ -1868,7 +1944,10 @@ else
                      </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
     fi
     # squeeze the jsonpath separators; an item with no primaryIP4 contributes an empty field.
-    _ssh_addr="$(printf '%s' "${_ssh_addr:-}" | tr -s ' \n\t' ' ' | sed 's/^ *//; s/ *$//')"
+    # sed, not tr — same reason. WORSE here: this is a bare assignment from a pipeline under
+    # `set -euo pipefail`, so a missing tr does not merely blank it, it KILLS the script; and if it
+    # did not, the cell would read "<no node address yet>" for a cluster that just returned three.
+    _ssh_addr="$(printf '%s' "${_ssh_addr:-}" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ *//; s/ *$//')"
     # ⚠️ ONE address in the cell, the rest in the note. MY OWN BUG, caught by an adversary: the
     # jsonpath collects EVERY node's primaryIP4 space-separated, so a 3-node guest cluster puts
     # ~44 chars into a column whose width is a max over all rows -- re-creating the width defect
@@ -1964,6 +2043,34 @@ while IFS=$'\t' read -r c1 c2 c3 c4; do
 done <<EOF
 $_lab_rows
 EOF
+
+# ── the note the SSH row's "see note" marker CITES ────────────────────────────────────────────
+# MEASURED 2026-09-08 on the live lab: the row rendered `192.168.101.63 (+2 more — see note)` and
+# NOTHING in the 55-line output explained it — a citation resolving to nothing, which line 1461
+# already calls "worse than no marker at all, because it reads as sourced". The existing emitter at
+# ~1448 scans `$rows` (the SERVICES table) and is structurally blind to this one, which lives in
+# `$_lab_rows`. Gated on the marker being PRESENT so cell and note cannot drift apart.
+# ⚠️ KEYED ON THE FLAGS, NOT ON THE RENDERED STRING. creds.sh:1503-1507 records the measured
+# incident: rewording a marker silently stopped matching it and the cell cited a note that no
+# longer printed. Display text is not a control channel. `_ssh_n` is the same variable the cell
+# branches on (verified in scope: plain if/fi, no subshell), so cell and note cannot drift — and
+# this form also covers the `NOT cluster-scoped` arm, which carries no marker and so could never
+# have matched a text key at all.
+if [ "${_ssh_vrc:-1}" -eq 0 ] && [ "${_ssh_n:-0}" -gt 1 ]; then
+  # ⚠️ THE CLAIM IS SCOPED. The password comes from ONE per-cluster secret, so "same for every
+  # node" holds only where the addresses were filtered to THIS cluster. In the un-scoped arm the
+  # list can span clusters, and those nodes take a DIFFERENT secret — asserting one password for
+  # them would be a false sentence about someone else's cluster (RULE ZERO-V).
+  if [ "${_ssh_scoped:-1}" = 1 ]; then
+    printf '\n  note: every node of this cluster takes the SAME user and password; the row shows the first.\n'
+  else
+    printf '\n  note: these addresses are NOT filtered to this cluster, so some may belong to another\n'
+    printf '        one — and a node of another cluster takes that cluster'"'"'s password, not this row'"'"'s.\n'
+  fi
+  if [ -n "${_ssh_addr:-}" ]; then
+    printf '        All node addresses: %s\n' "$_ssh_addr"
+  fi
+fi
 
 # ⚠️ SCOPED TO THE vCenter ROW, AND STATED ABOUT THE DOCUMENTS — NOT THE READER (B536).
 # A whole-table condition would re-import the three-meanings problem this note exists to remove:

@@ -128,18 +128,48 @@ _candidates() {
 # caller, which invokes this as `$(_read_secret)` — a subshell — so the assignment was discarded and
 # `set -u` killed the script with `ANSWERED_KC: unbound variable`. Neither field can contain a tab
 # (a filesystem path we constructed, and base64), so one line carries both unambiguously.
+# ⚠️ THE ERRFILE IS PASSED IN BY THE CALLER, NOT KEPT IN A GLOBAL — same subshell rule as the note
+# above. This runs as `$(_read_secret)`, so anything it assigns is discarded; a FILE crosses the
+# boundary, a variable does not. Until 2026-09-08 this did `2>/dev/null` and the cause was destroyed
+# at the point of the read, which is why the caller could only see "empty" and waited 900s on an
+# EXPIRED token (measured on the live lab: 15 minutes for a secret it would never see).
+# Each candidate APPENDS, because there are two of them and they fail DIFFERENTLY — see _should_wait.
 _read_secret() {
-  local kc enc
+  local kc enc errf="${1:-/dev/null}"
+  : > "$errf" 2>/dev/null || true
   while IFS= read -r kc; do
     [ -n "$kc" ] && [ -f "$kc" ] || continue
     # BOUNDED, and stdin CLOSED — see the timing note below.
     if enc="$(KUBECONFIG="$kc" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl --request-timeout=5s \
                 -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret \
-                -o jsonpath='{.data.password}' </dev/null 2>/dev/null)" && [ -n "$enc" ]; then
+                -o jsonpath='{.data.password}' </dev/null 2>>"$errf")" && [ -n "$enc" ]; then
       printf '%s\t%s' "$kc" "$enc"; return 0
     fi
   done < <(_candidates)
   return 1
+}
+
+# The read's stderr, kept for the WAIT decision below. A file, not a variable, because _read_secret
+# runs inside `$( )` — see its header. Removed on exit; an operator never sees or needs it.
+_ap_err="$(mktemp)"
+trap 'rm -f "$_ap_err"' EXIT
+
+# ── _should_wait <errfile> — is waiting the RIGHT thing, or will it never arrive? ────────────────
+# ⚠️ THE TEST IS A POSITIVE NotFound ON THE SECRET, NOT A CLASSIFICATION. classify_kube_failure has
+# NO NotFound arm — a genuine "secrets ... not found" classifies UNKNOWN, which is also its residual
+# bucket, so gating the wait on a class would fail OPEN (wait on anything unrecognised) and would
+# even wait 15 minutes on NO_KUBE_TARGET, i.e. on localhost:8080. 08-install-argocd-service.sh:95-111
+# solved this identical failure with kube_is_notfound; this follows it.
+#
+# ⚠️ AND THE TOKEN MATTERS, because there are TWO candidates and they fail DIFFERENTLY. MEASURED on
+# the live lab with an expired Supervisor token:
+#     secrets/supervisor.kubeconfig -> "You must be logged in to the server (Unauthorized)"
+#     $KUBECONFIG (the guest)       -> 'Error from server (NotFound): namespaces "cicd" not found'
+# So "any NotFound -> wait" votes to WAIT on the guest's NAMESPACE-NotFound and the 15-minute hang
+# survives the fix. Only a NotFound naming THE SECRET means "it is reconciling, come back".
+# kube_is_notfound requires both facts on the SAME line, so a namespace-NotFound cannot satisfy it.
+_should_wait() {
+  kube_is_notfound "${1:-/dev/null}" argocd-initial-admin-secret
 }
 
 # Split what _read_secret printed. Sets ANSWERED_KC + ENC in the CALLER's shell.
@@ -209,7 +239,7 @@ if command -v kubectl >/dev/null 2>&1; then
   # 6s-delayed stdin for the full 6,004 ms, which on a terminal is an indefinite hang.
   # A report that hangs is worse than one that says <not set>: the operator Ctrl-Cs and never sees
   # the Context block explaining why the value is stale.
-  if ans="$(_read_secret)" && [ -n "$ans" ]; then
+  if ans="$(_read_secret "$_ap_err")" && [ -n "$ans" ]; then
     _split_answer "$ans"; enc="$ENC"
     log_info "read argocd-initial-admin-secret from ns/${ARGOCD_NAMESPACE} via ${ANSWERED_KC}"
     if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
@@ -233,13 +263,42 @@ if command -v kubectl >/dev/null 2>&1; then
   # "get the 'admin' password from your VKS lab"; the ArgoCD operator created the secret at
   # 19:42:37Z. Same class as harbor-reachable / argocd-address / vks-k8s-version before each was
   # taught to wait — a point-in-time read of something that is merely still reconciling.
-  if [ "$_wait" -gt 0 ] && [ -z "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
+  # ⚠️ WAIT ONLY IF WAITING CAN HELP. Until 2026-09-08 this asked only whether the value was
+  # EMPTY, so an empty result read as "still reconciling" whatever caused it — measured on the live
+  # lab, an EXPIRED Supervisor token bought a 900s wait for a secret that would never appear, while
+  # `make creds` PRESCRIBED this command in exactly that state and called it "(it waits)". Same
+  # forbidden-reads-as-absent class as B484.
+  if [ "$_wait" -gt 0 ] && [ -z "${ARGOCD_ADMIN_PASSWORD:-}" ] && ! _should_wait "$_ap_err"; then
+    # classify_kube_failure WORDS this; it never DECIDES it (no NotFound arm — see _should_wait).
+    _ap_cls="$(classify_kube_failure "$_ap_err" 2>/dev/null || true)"
+    log_warn "not waiting: the read did not fail with a NotFound naming argocd-initial-admin-secret,"
+    log_warn "so the secret is not merely reconciling (classified: ${_ap_cls:-UNKNOWN})."
+    # ⚠️ THE SSO COMMAND APPEARS ON EXACTLY ONE ARM BELOW: EXPIRED, where the token's own `exp`
+    # makes the cause a FACT. Everywhere else there is deliberately NO command — the obvious remedy
+    # performs a vSphere SSO bind and vCenter locks out PERMANENTLY after 3 failures, so it must
+    # never be prescribed for a state this cannot decide. Keep this arm-for-arm identical to
+    # creds.sh's `_rejected_why`; a round found the two copies DISAGREEING on the undecidable arm.
+    if [ "$_ap_cls" = UNAUTHORIZED ]; then
+      # The token's own exp claim separates "expired" from "rotated/revoked" — kubectl reports both
+      # as Unauthorized. Offline, so it costs none of the THREE vCenter SSO attempts before lockout.
+      _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
+      case "$_ap_exp" in
+        # ONE sentence, from lib/os.sh — NOT a hand-written copy. A round measured the two copies
+        # DISAGREEING on the undecidable arm, and "locks out PERMANENTLY" missing from this file's
+        # arms entirely: the clause that is the whole REASON the command is withheld.
+        EXPIRED*) log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — $(supervisor_renew_how)" ;;
+        VALID*)   log_warn "the cluster REJECTED this kubeconfig although its token has NOT expired (valid until ${_ap_exp#VALID }) — that is a ROTATED or REVOKED credential, not an expiry. $(supervisor_renew_how --ask-only)" ;;
+        *)        log_warn "the cluster REJECTED this kubeconfig and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this may be a ROTATED credential rather than an expired one. $(supervisor_renew_how --no-command)" ;;
+      esac
+    fi
+  fi
+  if [ "$_wait" -gt 0 ] && [ -z "${ARGOCD_ADMIN_PASSWORD:-}" ] && _should_wait "$_ap_err"; then
     log_info "argocd-initial-admin-secret is not in ns/${ARGOCD_NAMESPACE} yet — the ArgoCD instance is still reconciling."
     log_info "waiting up to ${_wait}s ..."
     _w=0
     while [ "$_w" -lt "$_wait" ]; do
       sleep 15; _w=$((_w + 15))
-      if ans="$(_read_secret)" && [ -n "$ans" ]; then
+      if ans="$(_read_secret "$_ap_err")" && [ -n "$ans" ]; then
         _split_answer "$ans"; enc="$ENC"
         log_info "read argocd-initial-admin-secret from ns/${ARGOCD_NAMESPACE} via ${ANSWERED_KC} (after ${_w}s)"
         _st="$(_password_state "$ANSWERED_KC")"

@@ -57,7 +57,10 @@ token.md
 !.claude/settings.json
 !.claude/hooks/
 
-# Serializes registry-mutating work (see with_registry_lock in scripts/lib/os.sh)
+# The LEGACY per-worktree registry lock. The authoritative one now lives in the SHARED git dir
+# (.git/vks-registry.lock, never tracked), so this file is taken only as a transition guard —
+# a process that started before 2026-09-08 holds THIS one and knows nothing about the other.
+# See with_registry_lock in scripts/lib/os.sh.
 .registry.lock
 
 # Rendered ArgoCD Applications for a TENANT to hand to their platform team (ARGOCD_MECHANISM=request).

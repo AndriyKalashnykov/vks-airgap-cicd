@@ -53,7 +53,7 @@ openssl s_server -quiet -accept "$PORT" -cert "$T/srv.crt" -key "$T/srv.key" -na
 SRV_PID=$!
 # Wait for it to actually listen — a race here would look like the unreachable arm.
 for _ in $(seq 1 40); do
-  (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null && { exec 3>&- 2>/dev/null; break; }
+  (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null && { { exec 3>&-; } 2>/dev/null; break; }   # inner braces: a BARE exec makes 2>/dev/null PERMANENT
   sleep 0.25
 done
 

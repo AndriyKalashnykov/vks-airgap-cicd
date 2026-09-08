@@ -223,7 +223,17 @@ jobs:
       # that only CI could see (a local `make lint` used whatever the dev box had).
       # All three ARE in mise's registry (kubeconform + hadolint via aqua, yamllint via
       # pipx/uv); they are pinned in .mise.toml and installed by the step above.
+      # ⚠️ PIN THE MISE VERSION. Without `version:` the action resolves whatever
+      # https://mise.jdx.dev/VERSION says AT RUN TIME — which is a "latest" resolution in a repo
+      # that pins everything else, and it broke CI outright on 2026-09-08: jdx tagged v2026.9.3
+      # and bumped that endpoint, but never published the release ASSETS. The action resolved
+      # 2026.9.3, curl 404'd five times, the job died in SETUP, and `make secrets-scan` was
+      # SKIPPED — a security scan that did not run, on every PR in the repo. Still 404 2h23m
+      # after the tag. Renovate bumps this line (see renovate.json's mise-action manager).
+      # renovate: datasource=github-releases depName=jdx/mise
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        with:
+          version: 2026.9.2
 
       # Persist kubeconform's downloaded JSON schemas across runs (validate.sh
       # points kubeconform -cache here) so githubusercontent isn't re-hit every run.
@@ -475,8 +485,10 @@ jobs:
       # Only gitleaks — still pinned by .mise.toml (one source of truth), but without dragging in
       # the JDK/Go/kubectl/helm toolchain that static-check needs. cache:false so we don't restore
       # (or save) that job's much larger cache just to obtain one Go binary.
+      # renovate: datasource=github-releases depName=jdx/mise
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
         with:
+          version: 2026.9.2
           install_args: gitleaks
           cache: false
 

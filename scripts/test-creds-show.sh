@@ -1278,24 +1278,270 @@ fi
 # no-op for the failure it was printed for. A control pinned to a defective literal fires RED on the
 # FIX and green on the defect, so it now asserts what B548 actually adjudicated — the decidable arm
 # still points somewhere actionable — plus the specific regression, so the no-op cannot come back.
+# B556: the arm now DELEGATES to `_rejected_why`, so the sentence lives one indirection away.
+# Pinning to the arm's own text made this control fire RED on a FIX (measured 2026-09-08) -- the
+# same location-vs-property defect the comment above already records. Follow the delegation:
+# extract the arm AND, if it calls a helper, that helper's body. A control that cannot see where
+# the sentence moved is not a weaker control, it is a WRONG one.
 _ua="$(sed -n '/UNAUTHORIZED)/,/;;/p' "${_CREDS_REPO}/scripts/creds.sh")"
+_ua="${_ua}
+$(sed -n '/^_rejected_why() {/,/^}/p' "${_CREDS_REPO}/scripts/creds.sh")"
+# ...and one level FURTHER: `_rejected_why` itself delegates the remedy to a helper. Chasing that by
+# hand broke this control TWICE in one session (2026-09-08), each time firing RED on a FIX -- so
+# follow the delegation MECHANICALLY: pull the body of every `$(_helper)` the extract calls. A
+# control that must be hand-updated on every refactor is a control that will be wrong next refactor.
+# shellcheck disable=SC2016  # the single quotes are the POINT: `$(` is a LITERAL to match in the
+# extracted source, not an expansion. Double-quoting it would make the shell substitute it here.
+# ⚠️ SEARCH BOTH FILES. The helper was HOISTED into lib/os.sh (so argocd-password.sh could share
+# ONE sentence instead of a hand-duplicated copy that drifted), and a follower that looks only in
+# creds.sh then finds an empty body and fires RED on a correct tree. MEASURED: that is exactly what
+# happened on the hoist commit. A delegation-follower must follow the delegation ACROSS FILES too.
+for _h in $(printf '%s' "$_ua" | grep -oE '\$\(_?[a-z_]+\)' | tr -d '$()' | sort -u); do
+  for _src in "${_CREDS_REPO}/scripts/creds.sh" "${_CREDS_REPO}/scripts/lib/os.sh"; do
+    _ua="${_ua}
+$(sed -n "/^${_h}() {/,/^}/p" "$_src")"
+  done
+done
+# ...and one hop further: `_renew_how` is now a thin alias, so the SENTENCE is one more level down.
+for _h in $(printf '%s' "$_ua" | grep -oE 'supervisor_renew_how' | sort -u); do
+  _ua="${_ua}
+$(sed -n "/^${_h}() {/,/^}/p" "${_CREDS_REPO}/scripts/lib/os.sh")"
+done
 if printf '%s' "$_ua" | grep -q 'REJECTED this kubeconfig'; then
   ok "B548: the DECIDABLE arm (UNAUTHORIZED) still says what happened"
 else
   bad "B548: the UNAUTHORIZED arm lost its diagnosis. A rejected kubeconfig IS a decidable state."
 fi
-if printf '%s' "$_ua" | grep -qE 'GUEST kubeconfig|docs/scenario-1'; then
-  ok "B548: ...and points somewhere actionable without prescribing a bare 'make vks-login'"
+if printf '%s' "$_ua" | grep -qE 'VKS_AUTH_METHOD=vcf'; then
+  ok "B548: ...and NAMES the remedy command (make vks-login VKS_AUTH_METHOD=vcf), not a section"
 else
   bad "B548: the arm names no way forward. Naming only the diagnosis leaves the reader knowing they
       are broken with no path (lib/os.sh:1964-1965 records that as its own defect)."
 fi
+# ⚠️ Do NOT try to catch "a bare make vks-login" by pattern. MEASURED 2026-09-08: `make vks-login[^V]*$`
+# fires on the arm's own EXPLANATION of why the bare form is wrong -- a false RED on correct text,
+# and its only remedy is deleting the explanation. The regression is caught POSITIVELY instead, by
+# the VKS_AUTH_METHOD=vcf assertion above: reverting to the bare form removes that string and turns
+# THAT control red. This one keeps only the exact defective literal B548 adjudicated.
 if printf '%s' "$_ua" | grep -qE 'Re-run: make vks-login'; then
   bad "the arm prescribes a bare 'make vks-login' again. MEASURED 2026-09-07: under
       VKS_AUTH_METHOD=kubeconfig that renews the GUEST kubeconfig and does NOTHING for the
       Supervisor — it is a no-op for the very failure it is printed for."
 else
   ok "B548: ...and has not regressed to the no-op remedy"
+fi
+
+# ── 🔴 THE SSO-LOCKOUT SAFETY PROPERTY. It regressed TWICE and the suite did not notice. ─────────
+# `make vks-login` performs a vSphere SSO BIND, and vCenter locks out PERMANENTLY after THREE
+# failures. So it may be named ONLY where the cause is a FACT (the token's own `exp` says EXPIRED)
+# and NEVER on a state this report cannot decide.
+#
+# ⚠️ WHY THIS IS A SEPARATE, BEHAVIOURAL CONTROL. The B548 delegation-follower above pulls the
+# helper's WHOLE body, and that body names the command in one of its two branches -- so it is
+# GREEN either way and is structurally incapable of seeing this. MEASURED: re-applying the exact
+# regression (dropping `--no-command`) left the suite at 77 ok / 0 FAIL, byte-identical. Prose has
+# now closed this property three times and been reverted twice; this is the first thing that fails.
+_rh="$(sed -n '/^supervisor_renew_how() {/,/^}/p' "${_CREDS_REPO}/scripts/lib/os.sh")"
+if [ -z "$_rh" ]; then
+  bad "SSO gate: supervisor_renew_how not found in lib/os.sh — this control is measuring NOTHING"
+else
+  # It must be RUNNABLE, not merely present: source the lib and render both states.
+  _sso_cmd="$(bash -c ". '${_CREDS_REPO}/scripts/lib/os.sh' 2>/dev/null; supervisor_renew_how" 2>/dev/null || true)"
+  _sso_non="$(bash -c ". '${_CREDS_REPO}/scripts/lib/os.sh' 2>/dev/null; supervisor_renew_how --no-command" 2>/dev/null || true)"
+
+  case "$_sso_cmd" in
+    *"make vks-login"*) ok "SSO gate: the DECIDABLE remedy names the command" ;;
+    *)                  bad "SSO gate: the decidable remedy no longer names the command — the fix is withheld from the reader who HAS it" ;;
+  esac
+  case "$_sso_non" in
+    *"make vks-login"*) bad "SSO gate: the UNDECIDABLE remedy NAMES make vks-login. That spends one of THREE vCenter SSO attempts before PERMANENT lockout, for a cause this report cannot decide. Regressed twice already." ;;
+    "")                 bad "SSO gate: the undecidable remedy rendered EMPTY — cannot tell 'no command' from 'no output'" ;;
+    *)                  ok "SSO gate: the UNDECIDABLE remedy names NO SSO command" ;;
+  esac
+  # --ask-only was introduced with no coverage at all. Two plausible edits break it differently:
+  # removing it from the helper's MODE GUARD makes it refused (rc=2), so both VALID arms render
+  # an EMPTY remedy; removing it from the RENDERING branch makes them name the command and
+  # contradict themselves. Both are asserted below. (An earlier version of this comment named
+  # only the second outcome — the mode guard added in the same arc changed it, and the comment
+  # did not.)
+  _sso_ask="$(bash -c ". '${_CREDS_REPO}/scripts/lib/os.sh' 2>/dev/null; supervisor_renew_how --ask-only" 2>/dev/null || true)"
+  case "$_sso_ask" in
+    "")                 bad "SSO gate: --ask-only rendered EMPTY" ;;
+    *"make vks-login"*) bad "SSO gate: --ask-only NAMES the SSO command — a definite non-expiry diagnosis must not prescribe a bind" ;;
+    *"cannot tell you which fix"*) bad "SSO gate: --ask-only carries the UNDECIDABLE clause — that arm HAS a definite diagnosis, so this contradicts it" ;;
+    *)                  ok "SSO gate: --ask-only names no command and makes no undecidable claim" ;;
+  esac
+  # ...and the helper must REFUSE an unknown mode rather than fall through to naming the command.
+  if bash -c ". '${_CREDS_REPO}/scripts/lib/os.sh' 2>/dev/null; supervisor_renew_how --nocommand" >/dev/null 2>&1; then
+    bad "SSO gate: an UNKNOWN mode was accepted — a one-character flag typo then prescribes an SSO bind"
+  else
+    ok "SSO gate: an unknown mode is REFUSED (a flag typo cannot silently name the command)"
+  fi
+  case "$_sso_non" in
+    *"locks out PERMANENTLY"*) ok "SSO gate: the undecidable remedy still states WHY there is no command" ;;
+    *)                         bad "SSO gate: the undecidable remedy dropped 'locks out PERMANENTLY' — the clause that is the whole reason the command is withheld" ;;
+  esac
+
+
+# ── THE SSO-COMMAND PROPERTY, MEASURED ON THE RENDERED REPORT ─────────────────────────────────
+# ⚠️ SCOPE, stated so this green is not over-read: it measures the TWO `kube_token_expiry`
+# consumers. Scripts that prescribe the bind from a bare `classify_kube_failure` verdict WITHOUT
+# reading an expiry are NOT covered — `26-vks-cluster-status.sh:129` and `lib/istio.sh:406`
+# both do, and both are pre-existing. Widening to them is a separate design, not a hole here.
+
+# The grid covers exactly the verdicts kube_token_expiry can RETURN. If a fourth is ever added the
+# grid is silently short a cell, so pin the count -- three literal `printf '<VERDICT>` shapes.
+# ⚠️ DELETE COMMENT LINES; DO NOT TRUNCATE AT THE FIRST `#`. Both directions are MEASURED:
+#   no strip     -> a full-line comment quoting `printf 'REVOKED %s'` reports FOUR shapes: a false
+#                   RED whose only remedy is deleting a comment (the refuted-on-sight shape).
+#   `s/#.*//`    -> a `#` INSIDE A STRING LITERAL truncates a real verdict line, so a genuine 4th
+#                   verdict (`_m="#tag"; printf 'REVOKED %s' "$_m"`) reports THREE and the gate
+#                   positively asserts "exactly the 3 verdicts" -- a false GREEN in its own
+#                   headline. That is the complementary hole the first fix opened.
+#   `/^ *#/d`    -> correct on BOTH. Residual: a TRAILING comment quoting a printf still
+#                   false-REDs, and its remedy (move the comment to its own line) deletes nothing.
+_kte_shapes="$(sed -n '/^kube_token_expiry() {/,/^}/p' "${_CREDS_REPO}/scripts/lib/os.sh" \
+                 | sed '/^[[:space:]]*#/d' | grep -oE "printf '[A-Z]+" | sort -u | wc -l)"
+if [ "${_kte_shapes:-0}" -ne 3 ]; then
+  bad "SSO gate: kube_token_expiry now returns ${_kte_shapes} verdict shapes, not 3. The grid below
+      covers EXPIRED/VALID/UNKNOWN only, so a new verdict is UNMEASURED -- add its cell."
+else
+  ok "SSO gate: kube_token_expiry returns exactly the 3 verdicts the grid covers"
+fi
+
+# ⚠️ THE CONSUMER SET IS DERIVED, and this assertion is why. Deleting the arm scanner deleted its
+# derivation with it, and the grid's row table is HAND-TYPED -- so a THIRD consumer would simply not
+# be rendered and the suite would stay green. MEASURED by the round that caught this: a consumer
+# added to 28-harbor-admin-password.sh naming the command on VALID *and* UNKNOWN left the suite at
+# rc=0, 0 FAIL. This asserts SET EQUALITY only; it parses no arms and reads no `case` structure.
+# ⚠️ SCAN lib/ TOO, AND MATCH CODE NOT COMMENTS. Two measured defects in the first version:
+#   - it globbed `scripts/*.sh` only, so a third consumer reaching the verdict through a lib WRAPPER
+#     (`token_verdict() { kube_token_expiry "$@"; }`) contained no literal, the set was unchanged,
+#     and a dangerous prescription shipped at rc=0. Including lib/ does not catch that consumer
+#     directly -- it fails the moment the WRAPPER is introduced, which is when a human can act.
+#     (Its `-r` was also a no-op on a file glob, and `grep -v '/lib/'` matched nothing at all.)
+#   - it grepped raw text, so a COMMENT merely mentioning the function registered its file as a
+#     consumer -- measured: one added to 49-psa-check.sh turned this RED, prescribing a grid row for
+#     a file that renders nothing. In a repo this comment-dense, a live false RED.
+_sso_consumers=""
+for _f in "${_CREDS_REPO}"/scripts/*.sh "${_CREDS_REPO}"/scripts/lib/*.sh; do
+  case "$_f" in */test-*) continue ;; esac
+  # ⚠️ HERESTRING, NOT A PIPE. `sed … | grep -q` under pipefail reports a FOUND pattern as ABSENT
+  #    when grep exits early and sed takes SIGPIPE — and it is SIZE-DEPENDENT, so it bit exactly the
+  #    big files: creds.sh (157 KB) vanished from the set while argocd-password.sh survived. In a
+  #    derivation that direction is a false CLEAN: the consumer simply stops being counted.
+  if grep -q 'kube_token_expiry' <<< "$(sed '/^[[:space:]]*#/d' "$_f" 2>/dev/null)"; then
+    _sso_consumers="${_sso_consumers}$(basename "$_f") "
+  fi
+done
+# os.sh is the DEFINER and stays in the expectation deliberately: excluding it would need a third
+# filter, and this list just lost two for being silently dead.
+if [ "$_sso_consumers" != "argocd-password.sh creds.sh os.sh " ]; then
+  bad "SSO gate: the kube_token_expiry consumer set changed to [${_sso_consumers}]. The grid's rows
+      are hand-typed, so a consumer it does not render is UNMEASURED -- add a row for the new file
+      (or remove one), then update this expectation."
+else
+  ok "SSO gate: the kube_token_expiry consumer set is unchanged (${_sso_consumers}-- 2 rendered + the definer)"
+fi
+
+# base64 fallback matches the repo's existing pattern (vcenter.sh:375, 60-configure-tekton.sh:92):
+# a toybox-like base64 without -w0 must not silently yield an empty token, which would collapse
+# every cell to UNKNOWN and report a VACUOUS failure naming the wrong suspect.
+_b64u() { printf '%s' "$1" | { base64 -w0 2>/dev/null || base64 | tr -d '\n'; } | tr -d '=' | tr '+/' '-_'; }
+_jwt()  { printf 'h.%s.s' "$(_b64u "{\"exp\":$1}")"; }
+
+# One rendering environment, three ROWS. The Supervisor kubeconfig must be NON-EMPTY or
+# `kube_token_expiry` short-circuits to UNKNOWN on `[ -s ]` and all three cells collapse into one
+# arm -- a grid that agrees with itself for the wrong reason.
+#
+# ⚠️ THE SINK ROW IS NOT DECORATION. `creds.sh` has TWO kube_token_expiry dispatch sites -- `:1105`
+# (`_rejected_why`) and `:496` (the ArgoCD cell) -- and `:496` is gated on `_have_sink=1`. Without a
+# sink it never renders, so the dangerous prescription could be placed there and the grid would
+# report rc=0. MEASURED.
+# ⚠️ CORRECTION 2026-09-08 — this comment used to say "an EMPTY sink file is NOT enough:
+# VKS_STATE_KIND=1 is what reaches it". That is FALSE. `creds.sh:322` is
+# `_have_sink=0; [ -f "$_sink" ] && _have_sink=1` — mere EXISTENCE. Measured: no file -> 0
+# site-2 arms; EMPTY file -> 1; stamped -> 1. The wrong claim came from a probe whose own guard
+# skipped CREATING the file when the content was empty, so its "empty sink" row was really "no
+# file" — my instrument, not the code. The stamp is kept because it also exercises the
+# DISCOVERED/KinD flow; the UNSTAMPED overlay reaches site 2 too and is not separately rendered
+# (measured equal today).
+_sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-content-or-empty> -> the report
+  local which="$1" tok="$2" sink="$3" t; t="$(mktemp -d)"; mkdir -p "$t/bin"
+  cp .env.example "$t/.env.example"
+  printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME='robot\$probe'\nHARBOR_PASSWORD=x\n" > "$t/.env"
+  : > "$t/kc"; printf 'apiVersion: v1\nkind: Config\n' > "$t/sup"
+  [ -n "$sink" ] && printf '%s\n' "$sink" > "$t/.env.state"
+  { printf '#!/bin/sh\ncase "$*" in\n'
+    # ⚠️ MATCH THE TOKEN JSONPATH, NOT `config view`. FIVE other sites read that subcommand for
+    # `.clusters[0].cluster.server` (lib/argocd.sh:42, lib/state.sh:52, lib/os.sh:957) -- a bare
+    # `*"config view"*` arm hands every one of them a JWT where it expected a URL.
+    printf '  *user.token*) printf %%s %s; exit 0 ;;\n' "'$tok'"
+    printf '  *current-context*) echo stub-ctx; exit 0 ;;\n'
+    printf '  *version*) exit 0 ;;\n'
+    # Both consumers reach their token-expiry `case` only via an UNAUTHORIZED classification.
+    printf '  *"get ns"*|*"get secret"*) echo "error: You must be logged in to the server (Unauthorized)" >&2; exit 1 ;;\n'
+    printf 'esac\nexit 0\n'; } > "$t/bin/kubectl"
+  printf '#!/bin/sh\nexit 1\n' > "$t/bin/curl"; cp "$t/bin/curl" "$t/bin/getent"
+  chmod +x "$t/bin/kubectl" "$t/bin/curl" "$t/bin/getent"
+  ( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+      KUBECONFIG="$t/kc" VKS_SUPERVISOR_KUBECONFIG="$t/sup" CREDS_TOKEN=1 \
+      "${_CREDS_REPO}/scripts/${which}.sh" 2>&1 )
+  rm -rf "$t"
+}
+
+# label | binary | sink | EXPIRED marker | VALID marker | UNKNOWN marker
+# The markers are the POSITIVE CONTROL: two of every three cells expect a count of ZERO, which is the
+# shape that passes by NOT LOOKING, so a cell that never reached its arm must not read as a pass.
+_sso_rows='creds/site1|creds||EXPIRED at|has NOT expired|no readable expiry
+creds/site2-sink|creds|VKS_STATE_KIND=1|not read — Supervisor token EXPIRED|not read — the Supervisor token is still valid|run: make argocd-password
+argocd-password|argocd-password||EXPIRED at|has NOT expired|no readable expiry'
+
+# ⚠️ ASSERT THE PROPERTY, NOT AN EXACT COUNT. EXPIRED must name the command AT LEAST once (measured:
+# the EXPIRED report names it TWICE on ONE line, so `grep -c` reported "1 time(s)" and was simply
+# false); VALID and UNKNOWN must not name it AT ALL. An equality test also produced a THIRD, wrong
+# branch: any `got != want` fell into an `else` that said the remedy was "withheld" while the report
+# in fact named it MORE. `-ge 1` / `-eq 0` is the actual property and has no ambiguous case.
+while IFS='|' read -r _sso_lbl _sso_bin _sso_sink _sso_mE _sso_mV _sso_mU; do
+  [ -n "${_sso_lbl:-}" ] || continue
+  for _sso_v in EXPIRED VALID UNKNOWN; do
+    case "$_sso_v" in
+      EXPIRED) _sso_tok="$(_jwt 1000000000)"; _sso_mark="$_sso_mE" ;;
+      VALID)   _sso_tok="$(_jwt 9999999999)"; _sso_mark="$_sso_mV" ;;
+      *)       _sso_tok="notajwt";            _sso_mark="$_sso_mU" ;;
+    esac
+    _sso_out="$(_sso_render "$_sso_bin" "$_sso_tok" "$_sso_sink" || true)"
+    # THE CONTROL RUNS FIRST AND THE CELL STOPS ON IT. Running both in parallel let one cell emit a
+    # VACUOUS failure and an `ok … 0 time(s)` for the same render -- an `ok` that is false by the
+    # gate's own admission in the line above it.
+    case "$_sso_out" in
+      *"$_sso_mark"*) ;;
+      *) bad "SSO gate: ${_sso_lbl}/${_sso_v} never reached its arm (no '${_sso_mark}') -- the cell
+      is VACUOUS and its count says nothing. Suspect the kubectl stub, the Supervisor kubeconfig,
+      the sink stamp, or base64 -- not the code under test."
+         continue ;;
+    esac
+    _sso_got="$(printf '%s' "$_sso_out" | grep -o 'make vks-login' | wc -l | tr -d ' ')"
+    if [ "$_sso_v" = EXPIRED ]; then
+      if [ "${_sso_got:-0}" -ge 1 ]; then
+        ok "SSO gate: ${_sso_lbl} / EXPIRED names the SSO command (${_sso_got}x)"
+      else
+        bad "SSO gate: ${_sso_lbl}'s EXPIRED report no longer names make vks-login -- the remedy is
+      withheld from the one reader whose cause IS a fact."
+      fi
+    elif [ "${_sso_got:-0}" -eq 0 ]; then
+      ok "SSO gate: ${_sso_lbl} / ${_sso_v} names no SSO command"
+    else
+      bad "SSO gate: ${_sso_lbl}'s ${_sso_v} report NAMES make vks-login (${_sso_got}x). ${_sso_v} is
+      not a cause this report can decide, and a vCenter bind for it spends one of THREE attempts
+      before a PERMANENT lockout. Withhold the command on this arm."
+    fi
+  done
+done <<SSOROWS
+$_sso_rows
+SSOROWS
+
+
 fi
 
 if [ "$fail" != 0 ]; then

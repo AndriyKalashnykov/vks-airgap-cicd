@@ -32,7 +32,15 @@ export REPO_ROOT
 
 
 # ---------------------------------------------------------------------------
-# with_registry_lock — serialize every registry-MUTATING operation on this host.
+# with_registry_lock — serialize every registry-MUTATING operation IN THIS REPOSITORY.
+#
+# ⚠️ THE SCOPE IS PER-REPOSITORY, NOT PER-HOST, and the header said "host" until 2026-09-08. Two
+# separate CLONES pointed at the SAME Harbor are STILL NOT serialized by this. That is the honest
+# residual; keying the lock on registry identity instead was considered and rejected — it needs a
+# host-wide writable dir (a predictable path in world-writable /tmp lets any local user hold the
+# lock forever and permanently deny `make mirror`), HARBOR_URL is EMPTY at lock time in a fresh
+# worktree (.env and .env.state are both per-REPO_ROOT), and the incident shape below shares a kind
+# CLUSTER, not only a registry.
 #
 # Concurrent container/registry mutation CORRUPTS the target registry's blob store: a partial or
 # interleaved push leaves tags/manifests referencing blobs that HEAD-200 but are not actually
@@ -47,28 +55,126 @@ export REPO_ROOT
 #
 # Usage:  with_registry_lock <label> <command...>
 # ---------------------------------------------------------------------------
+# _registry_common_dir <repo-root> — print the git dir SHARED by every worktree, or return 1.
+#
+# ⚠️ PURE SHELL, ON PURPOSE — no `git`. The obvious implementation is
+# `git -C "$REPO_ROOT" rev-parse --git-common-dir`, and an adversary round MEASURED three reasons
+# not to:
+#   1. from a NON-repo nested inside a repo it returns `../../../.git` with rc=0, so the caller
+#      anchors the lock into a STRANGER'S repository — and if that repo is unwritable, a working
+#      `make mirror-push` becomes a hard `die`. (This helper simply returns 1 there: it can only
+#      ever look at $r/.git, so it cannot walk up.)
+#   2. GIT_DIR / GIT_COMMON_DIR in the environment silently override `-C`, and a
+#      `--show-toplevel` guard does NOT catch it (measured).
+#   3. `22-builder-push.sh:8-10` states the air-gap box's toolchain verbatim as "tar + curl +
+#      sha256sum + the carried crane" — git is NOT in it. `sed` and `cat` already are: os.sh uses
+#      them 9x and 6x, so every box that sources this file already needs them.
+# Layout per gitrepository-layout(5): a linked worktree's `.git` is a FILE holding `gitdir: <path>`,
+# and that dir holds `commondir` pointing at the shared `.git`.
+_registry_common_dir() {
+  local r="$1" gd c
+  [ -d "$r/.git" ] && { printf '%s' "$r/.git"; return 0; }   # main checkout
+  [ -f "$r/.git" ] || return 1                               # not a repo -> caller falls back
+  gd="$(sed -n 's/^gitdir: *//p' "$r/.git")"; [ -n "$gd" ] || return 1
+  case "$gd" in /*) ;; *) gd="$r/$gd" ;; esac                # a relative `gitdir:` is legal
+  # NO `commondir` => $gd IS the shared dir. Two shapes reach here and BOTH want that answer:
+  #   --separate-git-dir  — the MAIN checkout's `.git` is a FILE pointing at an external git dir
+  #                         that has no commondir, while its linked worktree's commondir resolves to
+  #                         that SAME dir. Returning 1 here made the main checkout fall back to the
+  #                         per-worktree legacy lock while its worktree took the shared one, and
+  #                         flock granted BOTH — B521, re-opened. MEASURED, with the ordinary-repo
+  #                         control REFUSED alongside it.
+  #   a SUBMODULE         — `gitdir:` points into `<super>/.git/modules/<name>`, which is likewise
+  #                         stable per-repository and shared by every worktree of that submodule.
+  #                         That is the right lock for it; no special case is needed.
+  if [ ! -f "$gd/commondir" ]; then
+    [ -d "$gd" ] || return 1
+    ( cd "$gd" 2>/dev/null && pwd -P ) || printf '%s' "$gd"
+    return 0
+  fi
+  c="$(cat "$gd/commondir")"
+  case "$c" in /*) ;; *) c="$gd/$c" ;; esac
+  # NORMALISE. flock keys on the inode, so `.../worktrees/x/../..` already locks the right file —
+  # but this path is PRINTED to the operator inside a `rm -f '<path>'` remedy when the lock is
+  # refused, and a path with `/../..` in it invites deleting the wrong thing. Pure shell; falls
+  # back to the raw form rather than failing if the dir is unreadable.
+  ( cd "$c" 2>/dev/null && pwd -P ) || printf '%s' "$c"
+}
+
 with_registry_lock() {
   local label="$1"; shift
-  local lock="${REGISTRY_LOCK_FILE:-${REPO_ROOT}/.registry.lock}"
+  # A git WORKTREE has its own REPO_ROOT, so the old `${REPO_ROOT}/.registry.lock` gave two
+  # worktrees two different FILES and flock granted BOTH — measured: main held inode 30176617 while
+  # a worktree ACQUIRED inode 80249353, with the same-file control correctly REFUSED. e2e-kind
+  # reaches this lock transitively (install-all -> mirror -> mirror-push) and KIND_CLUSTER_NAME is
+  # FIXED, so both worktrees target the same cluster and the same Harbor. That is the 2026-07-13
+  # blob-store incident shape, re-enabled.
+  # The shared git dir is identical from every worktree, so both now open ONE file. flock keys on
+  # the INODE, not the path string, so the worktree's unnormalised `.../worktrees/x/../..` form
+  # locks the same file as the main checkout's plain `.git` — measured REFUSED across the two.
+  local lock legacy _cd
+  legacy="${REPO_ROOT}/.registry.lock"
+  if [ -n "${REGISTRY_LOCK_FILE:-}" ]; then
+    lock="$REGISTRY_LOCK_FILE"                               # explicit override wins, untouched
+  elif _cd="$(_registry_common_dir "$REPO_ROOT")" && [ -d "$_cd" ]; then
+    # NOT `registry.lock`: git's own convention is `<file>.lock` as a sentinel FOR `<file>`, and
+    # `.git/registry.lock` would read as a lock for a nonexistent `.git/registry`.
+    lock="${_cd}/vks-registry.lock"
+  else
+    lock="$legacy"                                           # no git repo -> pre-2026-09-08 behaviour
+  fi
 
   if ! have flock; then
     log_warn "flock not available — cannot serialize registry work. Do NOT run another mirror/e2e concurrently."
     "$@"; return $?
   fi
 
-  exec 9>"$lock" || die "cannot open the registry lock file: $lock"
-  if ! flock -n 9; then
-    local holder; holder="$(cat "$lock" 2>/dev/null || true)"
+  _registry_lock_refused() {   # <lock-path>
+    local l="$1" holder; holder="$(cat "$l" 2>/dev/null || true)"
     log_error "another registry-mutating operation is already running${holder:+ (${holder})}."
     log_error "  These share a cluster + registry, so running two at once makes any failure unattributable."
     log_error "  Wait for it to finish, then re-run."
-    log_error "  Lock: $lock   (stale after a hard kill? remove it: rm -f '$lock')"
+    log_error "  Lock: $l   (stale after a hard kill? remove it: rm -f '$l')"
     exit 1
+  }
+
+  # ⚠️ `9<>` NOT `9>`. `exec 9>` opens O_TRUNC, so it DESTROYS the current holder's label before
+  # flock is even attempted — measured: the file read `FIRST-HOLDER pid=… started=…` while the
+  # holder ran, and `[]` immediately after a second attempt, so `${holder:+ (…)}` in the refusal
+  # could never fill. That became more visible, not less, once stderr was restored: the operator
+  # now reads a message that promises the holder and structurally cannot deliver it. `<>` does
+  # not truncate (measured both ways); we truncate explicitly AFTER acquiring.
+  exec 9<>"$lock" || die "cannot open the registry lock file: $lock"
+  flock -n 9 || _registry_lock_refused "$lock"
+  : >"$lock"   # we hold it now; drop the previous holder's label
+
+  # ALSO take the LEGACY per-worktree lock, when it is a different file. A process that started
+  # BEFORE this change holds ${REPO_ROOT}/.registry.lock and knows nothing about the shared one, so
+  # without this a mid-mirror upgrade lets two mutators run — and the recovery for that is
+  # "rebuild the registry". Deliberately NOT dated for removal: taking it costs one fd, it can
+  # never deadlock (every caller takes them in this order), and a dated note would just rot.
+  # ⚠️ NOT WHEN THE OPERATOR OVERRODE THE PATH. Taking the legacy lock unconditionally DEFEATED
+  # the escape hatch: two processes with DIFFERENT REGISTRY_LOCK_FILE values still collided on
+  # ${REPO_ROOT}/.registry.lock, and the second was refused CITING A FILE IT WAS NOT USING.
+  # Measured. The comment above said "explicit override wins, untouched" and it did not.
+  local _took_legacy=0
+  # ⚠️ THE BRACES ARE LOAD-BEARING. `exec 8>"$legacy" 2>/dev/null` makes BOTH redirections
+  # PERMANENT — `exec` with no command applies every redirection to the current shell — so the
+  # `2>/dev/null` intended to swallow one open error silently sent stderr to /dev/null for the REST
+  # OF THE PROCESS. Measured: the payload's stderr vanished, and the legacy guard's own refusal
+  # (four log_error lines, including the `rm -f` remedy) printed NOTHING while exiting 1. All four
+  # callers re-exec themselves as "$@", so the whole script ran blind. Scoping the redirection to a
+  # GROUP applies it only to the exec inside it.
+  if [ -z "${REGISTRY_LOCK_FILE:-}" ] && [ "$lock" != "$legacy" ] && { exec 8>"$legacy"; } 2>/dev/null; then
+    _took_legacy=1
+    flock -n 8 || _registry_lock_refused "$legacy"
   fi
+
   printf '%s pid=%s started=%s\n' "$label" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&9
   "$@"
   local rc=$?
   flock -u 9; exec 9>&-
+  if [ "$_took_legacy" = 1 ]; then flock -u 8 2>/dev/null || true; exec 8>&-; fi
   return "$rc"
 }
 
@@ -2145,6 +2251,133 @@ kube_is_notfound() {
   # temp file, so there is nothing to SIGPIPE. (check-grep-q-pipe caught this exact line.)
   grep -qF -- "$token" <<< "$(grep -F 'Error from server (NotFound)' "$errfile" 2>/dev/null)"
 }
+
+# ── supervisor_renew_how [--no-command] — the remedy. ONE sentence, shared by BOTH consumers. ──
+# ⚠️ AN EARLIER VERSION BRANCHED ON `VKS_AUTH_METHOD` AND INVERTED THE ANSWER. scenario-1 Step 6
+# writes `kubeconfig` (docs/scenario-1.md:614), so the scenario-1 operator — who DOES have the
+# command, at :622 — was told "no command here renews it". That withheld the very fix this change
+# exists to deliver, and it keyed on the ONE variable already proven not to indicate WHICH
+# kubeconfig is being renewed. So: no discriminator. Both sentences are true for every reader, and
+# the reader knows which is theirs — they know whether they minted this or were handed it.
+#
+# 🔴 `--no-command` IS A SAFETY GATE, NOT A STYLE FLAG. On the UNDECIDABLE arm the cause is NOT
+# known to be expiry, and `make vks-login` spends one of the THREE vCenter SSO attempts before
+# PERMANENT lockout. Commit 251df27 closed exactly this ("stop prescribing make vks-login for a
+# state that is undecidable"); removing the VKS_AUTH_METHOD gate re-opened it for every reader
+# until this flag was added. A round measured the rendered footnote putting "Do not re-authenticate
+# blind" and the command FOUR WORDS APART. EXPIRED (a fact) names the command; nothing else does.
+# ⚠️ THREE MODES, because two were not enough and the two-mode version made an arm CONTRADICT
+# ITSELF. The VALID arm has a DEFINITE diagnosis ("the token is live, so this is rotated/revoked"),
+# and appending "this report cannot tell you which fix applies" to it asserted both at once. That
+# clause belongs ONLY to the arm that genuinely cannot decide. Measured, rendered, and caught by a
+# round; the pre-delegation text had no contradiction, so this is production text that was made
+# worse to satisfy a control.
+#   (default)     the cause is a FACT (EXPIRED)      -> name the command
+#   --ask-only    the cause is KNOWN but not expiry  -> no command, no "cannot tell"
+#   --no-command  the cause is UNDECIDABLE           -> no command, plus "cannot tell"
+supervisor_renew_how() {
+  # 🔴 REJECT AN UNKNOWN ARGUMENT, LOUDLY. Falling through to the command-naming branch made a
+  # ONE-CHARACTER TYPO (`--nocommand`) silently prescribe a vCenter bind for an undecidable cause,
+  # in BOTH consumers, with the whole suite BYTE-IDENTICAL to baseline. MEASURED. This is the
+  # highest-leverage guard in the file: it converts every MISSPELLED mode into a loud failure
+  # without depending on a caller-side detector enumerating call spellings correctly.
+  #
+  # ⚠️ IT DOES NOT CATCH AN EMPTY ARGUMENT, and an earlier version of this comment claimed it
+  # did. `supervisor_renew_how $flag` with an empty unquoted $flag expands to ZERO arguments —
+  # which IS the valid default mode, so it NAMES the command and this guard never fires.
+  # MEASURED. That shape is caught in test-creds-show.sh instead, by sanctioning the three known
+  # call spellings and flagging every other one.
+  case "${1:-}" in
+    ''|--ask-only|--no-command) ;;
+    *) printf 'BUG: supervisor_renew_how got unknown mode %s — refusing to render a remedy\n' "$1" >&2
+       return 2 ;;
+  esac
+  if [ "${1:-}" = --ask-only ] || [ "${1:-}" = --no-command ]; then
+    printf 'Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. Ask whoever owns the lab for a current credential.'
+    [ "${1:-}" = --no-command ] && printf ' This report cannot tell you which fix applies, and guessing costs one of those three attempts.'
+    return 0
+  fi
+  printf 'If you minted this kubeconfig here (scenario-1): VKS_AUTH_METHOD=vcf make vks-login — the AUTH_METHOD is required because Step 6 leaves .env on kubeconfig, so a bare make vks-login renews the GUEST kubeconfig instead (docs/scenario-1.md, "3. Log in to the Supervisor"). If it was HANDED to you (scenario-2 tenant): nothing here renews it — ask whoever owns the lab.'
+}
+
+# ── jwt_exp_seconds <jwt> — the `exp` claim in SECONDS, or EMPTY. Never guesses. ─────────────────
+# ONE parser, because there were TWO and they diverged: the headlamp decoder in creds.sh kept a
+# greedy `.*` (last match wins), a `[0-9]*` (zero-or-more), and no ceiling, while this one was
+# fixed. Two copies of a parser is the disease; a round found them disagreeing on the same input.
+#
+# ⚠️ `head -1` IS NOT "the top-level claim" — it is the first TEXTUAL match, and a NESTED `exp`
+# can come first. MEASURED: {"aud_claims":{"exp":4102444800},"exp":1000000000} -> the nested
+# FUTURE value, i.e. a DEAD TOKEN REPORTED LIVE. And the order is realistic, not contrived: Go's
+# encoding/json sorts map keys, so `act`/`amr`/`aud`/`azp`/`cnf` (RFC 7800, RFC 8693) all sort
+# BEFORE `exp`. So: MORE THAN ONE `exp` => REFUSE. That is the contract — degrade, never guess.
+#
+# NO `tr` (photon:5.0 has none) and NO python3. `sed s/,/\n/g` is measured working on toybox sed.
+jwt_exp_seconds() {
+  local tok="${1:-}" pay all
+  case "$tok" in *.*.*) ;; *) return 0 ;; esac
+  pay="${tok#*.}"; pay="${pay%%.*}"
+  pay="${pay//_//}"; pay="${pay//-/+}"            # base64url -> base64, without tr
+  case $(( ${#pay} % 4 )) in 2) pay="${pay}==" ;; 3) pay="${pay}=" ;; esac
+  all="$(printf '%s' "$pay" | base64 -d 2>/dev/null | sed 's/,/\n/g' \
+         | sed -n 's/.*"exp":[[:space:]]*\([0-9]\{1,\}\).*/\1/p')"
+  [ -n "$all" ] || return 0
+  # A newline in $all means sed emitted MORE THAN ONE match -> ambiguous -> refuse. `case` rather
+  # than `grep -c`, because this function's header enumerates its floor as base64/date/sed/head/cut
+  # and grep is not in it — a control should not quietly widen the dependency set it advertises.
+  # ⚠️ A LITERAL newline in the pattern. `_NL="$(printf '\n')"` is EMPTY — command substitution
+  # strips trailing newlines — and `*""*` matches EVERYTHING, so the function refused on every
+  # token. Measured: 6 cases failed instantly.
+  case "$all" in *"
+"*) return 0 ;; esac                             # >1 match -> ambiguous -> refuse (see above)
+  # A sanity CEILING, not a width guard. MEASURED: bash `[` errors at NINETEEN digits and `if`
+  # consumes that error as FALSE. It also rejects MILLI/MICRO/NANOsecond epochs, which are
+  # numerically valid and render nonsense (1757000000000000 -> "55679083-07-23"). 11 digits =
+  # year 5138: past any real exp, short of every wrong unit.
+  [ "${#all}" -le 11 ] || return 0
+  printf '%s' "$all"
+}
+
+# ── kube_token_expiry <kubeconfig> — is the bearer token EXPIRED, and WHEN? Offline, free. ───────
+# A Supervisor kubeconfig from `vcf context create` carries a vCenter OIDC JWT with a hard 10h
+# lifetime (MEASURED: iat 03:24 -> exp 13:24). The `exp` claim is readable WITHOUT touching the
+# network and WITHOUT spending a vCenter SSO attempt, which is what makes it usable here: every
+# other way of learning "is this token dead" costs a bind, and vCenter locks out PERMANENTLY at 3.
+#
+# It is what lets a caller say WHEN it expired instead of "usually an EXPIRED token", and it is the
+# ONLY thing that separates "expired" from "credential rotated/revoked" — kubectl reports both as
+# `Unauthorized`, so classify_kube_failure cannot tell them apart and must not be asked to.
+#
+# ⚠️ `--minify` IS LOAD-BEARING. Without it `{.users[0]...}` reads the FIRST user in the file, not
+# the CURRENT CONTEXT's — and 30-vks-login.sh:566-571 records (MEASURED 2026-08-08) that a real VKS
+# kubeconfig always holds SEVERAL (Supervisor + guest). The failure direction is the dangerous one:
+# a live guest token makes a DEAD Supervisor token report VALID. Every other [0]-index kubeconfig
+# read in scripts/ minifies — 11 of 11 — and `test-argocd-kubeconfig-stale.sh` exists for this bug.
+#
+# ⚠️ NO python3 (absent from a bare photon:5.0) and NO `tr` — 00-install-prereqs.sh:31-32 says
+# verbatim that photon:5.0 ships no coreutils so `tr` cannot be assumed, AND that script is
+# INTERNET-side only, so the air-gap box never runs it. MEASURED on bare photon:5.0: base64, date,
+# sed, head, cut present; `tr` MISSING. base64url is un-mangled with bash parameter expansion, and
+# sed alone parses the payload (the `tr ,` split was unnecessary). An earlier version of this
+# comment claimed tr was "the floor 00-install-prereqs.sh already guarantees" — false, and
+# contradicted verbatim by the file it cited; the function was INERT on the air-gap box.
+# Degrades to UNKNOWN — never a guess — for a non-JWT token, a client-cert kubeconfig, an absent
+# file, or a payload with no exp claim.
+kube_token_expiry() {
+  local kc="${1:-}" tok exp now
+  [ -n "$kc" ] && [ -s "$kc" ] || { printf 'UNKNOWN'; return 0; }
+  tok="$(kubectl --kubeconfig "$kc" config view --raw --minify -o jsonpath='{.users[0].user.token}' 2>/dev/null || true)"
+  case "$tok" in *.*.*) ;; *) printf 'UNKNOWN'; return 0 ;; esac
+  # NOTE: no decoding here. `jwt_exp_seconds` derives everything from $tok. An earlier version
+  # recomputed the payload, the base64url substitutions and the padding right here and then never
+  # read the result — dead code, in the function whose header is about not duplicating work.
+  exp="$(jwt_exp_seconds "$tok")"
+  [ -n "$exp" ] || { printf 'UNKNOWN'; return 0; }
+  now="$(date -u +%s)"
+  if [ "$exp" -lt "$now" ]; then printf 'EXPIRED %s' "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
+  else                           printf 'VALID %s'   "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
+  fi
+}
+
 
 classify_kube_failure() {
   local errfile="${1:-/dev/null}" e=""
