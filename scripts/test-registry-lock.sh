@@ -111,10 +111,24 @@ fi
 #    REGISTRY_LOCK_FILE branch from with_registry_lock entirely left this case ok.
 ( REPO_ROOT="$T/repo" REGISTRY_LOCK_FILE="$T/override.lock" \
     with_registry_lock "override-probe" true ) >/dev/null 2>&1
-if grep -q 'override-probe pid=' "$T/override.lock" 2>/dev/null; then
-  ok "REGISTRY_LOCK_FILE remains the operator's escape hatch (the label landed in THAT file)"
-else
+# ⚠️ AND THAT IT PERMITS CONCURRENCY, which is what "escape hatch" MEANS. Asserting only that the
+#    label landed in the override file left a measured defect green: the legacy lock was taken
+#    UNCONDITIONALLY, so two processes with DIFFERENT override files still collided on
+#    ${REPO_ROOT}/.registry.lock and the second was refused CITING A FILE IT WAS NOT USING.
+( REPO_ROOT="$T/repo" REGISTRY_LOCK_FILE="$T/hatch-a.lock" \
+    with_registry_lock "hatch-a" bash -c 'sleep 3' ) >/dev/null 2>&1 &
+sleep 1
+_h2="$( ( REPO_ROOT="$T/repo" REGISTRY_LOCK_FILE="$T/hatch-b.lock" \
+    with_registry_lock "hatch-b" bash -c 'echo SECOND-RAN' ) 2>&1 )"
+wait
+if grep -q 'override-probe pid=' "$T/override.lock" 2>/dev/null \
+   && grep -q 'SECOND-RAN' <<< "$_h2"; then
+  ok "REGISTRY_LOCK_FILE is a real escape hatch (own file, and two overrides do not collide)"
+elif ! grep -q 'override-probe pid=' "$T/override.lock" 2>/dev/null; then
   bad "REGISTRY_LOCK_FILE no longer overrides -- the lock went somewhere else entirely"
+else
+  bad "two DIFFERENT REGISTRY_LOCK_FILE values still collided -- something is taken unconditionally
+      alongside the override, so the hatch does not actually let the operator run concurrently."
 fi
 
 # 8. No new binary on the air-gap floor: 22-builder-push.sh:8-10 states that box's toolchain as
@@ -182,6 +196,27 @@ if [ -n "$_sm" ] && [ -n "$_sw" ] && _same "$_sm" "$_sw"; then
 else
   bad "--separate-git-dir main=[$_sm] worktree=[$_sw] -- they disagree, so flock grants both. That
       is B521 for a layout the first fix did not cover."
+fi
+
+# 11. THE REFUSAL PATH. Case 9 covers the payload's stderr on the SUCCESS path only, and the
+#     refusal is the path the stderr defect actually mattered on -- it exited 1 printing nothing,
+#     including its own `rm -f` remedy. It must also NAME the holder: `exec 9>` opens O_TRUNC and
+#     destroyed the holder's label BEFORE flock was attempted, so `${holder:+ (…)}` could never
+#     fill and the message promised something it structurally could not deliver.
+( REPO_ROOT="$T/repo" with_registry_lock "HOLDER-LABEL" bash -c 'sleep 3' ) >/dev/null 2>&1 &
+sleep 1
+_r11="$( ( REPO_ROOT="$T/repo" with_registry_lock "second" true ) 2>&1 )"
+wait
+if [ -z "$_r11" ]; then
+  bad "the refusal printed NOTHING. It exits 1 with no reason and no remedy -- look for a bare
+      'exec' carrying a '2>' redirection anywhere before it."
+elif ! grep -q "rm -f" <<< "$_r11"; then
+  bad "the refusal does not carry the 'rm -f' remedy for a stale lock"
+elif ! grep -q 'HOLDER-LABEL' <<< "$_r11"; then
+  bad "the refusal does not NAME the holder. The lock file is opened with '>' (O_TRUNC), which wipes
+      the holder's label before flock is even attempted -- use '<>' and truncate after acquiring."
+else
+  ok "the refusal speaks, carries its remedy, and names the holder"
 fi
 
 printf '\n  %s passed, %s failed\n' "$_pass" "$_fail"

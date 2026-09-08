@@ -33,7 +33,11 @@ openssl req -x509 -newkey rsa:2048 -keyout "$TMP/k.pem" -out "$TMP/c.pem" -days 
 PORT=""
 for p in $(seq 34443 34560); do
   (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null || { PORT="$p"; break; }   # connect FAILS => free
-  exec 3>&- 3<&- 2>/dev/null || true
+  # (no fd to close here: line above opens fd 3 in a SUBSHELL, so the parent never had it.
+  #  The line that used to sit here was `exec 3>&- 3<&- 2>/dev/null || true` — a BARE `exec`,
+  #  which makes EVERY listed redirection permanent, so `2>/dev/null` killed stderr for the
+  #  rest of this test. Measured: with the port busy, a failing assertion printed NOTHING and
+  #  CI showed "FAILED" with no reason. This file has no ci-tier marker, so it runs on every PR.)
 done
 [ -n "$PORT" ] || { echo "test-env-validate: no free port"; exit 1; }
 openssl s_server -accept "$PORT" -cert "$TMP/c.pem" -key "$TMP/k.pem" -www -quiet >/dev/null 2>&1 &

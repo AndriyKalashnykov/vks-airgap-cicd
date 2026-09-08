@@ -138,14 +138,25 @@ with_registry_lock() {
     exit 1
   }
 
-  exec 9>"$lock" || die "cannot open the registry lock file: $lock"
+  # ⚠️ `9<>` NOT `9>`. `exec 9>` opens O_TRUNC, so it DESTROYS the current holder's label before
+  # flock is even attempted — measured: the file read `FIRST-HOLDER pid=… started=…` while the
+  # holder ran, and `[]` immediately after a second attempt, so `${holder:+ (…)}` in the refusal
+  # could never fill. That became more visible, not less, once stderr was restored: the operator
+  # now reads a message that promises the holder and structurally cannot deliver it. `<>` does
+  # not truncate (measured both ways); we truncate explicitly AFTER acquiring.
+  exec 9<>"$lock" || die "cannot open the registry lock file: $lock"
   flock -n 9 || _registry_lock_refused "$lock"
+  : >"$lock"   # we hold it now; drop the previous holder's label
 
   # ALSO take the LEGACY per-worktree lock, when it is a different file. A process that started
   # BEFORE this change holds ${REPO_ROOT}/.registry.lock and knows nothing about the shared one, so
   # without this a mid-mirror upgrade lets two mutators run — and the recovery for that is
   # "rebuild the registry". Deliberately NOT dated for removal: taking it costs one fd, it can
   # never deadlock (every caller takes them in this order), and a dated note would just rot.
+  # ⚠️ NOT WHEN THE OPERATOR OVERRODE THE PATH. Taking the legacy lock unconditionally DEFEATED
+  # the escape hatch: two processes with DIFFERENT REGISTRY_LOCK_FILE values still collided on
+  # ${REPO_ROOT}/.registry.lock, and the second was refused CITING A FILE IT WAS NOT USING.
+  # Measured. The comment above said "explicit override wins, untouched" and it did not.
   local _took_legacy=0
   # ⚠️ THE BRACES ARE LOAD-BEARING. `exec 8>"$legacy" 2>/dev/null` makes BOTH redirections
   # PERMANENT — `exec` with no command applies every redirection to the current shell — so the
@@ -154,7 +165,7 @@ with_registry_lock() {
   # (four log_error lines, including the `rm -f` remedy) printed NOTHING while exiting 1. All four
   # callers re-exec themselves as "$@", so the whole script ran blind. Scoping the redirection to a
   # GROUP applies it only to the exec inside it.
-  if [ "$lock" != "$legacy" ] && { exec 8>"$legacy"; } 2>/dev/null; then
+  if [ -z "${REGISTRY_LOCK_FILE:-}" ] && [ "$lock" != "$legacy" ] && { exec 8>"$legacy"; } 2>/dev/null; then
     _took_legacy=1
     flock -n 8 || _registry_lock_refused "$legacy"
   fi
