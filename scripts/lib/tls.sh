@@ -169,8 +169,15 @@ ca_verifies_endpoint() {
   #
   # Plaintext is precisely the case where verification "passed" VACUOUSLY — it succeeded because
   # there was nothing to verify. So: require the ok line AND the absence of a certificate.
-  if printf '%s' "$out" | command grep -q 'Verify return code: 0 (ok)'; then
-    if printf '%s' "$out" | command grep -q 'no peer certificate available'; then
+  # ⚠️ HERESTRING, NOT `printf | grep -q`. Under the caller's inherited `set -o pipefail`, `grep -q`
+  # exits at its FIRST match and the producer takes SIGPIPE (141), which pipefail promotes — so the
+  # test reads FALSE for a pattern that is PRESENT. Measured at this function's real payload size
+  # (834 B): 2/1200 under `taskset -c 0`; 200/200 at 200 KB. It is a race, so an idle box cannot
+  # refute it. Bash spools a herestring to a temp file, so there is no pipe and nothing to SIGPIPE.
+  # This matters more since B553: fetch-ca.sh now BRANCHES on this rc, and a false 1/2 refuses a
+  # perfectly good trust anchor.
+  if command grep -q 'Verify return code: 0 (ok)' <<< "$out"; then
+    if command grep -q 'no peer certificate available' <<< "$out"; then
       # ⚠️ "NO CERTIFICATE" IS TWO DIFFERENT FAULTS, and they need OPPOSITE handling.
       # MEASURED — the outputs are cleanly distinct:
       #   accept-then-close : `unexpected eof while reading` / `handshake has read 0 bytes`
@@ -180,16 +187,17 @@ ca_verifies_endpoint() {
       # and verdict 2 already says exactly the right thing ("NOT evidence the anchor is wrong
       # — retry"). Reporting it as 4 hard-stopped the operator and told them to change a
       # SUPERVISOR_HOST that was correct. Deterministic, 6/6 — not a race.
-      printf '%s' "$out" | command grep -qE 'unexpected eof while reading|handshake has read 0 bytes' \
-        && return 2
+      if command grep -qE 'unexpected eof while reading|handshake has read 0 bytes' <<< "$out"; then
+        return 2
+      fi
       return 4
     fi
     return 0
   fi
-  printf '%s' "$out" | command grep -q 'CONNECTED(' || return 2
+  command grep -q 'CONNECTED(' <<< "$out" || return 2
   # CONNECTED but not ok. Separate "the anchor is wrong" from "the anchor is right, the NAME is not" —
   # they have opposite remedies (re-fetch the CA vs address the endpoint by its FQDN).
-  printf '%s' "$out" | command grep -qiE 'Hostname mismatch|IP address mismatch' && return 3
+  if command grep -qiE 'Hostname mismatch|IP address mismatch' <<< "$out"; then return 3; fi
   return 1
 }
 

@@ -269,6 +269,70 @@ else
   fi
 fi
 
+# ---- DOES THIS ANCHOR ACTUALLY VERIFY THIS ADDRESS? Asked BEFORE anything is written. ----------------
+# ⚠️ THIS RUNS ON $CAND, NOT $OUT, AND THAT ORDERING IS THE WHOLE POINT. The first version of this
+# check ran AFTER `install`, so a refusal printed "do NOT set X_CA_FILE" about a file it had ALREADY
+# REPLACED — and *_CA_FILE defaults into ./secrets/, gitignored and untracked, so the operator's good
+# anchor was unrecoverable. That is exactly the class the comment at :125-131 records paying for on
+# 2026-08-05 and swore off: "a refusal must be a NO-OP on the operator's filesystem, not a rollback."
+# Of the four CA producers in this repo, the other three (27-harbor-ca-from-cluster, fetch-supervisor-ca,
+# fetch-vcenter-ca) all check before writing. This one now does too.
+#
+# WHY THE CHECK EXISTS AT ALL: everything above proves the CHAIN (`openssl verify -CAfile`), which for
+# a SELF-SIGNED leaf is `verify(X,X)` — true for ANY self-signed cert, as :141-143 concedes. Nothing
+# asked the only question a caller has: WILL THIS ANCHOR VERIFY THIS ENDPOINT? Measured on a live lab:
+# with ARGOCD_SERVER a bare IP and the cert carrying no IP SAN, this script "verified" vacuously and
+# told the operator to set it — flipping lib/argocd.sh:385 into a VERIFIED branch that cannot succeed,
+# taking `make argocd-auth-check` from `PASS (credential only)` to `NO token (curl rc=60)`.
+
+# SANs come from the LEAF, never from $CAND. On a chain $CAND is the ISSUER, a different certificate,
+# and a real CA carries no subjectAltName at all — so reading $CAND printed an EMPTY list under
+# "It presents:" and then said "point the address at a name above", pointing at nothing.
+# `tail -n +2` (not `sed -n 2p`) matches the sibling read at 70-configure-argocd.sh:474.
+_sans="$(openssl x509 -in "$leaf" -noout -ext subjectAltName 2>/dev/null \
+         | tail -n +2 | sed 's/^[[:space:]]*//' | tr -d '\n' || true)"
+
+_ep_rc=0
+ca_verifies_endpoint "$host" "$port" "$CAND" >/dev/null 2>&1 || _ep_rc=$?
+
+# ⚠️ rc=0 IS NOT SUFFICIENT. A certificate with NO subjectAltName passes openssl's -verify_hostname,
+# which falls back to the CN — but every Go client refuses it outright ("x509: certificate relies on
+# legacy Common Name field, use SANs instead"), and crane, Kaniko, podman, containerd and the argocd
+# CLI are ALL Go. So a bare rc=0 would prescribe an anchor that fails closed in the same shape as the
+# incident this check exists to prevent. rc=6 is ours, not the primitive's.
+if [ "$_ep_rc" -eq 0 ] && [ -z "$_sans" ]; then _ep_rc=6; fi
+
+# rc=2 is "unreachable/timed out": it proves nothing either way, and the anchor IS authentic, so it is
+# written with a warning rather than refused. Everything else refuses.
+if [ "$_ep_rc" -ne 0 ] && [ "$_ep_rc" -ne 2 ]; then
+  # ⚠️ STDERR, not stdout. Same lesson as the consent block at :229: with the warning on stdout,
+  # `make fetch-argocd-ca > log` swallowed it entirely and left rc the only signal.
+  {
+    printf '\n  🔴 REFUSING TO WRITE %s — this anchor cannot verify %s.\n' "$OUT" "$hostport"
+    case "$_ep_rc" in
+      3) printf '     The chain is fine; the ADDRESS is wrong. The certificate does not present\n'
+         printf '     %s (an IP needs an IP SAN, and most self-signed server certs carry none).\n' "$host" ;;
+      6) printf '     The certificate presents NO subjectAltName. openssl accepted it by falling back\n'
+         printf '     to the CN, but every Go client refuses it outright:\n'
+         printf '       x509: certificate relies on legacy Common Name field, use SANs instead\n'
+         printf '     crane, Kaniko, podman, containerd and the argocd CLI are all Go.\n' ;;
+      5) printf '     The file fetched is not usable as a trust anchor at all.\n' ;;
+      *) printf '     ca_verifies_endpoint returned %s — it does not verify this endpoint.\n' "$_ep_rc" ;;
+    esac
+    if [ -n "$_sans" ]; then
+      printf '     The certificate presents: %s\n' "$_sans"
+      printf '     Point the address at one of those (add it to /etc/hosts if it does not resolve),\n'
+      printf '     re-run this, and THEN set %s_CA_FILE.\n' "$UPPER"
+    else
+      printf '     Ask whoever issued it for a certificate carrying a SAN for the address you use.\n'
+    fi
+    printf '\n     %s is UNCHANGED — nothing was written.\n' "$OUT"
+    printf '     Leave %s_CA_FILE UNSET meanwhile: the client then falls back to --insecure, which is\n' "$UPPER"
+    printf '     unverified but WORKING, where a non-verifying CA fails closed.\n'
+  } >&2
+  exit 3
+fi
+
 # ---- ONLY NOW does the operator's filesystem change. ---------------------------------------------------
 # PUBLIC trust material: 0644, always. A 0600 CA is unreadable by a container user with a different uid,
 # and the failure it produces ("error adding trust anchors from file") names TRUST, not PERMISSIONS.
@@ -286,54 +350,17 @@ else
   printf '  ⚠️  NOT AUTHENTICATED — accepted on your confirmation alone. Set %s to make this a check.\n' "$pin_var"
 fi
 
-# ⚠️ THE ANCHOR IS NOW CHECKED AGAINST THE ADDRESS IT WAS FETCHED FROM, and until 2026-09-07 it was
-# not. Everything above proves the chain (`openssl verify -CAfile`), which for a SELF-SIGNED leaf is
-# `verify(X,X)` — true for ANY self-signed cert, as :141-143 already concedes. Nothing asked the only
-# question that matters to a caller: WILL THIS ANCHOR VERIFY THIS ENDPOINT?
-#
-# MEASURED CONSEQUENCE, on a live lab: with ARGOCD_SERVER a bare IP and the cert carrying no IP SAN,
-# this script fetched the leaf, "verified" it vacuously, printed `wrote …` + `AUTHENTICATED`, and told
-# the operator to `set it in .env`. Doing so flipped lib/argocd.sh:385 into its VERIFIED branch, which
-# cannot succeed against that address — `make argocd-auth-check` went from `PASS (credential only)` to
-# `NO token (curl rc=60)`. The tool whose stated job is "and VERIFY it" (Makefile:732) is the tool
-# that broke the lab, and the last line it printed was the instruction that armed it.
-#
-# `ca_verifies_endpoint` (lib/tls.sh:123) is the primitive built for exactly this, and its own header
-# records the same trap one layer down: "-verify_return_error CHECKS THE CHAIN AND NOT THE NAME …
-# a green here meant 'the chain is good', NOT 'this connection will work'". 02-env.sh:560 already
-# calls it for Harbor. Harbor was safe only BY ACCIDENT — HARBOR_URL happens to be a name its cert
-# carries.
-#
-# It is graded, so each rc gets its own remedy; conflating them is the wrong-cause class this repo
-# keeps paying for. rc=3 is the incident: the ANCHOR is right and the ADDRESS is wrong.
-_ep_rc=0
-ca_verifies_endpoint "$host" "$port" "$OUT" >/dev/null 2>&1 || _ep_rc=$?
-case "$_ep_rc" in
-  0)
-    printf '  VERIFIES %s — chain AND name.\n' "$hostport"
-    printf '  set it in .env, e.g.  %s_CA_FILE=%s\n' "$UPPER" "$OUT"
-    ;;
-  3)
-    # THE ONE THAT BIT US. Do NOT print "set it in .env" here: that is the instruction that arms the
-    # break. Name the real fix instead — the addresses this certificate WILL verify.
-    printf '\n  🔴 THIS ANCHOR CANNOT VERIFY %s.\n' "$hostport"
-    printf '     The chain is fine; the ADDRESS is wrong. The certificate does not present this\n'
-    printf '     name (an IP needs an IP SAN, and most self-signed server certs carry none).\n'
-    printf '     It presents:\n'
-    openssl x509 -in "$OUT" -noout -ext subjectAltName 2>/dev/null | sed -n '2p' | sed 's/^/       /'
-    printf '\n     So do NOT set %s_CA_FILE while the address is %s — a CA-present\n' "$UPPER" "$host"
-    printf '     path will FAIL CLOSED where the current --insecure path works.\n'
-    printf '     Point the address at a name above (add it to /etc/hosts if it does not resolve),\n'
-    printf '     re-run this, and THEN set %s_CA_FILE.\n' "$UPPER"
-    ;;
-  2)
+# ⚠️ DELIBERATELY NOT THE WORD "VERIFIES". :141-143 already deleted "VERIFIED" from the consistency
+# check for this reason, and printing it directly under "⚠️ NOT AUTHENTICATED" would launder a
+# reachability result into an authenticity one — an interceptor chooses its own SANs, so this check
+# is green for a MITM by construction (lib/tls.sh:197-201 says so).
+if [ "$_ep_rc" -eq 2 ]; then
+  {
     printf '  ⚠️  could not re-check against %s (unreachable/timed out) — the anchor is written,\n' "$hostport"
     printf '     but nothing here proves it verifies that endpoint.\n'
-    ;;
-  5)
-    printf '  ⚠️  the file just written is not usable as a trust anchor. Do NOT set %s_CA_FILE.\n' "$UPPER"
-    ;;
-  *)
-    printf '  ⚠️  the anchor did NOT verify %s (rc=%s). Do NOT set %s_CA_FILE until that is resolved.\n' "$hostport" "$_ep_rc" "$UPPER"
-    ;;
-esac
+  } >&2
+else
+  printf '  REACHABLE — this anchor and this address agree (chain AND name).\n'
+  printf '     NOT an authenticity check; see the line above.\n'
+  printf '  set it in .env, e.g.  %s_CA_FILE=%s\n' "$UPPER" "$OUT"
+fi

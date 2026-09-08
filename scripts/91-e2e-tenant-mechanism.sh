@@ -295,7 +295,9 @@ if [ "$ARGOCD_TLS_MODE" = verified ]; then
 else
   export ARGOCD_OPTS="--insecure"
   log_warn "argocd TLS: NOT VERIFIED (--insecure) — no ARGOCD_CA_FILE. This leg therefore does NOT
-  cover the trust-anchor path, which is the one that fails on a real lab. To close that gap:
+  cover the trust-anchor path, which is the one that fails on a real lab. To close that gap
+  ARGOCD_SERVER must be a NAME the certificate presents: 'make fetch-argocd-ca' REFUSES a bare IP,
+  because argocd-server's default cert carries no IP SAN. Point it at such a name, then
   make fetch-argocd-ca, then re-run with ARGOCD_CA_FILE set."
   _e2e_tls="--insecure"
 fi
