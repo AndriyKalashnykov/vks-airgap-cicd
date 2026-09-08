@@ -29,6 +29,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # got 5) and by its `curl-ran` marker, not by reading the diff.
 # shellcheck source=scripts/lib/argocd.sh
 . "${SCRIPT_DIR}/lib/argocd.sh"
+# ca_addr_kind: ONE address classifier. lib/tls.sh has an idempotent source guard and no side
+# effects at source time; a hand-typed copy here disagreed with it on host:port -- measured (B552).
+. "${SCRIPT_DIR}/lib/tls.sh"
 load_env
 require_cmd kubectl
 
@@ -282,21 +285,32 @@ echo
 echo "  ArgoCD:   https://${ARGOCD_SERVER:-$ip}"
 echo "  Log in:   argocd login \"\$ARGOCD_SERVER\" --username admin --insecure"
 echo "  Password: make argocd-password"
-# SAY WHY THE LOGIN LINE CARRIES --insecure. This script has just written an IP, and
-# argocd-server's default certificate carries DNS SANs only -- no IP SAN -- so that address CANNOT
-# be verified by any CA. The debt was recorded in a comment above since the line was written; the
-# operator, who is the one typing --insecure, never saw it. B552: scenario-1 never tells them to
-# fetch the ArgoCD CA either, so without this the whole trust story is invisible on that path.
-case "${ARGOCD_SERVER:-$ip}" in
-  *[a-zA-Z]*) ;;   # a NAME: it can verify, given the right anchor. Say nothing.
-  *)
-    echo "  ⚠️  That address is an IP, and it CANNOT be verified by any CA: argocd-server's"
-    echo "      default certificate carries DNS SANs only, with no IP SAN. That is why the login"
-    echo "      line above says --insecure, and why fetching a CA would not help while the address"
-    echo "      is an IP. To verify instead of bypassing: publish an A record (make show-dns-records"
-    echo "      prints one for argocd-server), set ARGOCD_SERVER to that NAME, then: make fetch-argocd-ca"
-    ;;
-esac
+# SAY WHY THE LOGIN LINE CARRIES --insecure. This script has just written an IP, and the operator --
+# who is the one typing --insecure -- had no way to know that from the output. The reason lived only
+# in a code comment above. (B552)
+#
+# ⚠️ CLASSIFY $ip, NOT ${ARGOCD_SERVER:-$ip}. `set_env_var` writes the FILE and does not export, so
+# ARGOCD_SERVER in this process is the PRE-EXISTING value. With the .env.example placeholder
+# uncommented, that value contains letters -- so a naive classifier reads "name" and stays SILENT in
+# exactly the state where an IP was just written. MEASURED. $ip is what was resolved and written.
+#
+# ⚠️ ONE CLASSIFIER, from lib/tls.sh. Its header records that two hand-typed copies of this same
+# predicate once disagreed, "and the consequence of disagreement is a FALSE REFUSE". A third copy
+# here (`*[a-zA-Z]*`) disagreed with it on `10.0.0.1:8443` and `10-0-0-1` -- measured.
+if [ "$(ca_addr_kind "$ip")" = ip ]; then
+  echo "  ⚠️  That address is an IP. An IP can only be verified if the certificate carries an IP SAN,"
+  echo "      and argocd-server's DEFAULT self-signed certificate carries DNS SANs only — which is why"
+  echo "      the login line above says --insecure. If your platform team issued a cert WITH an IP SAN,"
+  echo "      this does not apply to you; 'make fetch-argocd-ca' will tell you either way."
+  echo "      To verify instead of bypassing, in THIS order:"
+  echo "        1. choose the name the certificate carries (your platform team's, or argocd-server)"
+  echo "        2. set ARGOCD_HOST to it, then: make show-dns-records   # it prints that name's A record"
+  echo "           (with an IP it prints 'NO A record applies' — the name has to come first)"
+  echo "        3. publish the record, set ARGOCD_SERVER to the same name in .env, and REMOVE"
+  echo "           ARGOCD_SERVER_SOURCE=discovered from .env.state — otherwise the next run of this"
+  echo "           script treats the name as ours to correct and overwrites it back to ${ip}"
+  echo "        4. make fetch-argocd-ca    # dials ARGOCD_SERVER, so it needs step 3 done first"
+fi
 echo
 # ⚠️ DO NOT tell the reader to override this with an env PREFIX. .env.example:345 records the
 # measured trap: once this value is in .env, `ARGOCD_SERVER=1.2.3.4 make <target>` is IGNORED,

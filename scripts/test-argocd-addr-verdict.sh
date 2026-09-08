@@ -215,5 +215,46 @@ else
   bad "the bare-IPv6 arm is GONE — 'fd00::1' parses to host=fd00:, port=1"
 fi
 
+# B552: the --insecure disclosure in 09-argocd-address.sh.
+# It prints WHY the login line above it says --insecure. Three things about it are load-bearing and
+# each was wrong in the first version, caught by an adversary round:
+#   1. it must classify $ip -- what was RESOLVED and WRITTEN -- not ${ARGOCD_SERVER:-$ip}.
+#      set_env_var writes the FILE and does not export, so ARGOCD_SERVER in-process is the
+#      PRE-EXISTING value. With .env.example's placeholder uncommented that value contains letters,
+#      so classifying it read "name" and stayed SILENT in exactly the state where an IP was written.
+#   2. it must use ca_addr_kind (lib/tls.sh), whose own header records that two hand-typed copies of
+#      this predicate once disagreed. A third copy here disagreed on host:port -- measured below.
+#   3. lib/tls.sh must actually be SOURCED, or the call is an unbound command at runtime.
+# STRUCTURAL + UNIT, NOT A RENDER: driving 09 far enough to emit the block needs a live Supervisor.
+# These pin the decision and its inputs, not the printed text.
+_body="$(sed '/^[[:space:]]*#/d' scripts/09-argocd-address.sh)"
+
+if grep -q 'ca_addr_kind "$ip"' <<< "$_body"; then
+  ok "the disclosure classifies \$ip (what was written), via the single-sourced ca_addr_kind"
+else
+  bad "the disclosure no longer keys on ca_addr_kind \$ip -- keying on ARGOCD_SERVER reads the
+      PRE-EXISTING value and goes SILENT in the one state where an IP was just written"
+fi
+
+if grep -q 'lib/tls.sh' <<< "$_body"; then
+  ok "...and lib/tls.sh is sourced, so that call is not an unbound command"
+else
+  bad "ca_addr_kind is called but lib/tls.sh is not sourced -- an unbound command at runtime, on a
+      path that only runs against a real cluster"
+fi
+
+. scripts/lib/tls.sh 2>/dev/null
+_bad=0
+for _c in '192.168.101.140|ip' 'argocd-server|name' '10.0.0.1:8443|name' 'fd00::1|name'; do
+  _want="${_c##*|}"; _addr="${_c%|*}"
+  [ "$(ca_addr_kind "$_addr")" = "$_want" ] || { _bad=1; printf '        %s -> %s, want %s\n' "$_addr" "$(ca_addr_kind "$_addr")" "$_want"; }
+done
+if [ "$_bad" -eq 0 ]; then
+  ok "ca_addr_kind agrees on ip / name / host:port / IPv6"
+else
+  bad "ca_addr_kind disagrees with the expectations above -- two consumers must agree, and its own
+      header records that the consequence of disagreement is a FALSE REFUSE"
+fi
+
 printf '\n%s: %s passed, %s failed\n' "${0##*/}" "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
