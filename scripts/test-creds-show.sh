@@ -1384,38 +1384,60 @@ else
 
 
 # ── THE SSO-COMMAND PROPERTY, MEASURED ON THE RENDERED REPORT ─────────────────────────────────
-# `make vks-login` performs a vSphere SSO BIND and vCenter locks out PERMANENTLY after THREE
-# failures, so it may be named ONLY where the cause is a FACT (the token's own `exp` says EXPIRED)
-# and NEVER on a state the report cannot decide.
-#
-# 🔴 THIS REPLACES A DERIVED ARM SCANNER (`lib/armscan.awk` + an `_sso_names` matcher + a
-# `_SSO_MIN_ARMS` ratchet), DELETED 2026-09-08 after ELEVEN adversary rounds, ten of which refuted
-# the PREVIOUS round's fix. The list it enumerated moved every round -- label character class,
-# whitespace test, `^[^(]*\)`, the `;;` terminator set, then COMMENT CONTENT (an apostrophe in a
-# trailing comment hid the terminator and merged the next arm). Each fix opened the complementary
-# hole. Do not rebuild it: `check-vks-login-requires.sh:14-15` already recorded the conclusion --
-# "arm-scoping a shell parser is exactly the tractability problem that got derivation refuted."
-#
-# What replaces it asks the question directly: RENDER each consumer against each verdict
-# `kube_token_expiry` can return, and COUNT mentions of the command in the output an operator sees.
-# No shell parsing, no arm list, no ratchet. An arm's TEXT is irrelevant; only what prints matters.
-_b64u() { printf '%s' "$1" | base64 -w0 2>/dev/null | tr -d '=' | tr '+/' '-_'; }
+
+# The grid covers exactly the verdicts kube_token_expiry can RETURN. If a fourth is ever added the
+# grid is silently short a cell, so pin the count -- three literal `printf '<VERDICT>` shapes.
+# ⚠️ STRIP COMMENTS FIRST. The function carries prose about its own verdicts, and a comment quoting
+# `printf 'REVOKED %s'` would report a fourth shape for a verdict that does not exist -- a false RED
+# whose only remedy is deleting a comment, which is the refuted-on-sight shape.
+_kte_shapes="$(sed -n '/^kube_token_expiry() {/,/^}/p' "${_CREDS_REPO}/scripts/lib/os.sh" \
+                 | sed 's/#.*//' | grep -oE "printf '[A-Z]+" | sort -u | wc -l)"
+if [ "${_kte_shapes:-0}" -ne 3 ]; then
+  bad "SSO gate: kube_token_expiry now returns ${_kte_shapes} verdict shapes, not 3. The grid below
+      covers EXPIRED/VALID/UNKNOWN only, so a new verdict is UNMEASURED -- add its cell."
+else
+  ok "SSO gate: kube_token_expiry returns exactly the 3 verdicts the grid covers"
+fi
+
+# ⚠️ THE CONSUMER SET IS DERIVED, and this assertion is why. Deleting the arm scanner deleted its
+# derivation with it, and the grid's row table is HAND-TYPED -- so a THIRD consumer would simply not
+# be rendered and the suite would stay green. MEASURED by the round that caught this: a consumer
+# added to 28-harbor-admin-password.sh naming the command on VALID *and* UNKNOWN left the suite at
+# rc=0, 0 FAIL. This asserts SET EQUALITY only; it parses no arms and reads no `case` structure.
+_sso_consumers="$(cd "${_CREDS_REPO}" && grep -rl 'kube_token_expiry' scripts/*.sh 2>/dev/null \
+                    | grep -v '/test-' | grep -v '/lib/' | sed 's|.*/||' | sort | tr '\n' ' ')"
+if [ "$_sso_consumers" != "argocd-password.sh creds.sh " ]; then
+  bad "SSO gate: the kube_token_expiry consumer set changed to [${_sso_consumers}]. The grid's rows
+      are hand-typed, so a consumer it does not render is UNMEASURED -- add a row for the new file
+      (or remove one), then update this expectation."
+else
+  ok "SSO gate: the consumer set is still exactly the two files the grid renders"
+fi
+
+# base64 fallback matches the repo's existing pattern (vcenter.sh:375, 60-configure-tekton.sh:92):
+# a toybox-like base64 without -w0 must not silently yield an empty token, which would collapse
+# every cell to UNKNOWN and report a VACUOUS failure naming the wrong suspect.
+_b64u() { printf '%s' "$1" | { base64 -w0 2>/dev/null || base64 | tr -d '\n'; } | tr -d '=' | tr '+/' '-_'; }
 _jwt()  { printf 'h.%s.s' "$(_b64u "{\"exp\":$1}")"; }
 
-# One rendering environment, two entry points. The Supervisor kubeconfig must be NON-EMPTY or
+# One rendering environment, three ROWS. The Supervisor kubeconfig must be NON-EMPTY or
 # `kube_token_expiry` short-circuits to UNKNOWN on `[ -s ]` and all three cells collapse into one
 # arm -- a grid that agrees with itself for the wrong reason.
-_sso_render() {  # _sso_render <creds|argocd-password> <token> -> the rendered report
-  local which="$1" tok="$2" t; t="$(mktemp -d)"; mkdir -p "$t/bin"
+#
+# ⚠️ THE SINK ROW IS NOT DECORATION. `creds.sh` has TWO kube_token_expiry dispatch sites -- `:1105`
+# (`_rejected_why`) and `:496` (the ArgoCD cell) -- and `:496` is gated on `_have_sink=1`. Without a
+# STAMPED sink it never renders, so the dangerous prescription could be placed there and the grid
+# would report rc=0. MEASURED. An EMPTY sink file is NOT enough: `VKS_STATE_KIND=1` is what reaches it.
+_sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-content-or-empty> -> the report
+  local which="$1" tok="$2" sink="$3" t; t="$(mktemp -d)"; mkdir -p "$t/bin"
   cp .env.example "$t/.env.example"
   printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME='robot\$probe'\nHARBOR_PASSWORD=x\n" > "$t/.env"
   : > "$t/kc"; printf 'apiVersion: v1\nkind: Config\n' > "$t/sup"
+  [ -n "$sink" ] && printf '%s\n' "$sink" > "$t/.env.state"
   { printf '#!/bin/sh\ncase "$*" in\n'
-    # ⚠️ MATCH THE TOKEN JSONPATH, NOT `config view`. FIVE other sites read `config view` for
+    # ⚠️ MATCH THE TOKEN JSONPATH, NOT `config view`. FIVE other sites read that subcommand for
     # `.clusters[0].cluster.server` (lib/argocd.sh:42, lib/state.sh:52, lib/os.sh:957) -- a bare
-    # `*"config view"*` arm hands every one of them a JWT where it expected a URL. Answering only
-    # the token read leaves those falling through to `exit 0` with empty output, which is exactly
-    # what they already get from `_h_render`'s stub today.
+    # `*"config view"*` arm hands every one of them a JWT where it expected a URL.
     printf '  *user.token*) printf %%s %s; exit 0 ;;\n' "'$tok'"
     printf '  *current-context*) echo stub-ctx; exit 0 ;;\n'
     printf '  *version*) exit 0 ;;\n'
@@ -1430,44 +1452,57 @@ _sso_render() {  # _sso_render <creds|argocd-password> <token> -> the rendered r
   rm -rf "$t"
 }
 
-# The grid covers exactly the verdicts kube_token_expiry can RETURN. If a fourth is ever added the
-# grid is silently short a cell, so pin the count -- three literal `printf '<VERDICT>` shapes.
-_kte_shapes="$(sed -n '/^kube_token_expiry() {/,/^}/p' "${_CREDS_REPO}/scripts/lib/os.sh" \
-                 | grep -oE "printf '[A-Z]+" | sort -u | wc -l)"
-if [ "${_kte_shapes:-0}" -ne 3 ]; then
-  bad "SSO gate: kube_token_expiry now returns ${_kte_shapes} verdict shapes, not 3. The grid below
-      covers EXPIRED/VALID/UNKNOWN only, so a new verdict is UNMEASURED -- add its cell."
-else
-  ok "SSO gate: kube_token_expiry returns exactly the 3 verdicts the grid covers"
-fi
+# label | binary | sink | EXPIRED marker | VALID marker | UNKNOWN marker
+# The markers are the POSITIVE CONTROL: two of every three cells expect a count of ZERO, which is the
+# shape that passes by NOT LOOKING, so a cell that never reached its arm must not read as a pass.
+_sso_rows='creds/site1|creds||EXPIRED at|has NOT expired|no readable expiry
+creds/site2-sink|creds|VKS_STATE_KIND=1|not read — Supervisor token EXPIRED|not read — the Supervisor token is still valid|run: make argocd-password
+argocd-password|argocd-password||EXPIRED at|has NOT expired|no readable expiry'
 
-# EXPIRED -> the command MUST be named (the fix must not be withheld from the reader who has it).
-# VALID / UNKNOWN -> it must NOT (a bind for a cause we cannot decide costs 1 of 3 attempts).
-for _sso_bin in creds argocd-password; do
-  for _sso_cell in "EXPIRED:$(_jwt 1000000000):1" "VALID:$(_jwt 9999999999):0" "UNKNOWN:notajwt:0"; do
-    _sso_v="${_sso_cell%%:*}"; _sso_rest="${_sso_cell#*:}"
-    _sso_tok="${_sso_rest%:*}"; _sso_want="${_sso_rest##*:}"
-    _sso_out="$(_sso_render "$_sso_bin" "$_sso_tok" || true)"
-    _sso_got="$(printf '%s' "$_sso_out" | grep -c 'make vks-login' || true)"
-    # A cell that never reached its arm would report 0 and read as a PASS on the two `0` rows, so
-    # assert the arm was ENTERED before trusting its count. This is the positive control.
-    case "$_sso_v:$_sso_out" in
-      EXPIRED:*"EXPIRED at"*|VALID:*"has NOT expired"*|UNKNOWN:*"no readable expiry"*) ;;
-      *) bad "SSO gate: ${_sso_bin}/${_sso_v} never reached its arm -- the cell is VACUOUS and its
-      count says nothing. Suspect the kubectl stub or the Supervisor kubeconfig, not the code." ;;
+# ⚠️ ASSERT THE PROPERTY, NOT AN EXACT COUNT. EXPIRED must name the command AT LEAST once (measured:
+# the EXPIRED report names it TWICE on ONE line, so `grep -c` reported "1 time(s)" and was simply
+# false); VALID and UNKNOWN must not name it AT ALL. An equality test also produced a THIRD, wrong
+# branch: any `got != want` fell into an `else` that said the remedy was "withheld" while the report
+# in fact named it MORE. `-ge 1` / `-eq 0` is the actual property and has no ambiguous case.
+while IFS='|' read -r _sso_lbl _sso_bin _sso_sink _sso_mE _sso_mV _sso_mU; do
+  [ -n "${_sso_lbl:-}" ] || continue
+  for _sso_v in EXPIRED VALID UNKNOWN; do
+    case "$_sso_v" in
+      EXPIRED) _sso_tok="$(_jwt 1000000000)"; _sso_mark="$_sso_mE" ;;
+      VALID)   _sso_tok="$(_jwt 9999999999)"; _sso_mark="$_sso_mV" ;;
+      *)       _sso_tok="notajwt";            _sso_mark="$_sso_mU" ;;
     esac
-    if [ "${_sso_got:-0}" -eq "$_sso_want" ]; then
-      ok "SSO gate: ${_sso_bin} / ${_sso_v} names the SSO command ${_sso_got} time(s)"
-    elif [ "$_sso_want" = 0 ]; then
-      bad "SSO gate: ${_sso_bin}'s ${_sso_v} report NAMES make vks-login. ${_sso_v} is not a cause
-      this report can decide, and a vCenter bind for it spends one of THREE attempts before a
-      PERMANENT lockout. Withhold the command on this arm."
-    else
-      bad "SSO gate: ${_sso_bin}'s EXPIRED report no longer names make vks-login -- the remedy is
+    _sso_out="$(_sso_render "$_sso_bin" "$_sso_tok" "$_sso_sink" || true)"
+    # THE CONTROL RUNS FIRST AND THE CELL STOPS ON IT. Running both in parallel let one cell emit a
+    # VACUOUS failure and an `ok … 0 time(s)` for the same render -- an `ok` that is false by the
+    # gate's own admission in the line above it.
+    case "$_sso_out" in
+      *"$_sso_mark"*) ;;
+      *) bad "SSO gate: ${_sso_lbl}/${_sso_v} never reached its arm (no '${_sso_mark}') -- the cell
+      is VACUOUS and its count says nothing. Suspect the kubectl stub, the Supervisor kubeconfig,
+      the sink stamp, or base64 -- not the code under test."
+         continue ;;
+    esac
+    _sso_got="$(printf '%s' "$_sso_out" | grep -o 'make vks-login' | wc -l | tr -d ' ')"
+    if [ "$_sso_v" = EXPIRED ]; then
+      if [ "${_sso_got:-0}" -ge 1 ]; then
+        ok "SSO gate: ${_sso_lbl} / EXPIRED names the SSO command (${_sso_got}x)"
+      else
+        bad "SSO gate: ${_sso_lbl}'s EXPIRED report no longer names make vks-login -- the remedy is
       withheld from the one reader whose cause IS a fact."
+      fi
+    elif [ "${_sso_got:-0}" -eq 0 ]; then
+      ok "SSO gate: ${_sso_lbl} / ${_sso_v} names no SSO command"
+    else
+      bad "SSO gate: ${_sso_lbl}'s ${_sso_v} report NAMES make vks-login (${_sso_got}x). ${_sso_v} is
+      not a cause this report can decide, and a vCenter bind for it spends one of THREE attempts
+      before a PERMANENT lockout. Withhold the command on this arm."
     fi
   done
-done
+done <<SSOROWS
+$_sso_rows
+SSOROWS
+
 
 fi
 
