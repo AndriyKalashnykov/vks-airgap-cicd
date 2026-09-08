@@ -301,7 +301,7 @@ at `98-verify-ingress.sh:180`.
    already reads. Needs its own idea round; `rc=2` (could-not-ask) must degrade to a warning, since
    preflight's verdict is currently a two-way boolean with no third state.
 
-## 🔴 B482 — RE-SCOPED: the gate is never INVOKED on the lab branch where it WOULD assert 🔴 open
+## ✅ B482 — DONE: the gate is now INVOKED on the lab branch where it asserts
 
 ⚠️ **The old title — "can never run on the lab path" — is FALSE, and its framing sends the next
 session to the wrong arm.** An idea round (2026-09-08) measured it.

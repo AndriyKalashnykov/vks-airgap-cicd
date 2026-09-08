@@ -169,6 +169,17 @@ mirror_prune_manifests() {
   return 0
 }
 
+# THE registry hosts we mirror and rewrite. ONE definition, because there were TWO and they had
+# already drifted apart: this list carried `quay.io` and 41-install-tekton.sh's did not, and NEITHER
+# carried `cgr.dev`.
+#
+# ⚠️ MEASURED 2026-09-08 on the live air-gapped lab: every TaskRun pod in `ci` ran a `place-scripts`
+# init container whose imageID was `cgr.dev/chainguard/busybox@sha256:19f02276…` -- i.e. PULLED FROM
+# THE PUBLIC INTERNET, in an air-gap demo, on every build. Tekton's controller injects it from a
+# hardcoded `-shell-image` FLAG STRING in the carried manifest, not from an `image:` field, which is
+# why an image-oriented eye never saw it and why `grep -c cgr.dev images/images.txt` was 0.
+MIRROR_REGISTRY_HOSTS='gcr\.io|ghcr\.io|registry\.k8s\.io|quay\.io|docker\.io|cgr\.dev'
+
 mirror_collect_images() {
   local list="${REPO_ROOT}/images/images.txt" mdir="${BUNDLE_DIR:?}/manifests"
   {
@@ -176,8 +187,17 @@ mirror_collect_images() {
     if [ -d "$mdir" ]; then
       # Any host/path[:tag][@digest] on a known registry. The char class excludes
       # quotes/commas/spaces so refs embedded in JSON arg arrays are captured cleanly.
-      grep -rhoE '(gcr\.io|ghcr\.io|registry\.k8s\.io|quay\.io|docker\.io)/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?(@sha256:[a-f0-9]+)?' "$mdir" 2>/dev/null \
-        | grep -vE 'catalog/upstream|/\*$'    # drop Tekton Hub catalog globs/bundles
+      grep -rhoE "(${MIRROR_REGISTRY_HOSTS})/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?(@sha256:[a-f0-9]+)?" "$mdir" 2>/dev/null \
+        | grep -vE 'catalog/upstream|/\*$' \
+        | grep -E ':[A-Za-z0-9._-]+$|@sha256:'
+        # ⚠️ A DISCOVERED REF MUST CARRY A TAG OR A DIGEST. This grep scans every byte of the
+        # manifests, COMMENTS INCLUDED -- and tekton-pipelines-v1.15.0.yaml:26838 is exactly that:
+        # `# cgr.dev/chainguard/busybox as of April 14 2022`, one line above the real digest-pinned
+        # flag. Without this filter the bare ref is collected and mirrored as `:latest`, which is
+        # the one thing an air-gapped mirror must never carry: unreproducible, and silently
+        # different from the digest the cluster actually asks for.
+        # MEASURED: 1 of 32 collected refs was bare, and it was that comment. Curated images.txt
+        # lines are emitted above and are deliberately NOT filtered -- this applies to DISCOVERY.
     fi
   } | sort -u
 }

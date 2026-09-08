@@ -11,6 +11,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# ⚠️ FOR MIRROR_REGISTRY_HOSTS, AND IT IS LOAD-BEARING. The rewrite below interpolates it into a
+# `sed -E` alternation; unbound, `(${...})` becomes `()`, which matches the EMPTY STRING, so every
+# `/` in the manifest gets the Harbor prefix -- measured: `gcr.io/x/y` -> `gcr.ioH/xH/y`. That is
+# far worse than the drift it replaces, so the source is not optional.
+# shellcheck source=scripts/lib/mirror.sh
+. "${SCRIPT_DIR}/lib/mirror.sh"
 load_env
 
 require_cmd kubectl
@@ -33,7 +39,11 @@ apply_manifest() {
   [ -f "$src" ] || die "expected manifest missing: $src"
   # Strip the upstream registry host and prepend Harbor/<infra project>, mirroring
   # lib/mirror.sh (which pulls gcr.io/foo -> $HARBOR/$PROJECT/foo).
-  sed -E "s#(gcr\.io|ghcr\.io|registry\.k8s\.io|docker\.io)/#${prefix}/#g" "$src" > "$out"
+  # ⚠️ THE HOST LIST IS lib/mirror.sh's MIRROR_REGISTRY_HOSTS, not a second copy. The copy that used
+  # to live here had already drifted: it lacked `quay.io`, which the mirror side had, and BOTH lacked
+  # `cgr.dev` -- so Tekton's `-shell-image` flag was neither mirrored nor rewritten, and every
+  # TaskRun pulled busybox from the public internet on an air-gapped lab. Measured.
+  sed -E "s#(${MIRROR_REGISTRY_HOSTS})/#${prefix}/#g" "$src" > "$out"
   log_info "applying $(basename "$src") (images -> $prefix)"
   run kubectl apply --server-side --force-conflicts -f "$out"
 }
