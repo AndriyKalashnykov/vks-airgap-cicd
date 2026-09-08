@@ -1331,71 +1331,6 @@ else
   ok "B548: ...and has not regressed to the no-op remedy"
 fi
 
-# ── _sso_names <arm-text> — TRUE if this text PRESCRIBES the SSO command ────────────────────────
-# A FUNCTION so the self-check below can exercise THIS code rather than a copy of its patterns.
-# The route was previously inline and UNPINNED: deleting it left the whole suite byte-identically
-# green, which is the same defect as `--ask-only` shipping with no coverage one commit earlier.
-#
-# ⚠️ PROXIMITY, NOT A PHRASE LIST. Matching a negation anywhere in the ARM made the undecidable
-# arm's own prose ("NOT necessarily expiry", "Do not re-authenticate blind") a BLANKET SUPPRESSOR,
-# so that arm could literally prescribe the command and the suite said SUCCESS. And the sibling
-# verb allowlist ("run: ", "then: ") missed "try:", "so:" and a bare "Run ". Both are enumerated
-# lists guarding a silent fall-through — the pattern that re-opened this property three rounds
-# running. ANY mention counts, unless a negation sits in the ~24 characters immediately before it.
-_sso_names() {
-  case "$1" in
-    *vks-login*) ;;
-    *) return 1 ;;
-  esac
-  # ⚠️ EVERY MENTION, NOT THE FIRST. `${1%%vks-login*}` takes the text before the FIRST occurrence,
-  # so "…do NOT run make vks-login blindly; if you own the lab, run: make vks-login …" was silent —
-  # the warn-then-prescribe shape this matcher exists to catch. Any UNNEGATED mention counts.
-  # ⚠️ CHARACTERS, NOT BYTES. `tail -c 24` shrinks the window by 2 chars per em-dash, and this
-  # corpus is full of them; it can also start mid-UTF-8-sequence.
-  local _rest="$1" _pre _near _post
-  while :; do
-    case "$_rest" in *vks-login*) ;; *) return 1 ;; esac
-    _pre="${_rest%%vks-login*}"; _near="${_pre: -24}"
-    # ⚠️ `${s: -24}` returns EMPTY when the string is SHORTER than 24 — measured, bash 5.2.21, and
-    # the threshold is exact (24 -> full, 23 -> empty). `tail -c 24` returned the whole string. So
-    # this "characters not bytes" fix introduced a false-RED generator: every mention in the first
-    # 24 chars got an empty negation window and was always FLAGGED, including
-    # "never run make vks-login on a state we cannot decide".
-    [ -n "$_near" ] || _near="$_pre"
-    # ⚠️ THE IMMEDIATE CLAUSE, not a raw window. "if the token is not fresh, run: make vks-login"
-    # has "not" 20 chars before the mention — but it negates "fresh", not the command, and the
-    # comma proves it. Trim to the last clause boundary so only a negation that governs the VERB
-    # counts. Measured: "so do NOT run make vks-login" stays silent; "...not fresh, run: make
-    # vks-login" and "...not sure, run: make vks-login" are now FLAGGED.
-    # `-` and `:` are clause boundaries too, and `:` matters because the house style is literally
-    # "run: make vks-login" — measured SILENT before this: "do not delay - run make vks-login" and
-    # "this is not optional: run make vks-login".
-    _near="${_near##*,}"; _near="${_near##*;}"; _near="${_near##*. }"
-    _near="${_near##* - }"; _near="${_near##*: }"
-    case "$_near" in
-      # `without ` is NOT here on purpose: "without running make vks-login you cannot proceed" is a
-      # PRESCRIPTION, not a warning, and treating it as negated would be a false GREEN. Dropping it
-      # also fails toward FLAG, which is the safe direction for this gate.
-      # `avoid ` joins the negations.
-      *[Nn][Oo][Tt]" "*|*[Nn][Ee][Vv][Ee][Rr]" "*|*[Aa][Vv][Oo][Ii][Dd]" "*) ;;   # negated BEFORE
-      *)
-        # ⚠️ A NEGATION CAN FOLLOW THE MENTION: "make vks-login is not safe here" reads as a
-        # warning, and the governing word is AFTER. Checking only the preceding window flagged
-        # three such warnings — false REDs whose only remedy is deleting a correct warning, which
-        # this file records as a refuted class. Scope it to the same clause on the other side.
-        _post="${_rest#*vks-login}"
-        _post="${_post%%,*}"; _post="${_post%%;*}"; _post="${_post%%. *}"
-        case "$_post" in
-          # `" cannot "` is NOT here: "without running make vks-login you cannot proceed" is a
-          # PRESCRIPTION, and treating it as negated was a false GREEN. Measured.
-          *" is not "*|*" must not "*|*" would be wrong"*|*" is unsafe"*) ;;      # negated AFTER
-          *) return 0 ;;
-        esac ;;
-    esac
-    _rest="${_rest#*vks-login}"
-  done
-}
-
 # ── 🔴 THE SSO-LOCKOUT SAFETY PROPERTY. It regressed TWICE and the suite did not notice. ─────────
 # `make vks-login` performs a vSphere SSO BIND, and vCenter locks out PERMANENTLY after THREE
 # failures. So it may be named ONLY where the cause is a FACT (the token's own `exp` says EXPIRED)
@@ -1447,160 +1382,89 @@ else
     *)                         bad "SSO gate: the undecidable remedy dropped 'locks out PERMANENTLY' — the clause that is the whole reason the command is withheld" ;;
   esac
 
-  # STRUCTURAL, because the behavioural pair above cannot see a CALL SITE that forgot the flag.
-  #
-  # ⚠️ THE CONSUMER SET IS DERIVED, NEVER HAND-TYPED. Two successive versions of this control used a
-  # hand-typed list, and BOTH missed a consumer — the second missed a THIRD block that had been in
-  # creds.sh all along, and reported ok while an arm there named the SSO command. This repo already
-  # states the rule: check-classifier-consumers.sh:14, "a second hand-typed list is the same rot one
-  # level up." lib/armscan.awk derives every `case` block whose arms include an EXPIRED label.
-  #
-  # ⚠️ IT ASSERTS THE PROPERTY, NOT THE MECHANISM. The previous version keyed on "does this arm call
-  # the helper with the flag", so an arm naming `make vks-login` LITERALLY was never examined —
-  # measured, the whole suite stayed byte-identical. The property is "no undecidable arm may name
-  # the SSO command", and it is checked BOTH ways: a literal, and an unflagged helper call.
-  # ⚠️ THE FILE LIST IS DERIVED TOO. Deriving the BLOCKS while hand-typing the FILES is the same
-  # rot one level up — measured: a third consumer added to another script, with TWO arms naming the
-  # SSO command, left the suite reporting `ok ... across 9 DERIVED arms`. A consumer is any
-  # non-test script that reads a token-expiry verdict.
-  # ...including scripts/lib/, which `scripts/*.sh` does not descend into. lib/os.sh DEFINES the
-  # function, so it is excluded explicitly rather than by a glob that would also hide a real
-  # consumer placed there.
-  _cfiles="$(grep -rl 'kube_token_expiry' "${_CREDS_REPO}"/scripts/*.sh "${_CREDS_REPO}"/scripts/lib/*.sh 2>/dev/null \
-             | grep -v '/test-' | grep -v '/lib/os\.sh$' || true)"
-  _nfiles="$(printf '%s\n' "$_cfiles" | grep -c . || true)"
-  # PIN THE MATCHER ITSELF. Deleting the literal route left the suite green, because the
-  # helper-call route alone satisfied every other assertion. These two fixtures fail if either
-  # direction breaks — and they run the SAME function the loop does.
-  if _sso_names "unknown state — if you own the lab, run: make vks-login VKS_AUTH_METHOD=vcf"; then
-    ok "SSO gate: the matcher flags a PRESCRIPTION"
-  else
-    bad "SSO gate: the matcher no longer flags a prescription — the literal route is dead"
-  fi
-  if _sso_names "this is undecidable, so do NOT run make vks-login here"; then
-    bad "SSO gate: the matcher flags a WARNING against the command — a false RED whose only remedy is deleting the warning"
-  else
-    ok "SSO gate: the matcher stays silent on a WARNING against the command"
-  fi
-  # shellcheck disable=SC2086  # deliberate word-splitting: one path per line, no spaces in them
-  _arms="$(awk -f "${_CREDS_REPO}/scripts/lib/armscan.awk" $_cfiles 2>/dev/null || true)"
-  _narms="$(printf '%s\n' "$_arms" | grep -c . || true)"
-  if [ "${_nfiles:-0}" -lt 2 ]; then
-    bad "SSO gate: derived ${_nfiles:-0} consumer file(s), expected >= 2 — the derivation is broken, not the code"
-    # ⚠️ AND STOP. `bad` does not exit, and awk/grep with ZERO file operands read STDIN — measured
-    # consuming /dev/zero until a 3s timeout. A derivation failure must go red, not hang.
-    _cfiles=/dev/null
-  fi
-  # VACUITY: a scanner that returns nothing, or too little, is measuring nothing. Three blocks x
-  # three arms is the floor; a PARTIAL extract (a comment truncating a block) is what an
-  # emptiness-only guard misses.
-  # The floor is DERIVED: at least 2 arms per consumer file. A hardcoded 9 went RED when a block
-  # was legitimately removed, accusing the scanner and inviting the maintainer to edit the number
-  # DOWN -- i.e. to weaken the gate as the cheapest way to go green.
-  # 🔴 A RATCHET, because NOTHING DERIVED FROM THE TREE SURVIVES THE ATTACK. Two attempts failed:
-  #   - derived from `$_arms`  : anything that hid a block ALSO lowered the floor and erased its own
-  #                              evidence (measured: 9 arms -> 6, floor 6 -> 4, green over a live
-  #                              `make vks-login` prescription).
-  #   - an "independent" grep  : keyed on the same LABEL SPELLING, so `'EXPIRED'*)` blinded BOTH the
-  #                              scanner and the floor in lockstep — measured, identical failure.
-  #   - `kube_token_expiry` call sites: 6 (comments included) against 9 arms -> false RED.
-  # A committed constant is the only signal a scanner bug cannot shrink. It is NOT the hardcoded
-  # floor that was removed earlier: that one accused the SCANNER when a consumer was legitimately
-  # removed. This one names both possibilities and says which edit is correct.
-  _SSO_MIN_ARMS=9   # 3 consumer blocks x 3 arms. Adding a consumer RAISES this; removing one lowers
-                    # it — and either edit must appear in the diff, which is the point.
-  _floor="$_SSO_MIN_ARMS"
-  if [ "${_narms:-0}" -lt "$_floor" ]; then
-    bad "SSO gate: ${_narms:-0} arms across ${_nfiles} consumer file(s), expected >= ${_floor}.
-      EITHER the scanner desynced (a label or terminator shape it cannot see — CHECK THAT FIRST,
-      it is how every previous defect here presented) OR a consumer was legitimately removed, in
-      which case lower _SSO_MIN_ARMS deliberately and say so in the commit."
-  else
-    _viol=0; _named=0
-    # ⚠️ SYNTHETIC RECORDS GO THROUGH THE SAME LOOP. The two fixtures above call `_sso_names`
-    # DIRECTLY, so they pin the FUNCTION and not the ROUTE: deleting the call inside this loop left
-    # the whole suite byte-identically green — the very defect they were added to close, moved one
-    # line down. These two must contribute exactly ONE violation between them.
-    # THREE synthetics, because there are TWO detection routes and each needs its own. The third
-    # pins the per-occurrence call check: deleting THAT loop left the suite byte-identically green
-    # while an arm called `$(_renew_how --typo)` — the guard reporting "the detection route is live"
-    # over precisely the state its own message describes as dead.
-    # shellcheck disable=SC2016  # the `$( )` in the synthetic record is DATA — the literal text an
-    # arm would contain — not a substitution to perform. Single quotes are the point.
-    _arms="$(printf '%s\nSELFTEST\tSELFTEST-BAD*)\tunknown state, run: make vks-login now\nSELFTEST\tSELFTEST-OK*)\tthis is undecidable, so do NOT run make vks-login here\nSELFTEST-CALL\tSELFTEST-CALL*)\tremedy is $(_renew_how --bogus)' "$_arms")"  # single-quoted: the $( ) is DATA, not a call
-    _synth=0; _synth_call=0
-    while IFS="$(printf '\t')" read -r _af _al _at; do
-      [ -n "${_al:-}" ] || continue
-      # does this arm name the SSO command, by EITHER route?
-      _names=0
-      _sso_names "$_at" && _names=1
-      case "$_at" in *"renew_how)"*|*'renew_how "'*) _names=1 ;; esac
-      # A FLAG THE HELPER DOES NOT KNOW is now refused (it returns 2 and prints nothing), so the
-      # arm renders an EMPTY remedy instead of prescribing a bind — safe, but still a defect, and
-      # the property check above cannot see it because nothing is named. Catch it here.
-      # ⚠️ FAIL CLOSED: sanction the KNOWN spellings, flag everything else. Flagging only
-      # `--`-prefixed modes missed `renew_how ` (one trailing space) and `renew_how $flag` with an
-      # empty flag — both expand to ZERO arguments, i.e. the DEFAULT mode, which NAMES the command.
-      # An allowlist of what is wrong is another enumerated list; an allowlist of what is RIGHT
-      # cannot be out-run by a new way of being wrong.
-      # ⚠️ PER OCCURRENCE, not per arm. A whole-arm `case` meant ONE sanctioned call exempted every
-      # other call in the same arm — and an arm that BRANCHES between two remedies (an `if` with a
-      # sanctioned call in one leg and `$(_renew_how $flag)` in the other) is exactly that shape.
-      # Measured: viol=0 while the other leg rendered the SSO command at runtime.
-      while IFS= read -r _call; do
-        [ -n "$_call" ] || continue
-        case "$_call" in
-          "renew_how --ask-only"|"renew_how --no-command"|"renew_how") ;;
-          *) if [ "$_af" = SELFTEST-CALL ]; then _synth_call=$((_synth_call + 1))
-             else _viol=$((_viol + 1))
-               printf '        ^ %s %s calls the remedy as [%s] — unrecognised mode\n' "$_af" "$_al" "$_call" >&2
-             fi ;;
-        esac
-      done <<CALLS
-$(printf '%s' "$_at" | grep -o 'renew_how[^)"]*' || true)
-CALLS
-      # EXPIRED is the ONLY label allowed to name it. Anything unrecognised counts as NOT-expired,
-      # so a new or oddly-spelled label fails SAFE instead of inheriting the exempting value --
-      # measured, the previous tracker never reset `_arm`, so 6 of 6 alternative label spellings
-      # inherited EXPIRED and went green.
-      # ⚠️ ANCHORED. `*EXPIRED*` matches `!(EXPIRED)*)` — the NEGATION of expired — and exempted
-      # it, which is the one label that must never be exempt. Strip a leading `(` and a leading
-      # quote, then require the label to BEGIN with EXPIRED.
-      _lb="${_al#UNPARSED }"; _lb="${_lb#(}"; _lb="${_lb#\"}"; _lb="${_lb#\'}"
-      case "$_lb" in
-        EXPIRED*) [ "$_names" -eq 1 ] && _named=$((_named + 1)) ;;
-        *)         if [ "$_names" -eq 1 ]; then
-                     if [ "$_af" = SELFTEST ]; then _synth=$((_synth + 1))
-                     else _viol=$((_viol + 1)); printf '        ^ %s %s names the SSO command\n' "$_af" "$_al" >&2
-                     fi
-                   fi ;;
-      esac
-    done <<INNER
-$_arms
-INNER
-    if [ "$_synth_call" -ne 1 ]; then
-      bad "SSO gate: the self-test call record produced $_synth_call violation(s), expected exactly 1 — the per-occurrence MODE check is dead, so an arm can call the remedy with any flag unexamined"
+
+# ── THE SSO-COMMAND PROPERTY, MEASURED ON THE RENDERED REPORT ─────────────────────────────────
+# `make vks-login` performs a vSphere SSO BIND and vCenter locks out PERMANENTLY after THREE
+# failures, so it may be named ONLY where the cause is a FACT (the token's own `exp` says EXPIRED)
+# and NEVER on a state the report cannot decide.
+#
+# 🔴 THIS REPLACES A DERIVED ARM SCANNER (`lib/armscan.awk` + an `_sso_names` matcher + a
+# `_SSO_MIN_ARMS` ratchet), DELETED 2026-09-08 after ELEVEN adversary rounds, ten of which refuted
+# the PREVIOUS round's fix. The list it enumerated moved every round -- label character class,
+# whitespace test, `^[^(]*\)`, the `;;` terminator set, then COMMENT CONTENT (an apostrophe in a
+# trailing comment hid the terminator and merged the next arm). Each fix opened the complementary
+# hole. Do not rebuild it: `check-vks-login-requires.sh:14-15` already recorded the conclusion --
+# "arm-scoping a shell parser is exactly the tractability problem that got derivation refuted."
+#
+# What replaces it asks the question directly: RENDER each consumer against each verdict
+# `kube_token_expiry` can return, and COUNT mentions of the command in the output an operator sees.
+# No shell parsing, no arm list, no ratchet. An arm's TEXT is irrelevant; only what prints matters.
+_b64u() { printf '%s' "$1" | base64 -w0 2>/dev/null | tr -d '=' | tr '+/' '-_'; }
+_jwt()  { printf 'h.%s.s' "$(_b64u "{\"exp\":$1}")"; }
+
+# One rendering environment, two entry points. The Supervisor kubeconfig must be NON-EMPTY or
+# `kube_token_expiry` short-circuits to UNKNOWN on `[ -s ]` and all three cells collapse into one
+# arm -- a grid that agrees with itself for the wrong reason.
+_sso_render() {  # _sso_render <creds|argocd-password> <token> -> the rendered report
+  local which="$1" tok="$2" t; t="$(mktemp -d)"; mkdir -p "$t/bin"
+  cp .env.example "$t/.env.example"
+  printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME='robot\$probe'\nHARBOR_PASSWORD=x\n" > "$t/.env"
+  : > "$t/kc"; printf 'apiVersion: v1\nkind: Config\n' > "$t/sup"
+  { printf '#!/bin/sh\ncase "$*" in\n'
+    # `config view` is how kube_token_expiry reads the token. It must precede nothing that could
+    # shadow it; `--raw --minify -o jsonpath=...` matches neither arm below.
+    printf '  *"config view"*) printf %%s %s; exit 0 ;;\n' "'$tok'"
+    printf '  *current-context*) echo stub-ctx; exit 0 ;;\n'
+    printf '  *version*) exit 0 ;;\n'
+    # Both consumers reach their token-expiry `case` only via an UNAUTHORIZED classification.
+    printf '  *"get ns"*|*"get secret"*) echo "error: You must be logged in to the server (Unauthorized)" >&2; exit 1 ;;\n'
+    printf 'esac\nexit 0\n'; } > "$t/bin/kubectl"
+  printf '#!/bin/sh\nexit 1\n' > "$t/bin/curl"; cp "$t/bin/curl" "$t/bin/getent"
+  chmod +x "$t/bin/kubectl" "$t/bin/curl" "$t/bin/getent"
+  ( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+      KUBECONFIG="$t/kc" VKS_SUPERVISOR_KUBECONFIG="$t/sup" CREDS_TOKEN=1 \
+      "${_CREDS_REPO}/scripts/${which}.sh" 2>&1 )
+  rm -rf "$t"
+}
+
+# The grid covers exactly the verdicts kube_token_expiry can RETURN. If a fourth is ever added the
+# grid is silently short a cell, so pin the count -- three literal `printf '<VERDICT>` shapes.
+_kte_shapes="$(sed -n '/^kube_token_expiry() {/,/^}/p' "${_CREDS_REPO}/scripts/lib/os.sh" \
+                 | grep -oE "printf '[A-Z]+" | sort -u | wc -l)"
+if [ "${_kte_shapes:-0}" -ne 3 ]; then
+  bad "SSO gate: kube_token_expiry now returns ${_kte_shapes} verdict shapes, not 3. The grid below
+      covers EXPIRED/VALID/UNKNOWN only, so a new verdict is UNMEASURED -- add its cell."
+else
+  ok "SSO gate: kube_token_expiry returns exactly the 3 verdicts the grid covers"
+fi
+
+# EXPIRED -> the command MUST be named (the fix must not be withheld from the reader who has it).
+# VALID / UNKNOWN -> it must NOT (a bind for a cause we cannot decide costs 1 of 3 attempts).
+for _sso_bin in creds argocd-password; do
+  for _sso_cell in "EXPIRED:$(_jwt 1000000000):1" "VALID:$(_jwt 9999999999):0" "UNKNOWN:notajwt:0"; do
+    _sso_v="${_sso_cell%%:*}"; _sso_rest="${_sso_cell#*:}"
+    _sso_tok="${_sso_rest%:*}"; _sso_want="${_sso_rest##*:}"
+    _sso_out="$(_sso_render "$_sso_bin" "$_sso_tok" || true)"
+    _sso_got="$(printf '%s' "$_sso_out" | grep -c 'make vks-login' || true)"
+    # A cell that never reached its arm would report 0 and read as a PASS on the two `0` rows, so
+    # assert the arm was ENTERED before trusting its count. This is the positive control.
+    case "$_sso_v:$_sso_out" in
+      EXPIRED:*"EXPIRED at"*|VALID:*"has NOT expired"*|UNKNOWN:*"no readable expiry"*) ;;
+      *) bad "SSO gate: ${_sso_bin}/${_sso_v} never reached its arm -- the cell is VACUOUS and its
+      count says nothing. Suspect the kubectl stub or the Supervisor kubeconfig, not the code." ;;
+    esac
+    if [ "${_sso_got:-0}" -eq "$_sso_want" ]; then
+      ok "SSO gate: ${_sso_bin} / ${_sso_v} names the SSO command ${_sso_got} time(s)"
+    elif [ "$_sso_want" = 0 ]; then
+      bad "SSO gate: ${_sso_bin}'s ${_sso_v} report NAMES make vks-login. ${_sso_v} is not a cause
+      this report can decide, and a vCenter bind for it spends one of THREE attempts before a
+      PERMANENT lockout. Withhold the command on this arm."
     else
-      ok "SSO gate: the call-mode route is live too (a bogus mode is caught through the loop)"
+      bad "SSO gate: ${_sso_bin}'s EXPIRED report no longer names make vks-login -- the remedy is
+      withheld from the one reader whose cause IS a fact."
     fi
-    if [ "$_synth" -ne 1 ]; then
-      bad "SSO gate: the self-test records produced $_synth violation(s), expected exactly 1 — the detection ROUTE through this loop is dead, so every real arm is passing unexamined"
-    else
-      ok "SSO gate: the detection route is live (self-test records classify correctly through it)"
-    fi
-    if [ "$_viol" -ne 0 ]; then
-      bad "SSO gate: $_viol non-EXPIRED arm(s) name the SSO command — that prescribes a vCenter bind for a cause the report cannot decide, and vCenter locks out PERMANENTLY after 3 failures"
-    else
-      ok "SSO gate: across $_narms DERIVED arms, only EXPIRED ones name the SSO command"
-    fi
-    # ...and the inverse, so the fix cannot be withheld everywhere. NOT every EXPIRED arm must name
-    # it: creds.sh's ArgoCD cell correctly prescribes `make argocd-password`, which performs no bind.
-    if [ "$_named" -eq 0 ]; then
-      bad "SSO gate: NO EXPIRED arm names the remedy — the fix is withheld from the reader who HAS it"
-    else
-      ok "SSO gate: $_named EXPIRED arm(s) do name it (the decidable case keeps its remedy)"
-    fi
-  fi
+  done
+done
 
 fi
 
