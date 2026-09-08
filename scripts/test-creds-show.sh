@@ -1411,9 +1411,12 @@ _sso_render() {  # _sso_render <creds|argocd-password> <token> -> the rendered r
   printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME='robot\$probe'\nHARBOR_PASSWORD=x\n" > "$t/.env"
   : > "$t/kc"; printf 'apiVersion: v1\nkind: Config\n' > "$t/sup"
   { printf '#!/bin/sh\ncase "$*" in\n'
-    # `config view` is how kube_token_expiry reads the token. It must precede nothing that could
-    # shadow it; `--raw --minify -o jsonpath=...` matches neither arm below.
-    printf '  *"config view"*) printf %%s %s; exit 0 ;;\n' "'$tok'"
+    # ⚠️ MATCH THE TOKEN JSONPATH, NOT `config view`. FIVE other sites read `config view` for
+    # `.clusters[0].cluster.server` (lib/argocd.sh:42, lib/state.sh:52, lib/os.sh:957) -- a bare
+    # `*"config view"*` arm hands every one of them a JWT where it expected a URL. Answering only
+    # the token read leaves those falling through to `exit 0` with empty output, which is exactly
+    # what they already get from `_h_render`'s stub today.
+    printf '  *user.token*) printf %%s %s; exit 0 ;;\n' "'$tok'"
     printf '  *current-context*) echo stub-ctx; exit 0 ;;\n'
     printf '  *version*) exit 0 ;;\n'
     # Both consumers reach their token-expiry `case` only via an UNAUTHORIZED classification.
