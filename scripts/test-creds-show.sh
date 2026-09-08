@@ -1544,6 +1544,44 @@ SSOROWS
 
 fi
 
+# THE LITERAL TWO SCENARIO DOCUMENTS GATE ON.
+# docs/scenario-1.md and docs/scenario-2.md each carry a walk block whose ONLY checkable Expect
+# literal is `add once to /etc/hosts`. walk-doc.sh drops literals shorter than 6 chars, ones carrying
+# angle brackets or an ellipsis, ones appearing in the block itself, and bare `make <cmd>` -- so that
+# one string is the whole gate, and a block whose literals ALL miss is EXPECT_MISS -> the walk exits 1.
+#
+# So a reword of creds.sh:778 turns a HEALTHY lab RED, hours later, with the failure pointing at a
+# document. This pin moves that failure into static-check, next to the edit. Measured before it
+# existed: grep for the string across scripts/test-*.sh returned ZERO.
+#
+# It needs render_with_env, NOT render: the hint requires an ingress LB IP AND a live probe
+# (creds.sh:188 is a 2s TCP connect). A fixture IP never answers, so under plain render() creds
+# correctly prints the liveness warning INSTEAD of the hint and a naive pin REDs against correct
+# code. render_with_env sets CREDS_NO_PROBE=1, which is what makes this assertable at all.
+_ing_out="$(render_with_env 'HARBOR_URL=h.example
+' 'INGRESS_LB_IP=10.0.0.9
+INGRESS_CONTROLLER=istio
+')"
+if printf '%s' "$_ing_out" | grep -qF 'add once to /etc/hosts'; then
+  ok "the /etc/hosts hint is verbatim -- the literal both scenario documents gate on"
+else
+  bad "creds no longer prints the exact string 'add once to /etc/hosts'. TWO walk blocks
+      (scenario-1 and scenario-2) have that as their ONLY checkable Expect literal, so this reword
+      turns every healthy matrix row RED with the failure pointing at a document."
+fi
+
+# THE CONTROL. Without it the pin passes on a string printed unconditionally -- which would gate
+# nothing in the documents either, since the claim is precisely that its PRESENCE distinguishes a
+# table of real URLs from a table of needs-ingress markers.
+_no_ing_out="$(render_with_env 'HARBOR_URL=h.example
+' '')"
+if printf '%s' "$_no_ing_out" | grep -qF 'add once to /etc/hosts'; then
+  bad "the /etc/hosts hint prints even with NO ingress LB IP. Then its presence distinguishes
+      nothing, and the two documents that gate on it are asserting a constant."
+else
+  ok "...and it is ABSENT with no ingress, so its presence is a real discriminator"
+fi
+
 if [ "$fail" != 0 ]; then
   printf '\n  %s assertion(s) ran. The fail-fast block stops later STATES once one fails, so cases\n' "$_ran" >&2
   printf '  after the first failure did NOT run -- fix the failure above and re-run for full coverage.\n' >&2

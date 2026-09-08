@@ -4546,7 +4546,51 @@ sentence the row is titled after — *"no ingress is installed, so nothing serve
 longer appears in the output at all. **And it cannot silently regress:** `test-creds-show.sh` carries
 a `_refused_sink` fixture and 16 assertions over this state.
 
-**WHAT IS ACTUALLY LEFT — Done-when (3), and it is the reason the defect survived 12 runs.** The
+**✅ (3) SHIPPED 2026-09-08 — and the round REFUTED this row's premise for it.**
+
+This row said *"a walk block is graded on its EXIT CODE, so `creds`' output is printed and never
+read"*. **Measured FALSE.** `walk-doc.sh:833-836` has an `**Expect:**` literal checker that gates,
+and `walk-matrix.sh` grades the row on that exit code. The output IS read.
+
+The real defect was one level down and far narrower: **a block passes if ANY literal matches**
+(`walk-doc.sh:761`), and scenario-1 §13 pooled the ingress claim with **17 siblings**, most of which
+always match — so it was demoted to `EXPECT_UNSEEN`, which is printed and deliberately NOT ratcheted
+(with a written refutation at `walk-doc.sh:768-775` that must not be overturned). Scenario-2's
+equivalent block carries ONE checkable literal and therefore gates. Measured with walk-doc's own
+extractor: scenario-1 §13 `tot=18 seen=14` -> no gate; scenario-2 `tot=1` -> gates. In the production
+walk logs that is **4 of 6 rows blind, 2 of 6 gating**.
+
+**The fix was ~6 lines of markdown**, not a control: scenario-1 now carries its own block after
+`make verify-ingress` (§12, NOT §13 — `creds`' hint depends on a 2s TCP probe of the LB, so the
+assertion is not K1.5-immune, and `verify-ingress` carries the readiness poll), mirroring the
+structure scenario-2 has proven. The duplicate literal was removed from §13's pooled line.
+
+**RED-proven both directions with walk-doc's OWN PYX filter**, offline:
+
+| state | tot | seen | verdict |
+|---|---|---|---|
+| ingress present | 1 | 1 | passes |
+| no ingress (the B517 state) | 1 | **0** | `EXPECT_MISS` -> walk exit 1 |
+
+**And the literal is now pinned offline** (`test-creds-show.sh`), because it lived in exactly three
+places — `creds.sh:778` and the two documents — with ZERO tests. Measured consequence of a one-word
+reword: a HEALTHY lab (ingress present) goes `seen=0` -> walk exit 1, hours later, with the failure
+pointing at a document. The pin moves that into `static-check`, next to the edit. It needs
+`render_with_env` (which sets `CREDS_NO_PROBE=1`), not `render`: the hint requires a LIVE probe, and
+a fixture IP never answers, so a naive pin REDs against correct code.
+
+**Explicitly refuted, do NOT build:** a new `check-*.sh` or `make creds-verify` (`verify-ingress`
+already gates the WORLD; the report needed its existing claim made checkable, not a second gate);
+making `EXPECT_UNSEEN` gate (refuted in walk-doc with a measured reason); un-backticking §13's
+siblings (degrading a correct document to satisfy a gate). Nothing was needed in `nested-vsphere-lab`
+— and `WALK_EXPECT_ADVISORY`, which would have made the whole mechanism inert, is set NOWHERE
+(measured: 0 hits in that repo).
+
+**Residual:** a refused overlay makes `creds` truthful and hintless, so the assertion would RED a
+correct report in that one state. Inside the matrix it should not arise (the walk installs into the
+cluster it points at); unreproduced.
+
+**ORIGINAL (3), kept for the reasoning:** The
 matrix has never measured this: `make creds-show` is in BOTH scenario documents and the walk DOES run
 it, but a block is graded on its EXIT CODE and `creds` is documented never-gating, so its output is
 printed and never read. Rows 5 and 6 printed `<needs ingress>` for eight serving hosts in **20 logs
