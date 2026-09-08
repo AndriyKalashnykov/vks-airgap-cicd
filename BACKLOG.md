@@ -466,7 +466,7 @@ whose skip is **least** dangerous (it is pinned), while five uninstrumented ones
 **Done when — NEEDS AN IDEA ROUND, and the FIRST question is which of those skips is REACHABLE and
 WRONG at its call site.** Instrumenting all of them is the enumerated-list reflex; the round's point
 is that the denominator, not the token, is the finding. Do NOT build a consumer for the existing
-token: measured, all three of its SKIP arms are unreachable at its only call site, so a
+token — measured, all three of its SKIP arms are unreachable at its only call site, so a
 `--require-asserted` flag could never fire — and once [[B569]] removed the goal-list pin it would
 hard-fail a *correct* `make e2e-kind INGRESS_CONTROLLER=traefik`.
 
