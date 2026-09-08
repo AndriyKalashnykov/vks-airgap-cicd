@@ -427,6 +427,36 @@ Both directions are therefore broken, and the workaround is undocumented: **`gh 
 never `--failed`**. Worth a line in the gate's header at minimum; a real fix needs the attempt's job
 list to be merged with the previous attempt's, which is a design question.
 
+### 🔴 CORRECTED 2026-09-08 by MEASUREMENT — the stated mechanism is FALSE, and there is only ONE bug
+
+The row above says a partial re-run's attempt "contains only the jobs that were re-run, so every job
+that passed the first time is ABSENT". **Measured against the very run that produced the report
+(34250847959, the PR #1167 run, three attempts) — that is not what GitHub does.**
+
+    /actions/runs/34250847959/attempts/2/jobs   <- the `rerun --failed` attempt
+      changes            success  started 2026-09-08T16:24:31Z   <- ATTEMPT 1's timestamp
+      secrets            success  started 2026-09-08T16:24:31Z   <- ATTEMPT 1's timestamp
+      static-check-fast  success  started 2026-09-08T16:24:30Z   <- ATTEMPT 1's timestamp
+      ci-pass            failure  started 2026-09-08T16:47:57Z   <- the only job re-EXECUTED
+      docs-lint/static-check/diagrams-check  skipped  16:47:56Z
+
+All **7** jobs are present. The untouched ones are **COPIED FORWARD** with their original
+timestamps; only the re-run job carries a fresh one. So the attempt's job list is not partial, and
+the row's proposed "real fix" — merging the attempt's job list with the previous attempt's — is
+solving a problem that does not exist.
+
+**What actually happened:** attempt 2 was created at 16:47:55 and `ci-pass` started at 16:47:57 —
+**two seconds later**. The copied-forward entries had not materialised in the API yet. That is the
+SAME jobs-API lag as the "second race" below, not a second mechanism.
+
+**This collapses the row: both halves are ONE bug — the jobs API lags the `needs` context.** A
+bounded poll addresses both. The `--failed` workaround stays practically correct (a full re-run
+takes minutes, so the API has settled by the time `ci-pass` runs) but the REASON given for it is
+wrong, and a wrong reason in a workaround is how the next person builds the wrong fix.
+
+⚠️ Attempt 3 was a FULL re-run for contrast: every job re-executed at 16:54:26+ (`static-check-fast`
+ran 2m3s), and it went green — consistent with lag, not with a partial list.
+
 ### 🔴 SHARPENED the same day — there is a SECOND race, on the HAPPY PATH, and it is the common one
 
 The `--failed` case above is self-inflicted. This one is not, and it hit **two consecutive PRs**
