@@ -964,14 +964,29 @@ e2e-kind: export INGRESS_CONTROLLER = $(if $(filter command line,$(origin INGRES
 e2e-kind: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admission check). .env IGNORED (fresh-box fidelity; E2E_SKIP_DOTENV=0 to use yours). E2E_FRESH=1 forces a COLD cluster (proves create-ordering)
 	@if [ "$(E2E_FRESH)" = "1" ]; then echo "==> E2E_FRESH=1: COLD run — tearing down first so namespace create-ordering is actually exercised"; $(MAKE) kind-down; fi
-# ⚠️ INGRESS_CONTROLLER=istio IS EXPLICIT, and it closes a measured hole. `E2E_FRESH ?= 0` is the
+# ⚠️ THE PIN IS THE `export` AT :963, NOT A GOAL-LIST OVERRIDE, and the difference is measurable.
+# It closes a measured hole. `E2E_FRESH ?= 0` is the
 # default, so this does NOT tear down and `.env.state` SURVIVES; `verify-ingress-both` ends by
 # installing traefik and publishing it; and 44-install-ingress.sh resolves
 # `${_override:-${INGRESS_CONTROLLER:-istio}}`, so with no override the STALE STATE wins. The whole
 # e2e then installed traefik, `verify-gateway-image` SKIPPED (its assertion is istio-only), and
 # `verify`/`verify-ingress` passed because traefik routes fine -- a green e2e that never asserted
-# image provenance. Naming the controller here makes the run mean what its name says.
-	@$(MAKE) kind-up install-harbor install-argocd install-all INGRESS_CONTROLLER=istio install-ingress verify-gateway-image verify verify-ingress
+# image provenance.
+#
+# ⚠️ IT USED TO BE PINNED TWICE, AND THE SECOND PIN DISCARDED THE OPERATOR'S CHOICE. A goal-list
+# `INGRESS_CONTROLLER=istio` is a sub-make COMMAND-LINE variable, which outranks the caller's own
+# command line -- so `make e2e-kind INGRESS_CONTROLLER=traefik` silently ran istio. MEASURED: the
+# two `make -n e2e-kind` recipes were BYTE-IDENTICAL with and without the operator's override. That
+# is verbatim the bug the comment at :954 says this target FIXED, and an inversion of the invariant
+# stated at :147 -- two comments 13 lines apart giving opposite verdicts, with the condemned form
+# live. Found by an adversary round on an unrelated design.
+#
+# The `export` at :963 is SUFFICIENT on its own, and I measured both halves rather than taking the
+# round's word: (1) INGRESS_CONTROLLER is in load_env's SELECTORS snapshot (lib/os.sh), so an
+# exported value BEATS a stale `.env.state` -- with state=traefik and env=istio the effective value
+# is istio; (2) `$(origin)` still defaults it to istio when the operator says nothing. So the hole
+# stays closed by two independent mechanisms while the command line is honoured again.
+	@$(MAKE) kind-up install-harbor install-argocd install-all install-ingress verify-gateway-image verify verify-ingress
 # psa-check in a SEPARATE make invocation, deliberately. It is also a prerequisite of `preflight`
 # (:301), which `install-all` (:459) needs — so in ONE invocation make runs it EARLY, against an
 # empty cluster, and then reports `Nothing to be done for 'psa-check'` at the end. Measured
