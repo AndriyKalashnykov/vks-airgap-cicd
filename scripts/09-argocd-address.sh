@@ -319,9 +319,16 @@ if [ "$(ca_addr_kind "$_eff")" = ip ]; then
   echo "      the login line above says --insecure. If your platform team issued a cert WITH an IP SAN,"
   echo "      this does not apply to you; 'make fetch-argocd-ca' will tell you either way."
   echo "      To verify instead of bypassing, in THIS order:"
-  echo "        1. choose the name the certificate carries (your platform team's, or argocd-server)"
-  echo "        2. set ARGOCD_HOST to it, then: make show-dns-records   # it prints that name's A record"
-  echo "           (with an IP it prints 'NO A record applies' — the name has to come first)"
+  # ⚠️ STEP 1 IS THE COMMAND, NOT A GUESS. The first version said "choose the name the certificate
+  # carries (your platform team's, or argocd-server)" -- at step 1, while naming the tool that
+  # PRINTS that list as step 4. So a reader following "in THIS order" guessed at exactly the moment
+  # the tool would have told them, and the guess is right only for the DEFAULT cert, which the
+  # paragraph above has just carved out. At an IP, fetch-ca.sh takes its rc=3 arm and emits the
+  # certificate's ACTUAL SANs plus "Point the address at one of those" -- and the names are
+  # namespace-dependent (argocd-server.<ns>), which .env.example warns about explicitly.
+  echo "        1. make fetch-argocd-ca    # at an IP it REFUSES and prints the cert's real SANs"
+  echo "        2. choose a name from that list, set ARGOCD_HOST to it, then: make show-dns-records"
+  echo "           (it prints that name's A record; with an IP it prints 'NO A record applies')"
   # ⚠️ STEP 3 HAS ITS OWN PREDICATE, AND IT IS NOT THIS ARM'S. The arm fires on IP-ness; the
   # "remove the marker" advice only applies when WE wrote the value. On a GRANTED IP -- routine for
   # a tenant handed `ARGOCD_SERVER=10.9.9.9` -- the guard takes the LEAVE branch, so there is no
@@ -344,7 +351,7 @@ if [ "$(ca_addr_kind "$_eff")" = ip ]; then
     echo "        3. publish the record and set ARGOCD_SERVER to the same name in .env"
     echo "           (nothing here wrote the current value, so no run of this script will change it)"
   fi
-  echo "        4. make fetch-argocd-ca    # dials ARGOCD_SERVER, so it needs step 3 done first"
+  echo "        4. make fetch-argocd-ca    # again, to VERIFY: it dials ARGOCD_SERVER, so it needs 3"
 else
   # ⚠️ DO NOT SHIP SILENCE AS "FIXED". Keying the block on IP-ness is right; leaving the NAME case
   # with NO explanation is not, because the login line above says --insecure UNCONDITIONALLY. An
