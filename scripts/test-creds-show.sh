@@ -1384,14 +1384,24 @@ else
 
 
 # ── THE SSO-COMMAND PROPERTY, MEASURED ON THE RENDERED REPORT ─────────────────────────────────
+# ⚠️ SCOPE, stated so this green is not over-read: it measures the TWO `kube_token_expiry`
+# consumers. Scripts that prescribe the bind from a bare `classify_kube_failure` verdict WITHOUT
+# reading an expiry are NOT covered — `26-vks-cluster-status.sh:129` and `lib/istio.sh:406`
+# both do, and both are pre-existing. Widening to them is a separate design, not a hole here.
 
 # The grid covers exactly the verdicts kube_token_expiry can RETURN. If a fourth is ever added the
 # grid is silently short a cell, so pin the count -- three literal `printf '<VERDICT>` shapes.
-# ⚠️ STRIP COMMENTS FIRST. The function carries prose about its own verdicts, and a comment quoting
-# `printf 'REVOKED %s'` would report a fourth shape for a verdict that does not exist -- a false RED
-# whose only remedy is deleting a comment, which is the refuted-on-sight shape.
+# ⚠️ DELETE COMMENT LINES; DO NOT TRUNCATE AT THE FIRST `#`. Both directions are MEASURED:
+#   no strip     -> a full-line comment quoting `printf 'REVOKED %s'` reports FOUR shapes: a false
+#                   RED whose only remedy is deleting a comment (the refuted-on-sight shape).
+#   `s/#.*//`    -> a `#` INSIDE A STRING LITERAL truncates a real verdict line, so a genuine 4th
+#                   verdict (`_m="#tag"; printf 'REVOKED %s' "$_m"`) reports THREE and the gate
+#                   positively asserts "exactly the 3 verdicts" -- a false GREEN in its own
+#                   headline. That is the complementary hole the first fix opened.
+#   `/^ *#/d`    -> correct on BOTH. Residual: a TRAILING comment quoting a printf still
+#                   false-REDs, and its remedy (move the comment to its own line) deletes nothing.
 _kte_shapes="$(sed -n '/^kube_token_expiry() {/,/^}/p' "${_CREDS_REPO}/scripts/lib/os.sh" \
-                 | sed 's/#.*//' | grep -oE "printf '[A-Z]+" | sort -u | wc -l)"
+                 | sed '/^[[:space:]]*#/d' | grep -oE "printf '[A-Z]+" | sort -u | wc -l)"
 if [ "${_kte_shapes:-0}" -ne 3 ]; then
   bad "SSO gate: kube_token_expiry now returns ${_kte_shapes} verdict shapes, not 3. The grid below
       covers EXPIRED/VALID/UNKNOWN only, so a new verdict is UNMEASURED -- add its cell."
@@ -1404,14 +1414,34 @@ fi
 # be rendered and the suite would stay green. MEASURED by the round that caught this: a consumer
 # added to 28-harbor-admin-password.sh naming the command on VALID *and* UNKNOWN left the suite at
 # rc=0, 0 FAIL. This asserts SET EQUALITY only; it parses no arms and reads no `case` structure.
-_sso_consumers="$(cd "${_CREDS_REPO}" && grep -rl 'kube_token_expiry' scripts/*.sh 2>/dev/null \
-                    | grep -v '/test-' | grep -v '/lib/' | sed 's|.*/||' | sort | tr '\n' ' ')"
-if [ "$_sso_consumers" != "argocd-password.sh creds.sh " ]; then
+# ⚠️ SCAN lib/ TOO, AND MATCH CODE NOT COMMENTS. Two measured defects in the first version:
+#   - it globbed `scripts/*.sh` only, so a third consumer reaching the verdict through a lib WRAPPER
+#     (`token_verdict() { kube_token_expiry "$@"; }`) contained no literal, the set was unchanged,
+#     and a dangerous prescription shipped at rc=0. Including lib/ does not catch that consumer
+#     directly -- it fails the moment the WRAPPER is introduced, which is when a human can act.
+#     (Its `-r` was also a no-op on a file glob, and `grep -v '/lib/'` matched nothing at all.)
+#   - it grepped raw text, so a COMMENT merely mentioning the function registered its file as a
+#     consumer -- measured: one added to 49-psa-check.sh turned this RED, prescribing a grid row for
+#     a file that renders nothing. In a repo this comment-dense, a live false RED.
+_sso_consumers=""
+for _f in "${_CREDS_REPO}"/scripts/*.sh "${_CREDS_REPO}"/scripts/lib/*.sh; do
+  case "$_f" in */test-*) continue ;; esac
+  # ⚠️ HERESTRING, NOT A PIPE. `sed … | grep -q` under pipefail reports a FOUND pattern as ABSENT
+  #    when grep exits early and sed takes SIGPIPE — and it is SIZE-DEPENDENT, so it bit exactly the
+  #    big files: creds.sh (157 KB) vanished from the set while argocd-password.sh survived. In a
+  #    derivation that direction is a false CLEAN: the consumer simply stops being counted.
+  if grep -q 'kube_token_expiry' <<< "$(sed '/^[[:space:]]*#/d' "$_f" 2>/dev/null)"; then
+    _sso_consumers="${_sso_consumers}$(basename "$_f") "
+  fi
+done
+# os.sh is the DEFINER and stays in the expectation deliberately: excluding it would need a third
+# filter, and this list just lost two for being silently dead.
+if [ "$_sso_consumers" != "argocd-password.sh creds.sh os.sh " ]; then
   bad "SSO gate: the kube_token_expiry consumer set changed to [${_sso_consumers}]. The grid's rows
       are hand-typed, so a consumer it does not render is UNMEASURED -- add a row for the new file
       (or remove one), then update this expectation."
 else
-  ok "SSO gate: the consumer set is still exactly the two files the grid renders"
+  ok "SSO gate: the kube_token_expiry consumer set is unchanged (${_sso_consumers}-- 2 rendered + the definer)"
 fi
 
 # base64 fallback matches the repo's existing pattern (vcenter.sh:375, 60-configure-tekton.sh:92):
@@ -1426,8 +1456,16 @@ _jwt()  { printf 'h.%s.s' "$(_b64u "{\"exp\":$1}")"; }
 #
 # ⚠️ THE SINK ROW IS NOT DECORATION. `creds.sh` has TWO kube_token_expiry dispatch sites -- `:1105`
 # (`_rejected_why`) and `:496` (the ArgoCD cell) -- and `:496` is gated on `_have_sink=1`. Without a
-# STAMPED sink it never renders, so the dangerous prescription could be placed there and the grid
-# would report rc=0. MEASURED. An EMPTY sink file is NOT enough: `VKS_STATE_KIND=1` is what reaches it.
+# sink it never renders, so the dangerous prescription could be placed there and the grid would
+# report rc=0. MEASURED.
+# ⚠️ CORRECTION 2026-09-08 — this comment used to say "an EMPTY sink file is NOT enough:
+# VKS_STATE_KIND=1 is what reaches it". That is FALSE. `creds.sh:322` is
+# `_have_sink=0; [ -f "$_sink" ] && _have_sink=1` — mere EXISTENCE. Measured: no file -> 0
+# site-2 arms; EMPTY file -> 1; stamped -> 1. The wrong claim came from a probe whose own guard
+# skipped CREATING the file when the content was empty, so its "empty sink" row was really "no
+# file" — my instrument, not the code. The stamp is kept because it also exercises the
+# DISCOVERED/KinD flow; the UNSTAMPED overlay reaches site 2 too and is not separately rendered
+# (measured equal today).
 _sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-content-or-empty> -> the report
   local which="$1" tok="$2" sink="$3" t; t="$(mktemp -d)"; mkdir -p "$t/bin"
   cp .env.example "$t/.env.example"
