@@ -788,7 +788,20 @@ lab-preflight: ## Read-only: three cluster preconditions that each kill the run 
 # see the note in 29-ca-status.sh); running `lab-preflight` on its own it is only a warning,
 # because scenario-1 §7 correctly runs before §8 saves the CA.
 preflight: export CA_STATUS_STRICT = 1
-preflight: check-tools engine-check env-check argocd-preflight lab-preflight psa-check ## Read-only: can this lab actually run the flow? Run it BEFORE the 20-minute mirror (first prereq of install-all)
+# ⚠️ ORDER IS LOAD-BEARING: argocd-preflight runs LAST because it is the ONLY prerequisite whose
+# FAULT path is expensive, and a failing prerequisite SUPPRESSES EVERY LATER ONE. Measured with a
+# minimal Makefile (a b c d, b exits 1): c and d never run and the verdict is never reached — make
+# aborts the target at the first failing prereq. It used to sit 4th of 6, so an operator with a wrong
+# ARGOCD_KUBECONFIG waited up to 466s (measured: 466.56s vs 5.36s healthy — the fault path is ~87x)
+# and then learned NOTHING about CRDs, storage class, load-balancer provisioning, Harbor reachability,
+# CA status or PSA, because lab-preflight and psa-check never ran.
+#
+# Safe to move: argocd-preflight publishes ZERO state (`state_set`/`set_env_var` count = 0), and
+# psa-check's only ARGOCD_* read (ARGOCD_NAMESPACE) comes from .env, not from it. No coupling.
+#
+# This does NOT touch 23-argocd-preflight.sh's deliberate accumulate design (its :316-318 explains
+# why `block()` sets a flag instead of exiting) — that is within one script; this is across the six.
+preflight: check-tools engine-check env-check lab-preflight psa-check argocd-preflight ## Read-only: can this lab actually run the flow? Run it BEFORE the 20-minute mirror (first prereq of install-all)
 
 .PHONY: vks-trust-probe
 vks-trust-probe: ## LIVE: does this guest cluster trust our Harbor, and by what mechanism? (read-only; throwaway ns, cleaned up)
