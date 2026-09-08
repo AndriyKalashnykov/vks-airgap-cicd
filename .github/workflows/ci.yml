@@ -535,11 +535,62 @@ jobs:
           # (.conclusion // "none"): a still-running job has conclusion null, and an EMPTY field
           # would be swallowed — TAB is IFS-whitespace, so `read` collapses a run of tabs and every
           # later field shifts left. The sentinel keeps every field non-empty.
-          gh api --paginate \
-            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
-            --jq '.jobs[] | [ .name, (.conclusion // "none"),
-                  ([ .steps[]? | select(.name != "Set up job" and .name != "Complete job") ] | length)
-                ] | @tsv' > /tmp/ci-jobs.tsv || rc=$?
+          # ⚠️ THE JOBS API LAGS THE `needs` CONTEXT, so ONE read can refuse a fully green run.
+          # `ci-pass` needs: exactly UNCONDITIONAL ∪ CONDITIONAL, so every declared job is TERMINAL
+          # before this job starts -- yet the API can still report `conclusion: null`, or omit a
+          # copied-forward row entirely, for a few seconds afterwards. MEASURED, 4 events (2026-09-08),
+          # and in every one the lagging job is the one that finished LAST, i.e. the job whose
+          # completion released this one:
+          #     att1 static-check-fast  completed 16:25:54  read 16:25:59.73  stale by 5.7s
+          #          static-check-fast  completed 16:10:26  read 16:10:31.21  stale by 5.2s
+          #          static-check-fast  completed 17:04:49  read 17:04:56.27  stale by 7.3s
+          #     att2 changes ABSENT     attempt   16:47:55  read 16:48:00.87  stale by 5.9s
+          # ⚠️ 4 events, one hour, one day: an OBSERVATION, not a bound. 15s is 2x headroom, not a
+          # measured ceiling; the ::notice:: below is how the next session gets a second data point.
+          #
+          # THE RETRY IS SAFE BECAUSE IT IS MONOTONE. If the first read would have passed, every
+          # declared job is present and non-`none`, so the second read is byte-identical and the
+          # verdict cannot change; conclusions never regress (success -> failure is impossible). So
+          # this can convert a REFUSE into a PASS and can NEVER convert a PASS into a REFUSE -- which
+          # is the only property that makes retrying a security gate defensible.
+          #
+          # ⛔ DO NOT "IMPROVE" THIS BY CROSS-CHECKING THE `needs` CONTEXT (accept `none` when needs
+          # says the job succeeded). An idea round graded that a CRITICAL FAIL-OPEN, and the replay
+          # is the founding incident itself: `secrets` dies in "Prepare all required actions"
+          # (429/503), the API reports `none` (the lag above), and the needs context renders
+          # `contains(needs.*.result,'failure')` as literally `if false` -- MEASURED, runs
+          # 32041902265 / 32043952216 / 32044803928. The rule would ACCEPT, and ci-pass would go
+          # green over a failed security scan. A "second opinion" does not save it: the second
+          # opinion is the one measured lying, and here it is the ONLY opinion because the
+          # trustworthy source is silent.
+          # ⛔ Also refuted: `gh run watch` (deadlocks -- it blocks until the RUN completes, and the
+          # run cannot complete while this job, its caller, is running); and accepting `none` when
+          # `status == completed` (that is GUESSING the conclusion, the founding incident's shape).
+          #
+          # ⚠️ NO `filter` PARAMETER. The API default is the LATEST attempt, which is what we must
+          # judge. MEASURED: with filter=all this sees every attempt, so runs 32044956290 and
+          # 32044785511 — genuinely green after a re-run — would be refused on attempt 1's failure,
+          # making a `rerun --failed` that FIXES ci permanently unmergeable.
+          #
+          # (.conclusion // "none"): a still-running job has conclusion null, and an EMPTY field
+          # would be swallowed — TAB is IFS-whitespace, so `read` collapses a run of tabs and every
+          # later field shifts left. The sentinel keeps every field non-empty.
+          fetch_jobs() {
+            gh api --paginate \
+              "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+              --jq '.jobs[] | [ .name, (.conclusion // "none"),
+                    ([ .steps[]? | select(.name != "Set up job" and .name != "Complete job") ] | length)
+                  ] | @tsv' > /tmp/ci-jobs.tsv
+          }
+          # FIRST READ. A refusal here is not final -- it may be the lag above.
+          rc=0; fetch_jobs || rc=$?
+          if [ "${rc:-0}" -eq 0 ] && [ -s /tmp/ci-jobs.tsv ]; then
+            echo "--- jobs as the API reports them (read 1) ---"; cat /tmp/ci-jobs.tsv; echo "---"
+            if ./scripts/ci-pass-verdict.sh < /tmp/ci-jobs.tsv; then exit 0; fi
+            echo "::notice::ci-pass refused on the first read; re-reading once in 15s in case the jobs API had not caught up (measured 5-7s lag, 2026-09-08). If this notice is frequent, see BACKLOG B564 Stage 2."
+          fi
+          sleep 15
+          rc=0; fetch_jobs || rc=$?
           # ⚠️ `|| rc=$?`, NOT a bare `rc=$?` on the next line. GitHub runs a `run:` block as
           # `/usr/bin/bash -e {0}`, and the `set -uo pipefail` above does NOT clear that `-e` — so a
           # failing `gh api` killed the step AT THE GH LINE and `rc=$?` never executed. The outcome
@@ -551,5 +602,5 @@ jobs:
             echo "the jobs API read produced nothing (rc=$rc) — refusing rather than assuming green"
             exit 1
           fi
-          echo "--- jobs as the API reports them ---"; cat /tmp/ci-jobs.tsv; echo "---"
+          echo "--- jobs as the API reports them (read 2, authoritative) ---"; cat /tmp/ci-jobs.tsv; echo "---"
           ./scripts/ci-pass-verdict.sh < /tmp/ci-jobs.tsv
