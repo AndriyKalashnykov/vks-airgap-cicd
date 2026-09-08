@@ -48,6 +48,19 @@ case_is() { # <label> <want-rc: 0|nonzero> <grep-ERE or ""> [ISTIO_INSTALL_METHO
   if [ "$okrc" -ne 0 ]; then
     printf 'FAIL  %s — rc=%s (wanted %s)\n' "$1" "$rc" "$2"; sed 's/^/        /' "$GATE_OUT"; fail=1; return
   fi
+  # ⚠️ EXACTLY ONE VERDICT TOKEN, ALWAYS. Every assertion in this file is a POSITIVE grep, so an
+  # extra token is invisible to all of them -- MEASURED: one spurious `_verdict ASSERTED` beside the
+  # definition made a traefik SKIP emit `ASSERTED` *and* `SKIPPED:traefik`, and this suite reported
+  # `OK — 15 cases`, rc 0. That is precisely the ambiguity the token was added to remove ("rc=0 alone
+  # cannot tell 'verified clean' from 'looked at nothing'"), re-created one layer up: a consumer
+  # grepping for ASSERTED would read all three skips as verified passes.
+  # Scoped to rc=0. A FAILING run needs no token -- rc!=0 is already unambiguous, and the gate
+  # deliberately emits none on its three `die`s. The ambiguity this guards is rc=0-only.
+  local _vn
+  _vn="$(grep -c 'gateway-image-verdict:' "$GATE_OUT" || true)"
+  if [ "$2" = 0 ] && [ "${_vn:-0}" -ne 1 ]; then
+    printf 'FAIL  %s — emitted %s verdict tokens, want exactly 1\n' "$1" "$_vn"; sed 's/^/        /' "$GATE_OUT"; fail=1; return
+  fi
   if [ -n "${3:-}" ] && ! grep -qE "$3" "$GATE_OUT"; then
     printf 'FAIL  %s — rc ok but the message did not match /%s/\n' "$1" "$3"; sed 's/^/        /' "$GATE_OUT"; fail=1; return
   fi
@@ -117,7 +130,16 @@ rm -f "${FIX}"/*.json
 harbor_pod istiod-1     pilot    > "${FIX}/istio-system.json"
 harbor_pod vks-uis-istio proxyv2 > "${FIX}/vks-ingress.json"
 case_is "a clean tree emits ASSERTED, not SKIPPED"                          0 'gateway-image-verdict: ASSERTED'
+# The label says "not SKIPPED" -- so assert it. The one-token check above already forbids a second
+# token, but this pins the DIRECTION too: a gate that emitted only `SKIPPED:istio` on the assert path
+# would satisfy the count and still be wrong.
+ran=$((ran + 1))
+if grep -q 'gateway-image-verdict: SKIPPED' "$GATE_OUT"; then
+  printf 'FAIL  the clean-tree run emitted a SKIPPED verdict\n'; fail=1
+else
+  printf 'ok    ...and emits no SKIPPED verdict (the label is asserted, not just claimed)\n'
+fi
 
-[ "$ran" -eq 15 ] || die "expected 15 cases, ran ${ran} — this harness lost track of itself"
+[ "$ran" -eq 16 ] || die "expected 16 cases, ran ${ran} — this harness lost track of itself"
 [ "$fail" -eq 0 ] || { log_error "gateway-image gate: FAILED"; exit 1; }
 log_info "gateway-image gate: OK — ${ran} cases (classifier only; the LIVE integration is proven by e2e-kind)"

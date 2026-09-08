@@ -950,6 +950,17 @@ kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-*
 # with SKIP_DOTENV in its environment, so `.env` is ignored end-to-end. Make also treats an
 # environment variable as a make variable, so the sub-make's `ifneq ($(SKIP_DOTENV),1)` sees it.
 .PHONY: e2e-kind
+# ⚠️ `$(origin)`, NOT `?=`, AND NOT A MID-CHAIN OVERRIDE. Both simpler forms are wrong, measured:
+#   - `INGRESS_CONTROLLER=istio` inside the `$(MAKE) …` goal list is a GLOBAL override that beats the
+#     operator's OWN command line, so `make e2e-kind INGRESS_CONTROLLER=traefik` silently ran istio --
+#     this PR's own bug class with the arrow reversed, and an inversion of Makefile:147's stated
+#     invariant ("`make <target> VAR=value` still wins over both, as it should").
+#   - `INGRESS_CONTROLLER ?= istio` does not close the hole at all: `-include .env.state` (:150) sets
+#     the key BEFORE the `?=`, so a stale overlay from `verify-ingress-both` still wins. That is the
+#     exact path this fix exists for.
+# `origin` asks WHERE the value came from, which is the actual question: honour a COMMAND-LINE choice,
+# and otherwise force istio regardless of what a previous run published.
+e2e-kind: export INGRESS_CONTROLLER = $(if $(filter command line,$(origin INGRESS_CONTROLLER)),$(INGRESS_CONTROLLER),istio)
 e2e-kind: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admission check). .env IGNORED (fresh-box fidelity; E2E_SKIP_DOTENV=0 to use yours). E2E_FRESH=1 forces a COLD cluster (proves create-ordering)
 	@if [ "$(E2E_FRESH)" = "1" ]; then echo "==> E2E_FRESH=1: COLD run — tearing down first so namespace create-ordering is actually exercised"; $(MAKE) kind-down; fi
