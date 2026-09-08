@@ -371,6 +371,47 @@ base produces a running app nothing asserts. **Needs an idea round**: the assert
 scope (which namespaces, which of the six apps, and what to do about images we deliberately do not
 own) is a design question.
 
+## 🔴 B565 — the fast set's runtime is NOT a stable quantity, so the narrow-PR-job costing is unsound 🔴 open
+
+An idea round (2026-09-08) refuted a `make static-check` receipt hook and prescribed, in its place:
+(1) re-tier wall-clock tests, then (2) a narrow PR job running `lint` + `test-scripts-fast`, costed
+at *"~2m10s–2m30s, at or below the 2m44s that was removed"*. **Step 2's costing does not survive
+measurement.** Step 1 stands and is done (#1174).
+
+**MEASURED, same box, same afternoon:**
+
+| | |
+|---|---|
+| fast set, 139 tests, WITH an 89s test | **220s** |
+| fast set, 138 tests, WITHOUT it | **240s** |
+
+Removing 89s made it *slower*. The remainder went 131s → 240s — an **83% swing that exceeds the
+thing removed**. Per-test is worse: `test-registry-fail-open` measured **32s inside the suite**, then
+**9s / 2s / 2s** standalone. A **16× spread**, minutes apart.
+
+**The cause is structural, not noise: 36 of the fast-set tests can block on a network timeout**
+(`curl`, `/dev/tcp`, `--max-time`, `timeout N`). Their cost is set by whether something answers, not
+by the work they do — which is exactly why `test-creds-ingress-liveness.sh` measured 5s for me, 89s
+on a re-run, and 26s for the round on a different box. Three operating points, one file.
+
+**Consequences:**
+
+1. **No single measurement can cost the narrow job.** Any figure quoted for it — including the
+   round's, and including mine — is one draw from a wide distribution.
+2. **The risk is LATENCY and FLAKE, not minutes.** 36 network-dependent tests on a CI runner means
+   unpredictable PR time and a flake surface that does not exist today, because none of them runs
+   per-PR. That is a stronger argument against the job than cost ever was.
+3. **The re-tier CRITERION may be wrong.** `# ci-tier: slow` is defined as *"asserts WALL-CLOCK by
+   design"*. The property that actually predicts cost here is *"blocks on a network timeout"* — 36
+   files, not the 6 a wall-clock grep finds. Those are different sets and the marker cannot express
+   the second.
+
+**Done when — NEEDS ITS OWN IDEA ROUND.** Either (a) the network-dependent tests are made
+deterministic (a local listener rather than a timeout, as `test-creds-ingress-liveness.sh` already
+does for four of its cases), and only then is a PR job costable; or (b) the job is scoped to `lint`
+alone, which has no network dependency and catches #1157 but not #1165; or (c) it is not built.
+⚠️ Do NOT quote a runtime for this job without stating how many draws it is averaged over.
+
 ## 🔴 B564 — `ci-pass` REFUSES after `gh run rerun --failed`, because a partial attempt has a partial job list 🔴 open
 
 MEASURED 2026-09-08 on PR #1167: a raced `ci-pass` (it read `static-check-fast conclusion=none` while
