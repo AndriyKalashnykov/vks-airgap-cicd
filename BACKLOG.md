@@ -371,6 +371,29 @@ base produces a running app nothing asserts. **Needs an idea round**: the assert
 scope (which namespaces, which of the six apps, and what to do about images we deliberately do not
 own) is a design question.
 
+### ✅ ITS IDEA ROUND RAN 2026-09-08 — recording the scoping, which was never written down
+
+The round answered the design question and the answer is NARROWER than the row implies:
+
+- **Scope it to `ci`, `tekton-pipelines` and `tekton-pipelines-resolvers`** — NOT the app namespaces.
+  An assertion over the app namespaces is **vacuous**: those pods run images built BY our pipeline
+  and pushed TO Harbor, so their refs are Harbor by construction. The pods that can silently carry a
+  public image are the BUILD-side ones.
+- **Reuse `96-verify-gateway-image.sh`'s TWO-TIER predicate, do not re-derive it.** Verified in code
+  (`:128`, `:155-159`): the CRI normalises `containerStatuses[].image` and reports a digest-resolved
+  image as a bare `sha256:`, so a `.image`-only prefix test false-REDs the great majority of
+  legitimately-Harbor containers. `.imageID` is the rescue arm, and its comment records exactly why.
+- **Reuse `49-psa-check.sh`'s `NS_SPEC` shape** (verified at `:57`, `:114`) — a table with an
+  explicit OWNERSHIP column and a `die` on an unrecognised value, so a namespace cannot be silently
+  un-gated by a typo. That is the pattern for "images we deliberately do not own".
+- **Wire it after `verify`, NOT after `install-all`.** After install-all the workload pods may not
+  have been created yet, so the assertion would measure an empty set and pass vacuously.
+
+⚠️ A caveat inherited from [[B482]]'s round and worth repeating here: kaniko's `.image` is the
+DESTINATION, not the base — so a run-time pod-image check is **structurally blind to a public
+`FROM`**. This row's assertion closes the run-time half; the build-time half is what `check-selfbuilt`
+and the new `hostscan` gate ([[B568]]) cover.
+
 ## 🔴 B565 — the fast set's runtime is NOT a stable quantity, so the narrow-PR-job costing is unsound 🔴 open
 
 An idea round (2026-09-08) refuted a `make static-check` receipt hook and prescribed, in its place:
