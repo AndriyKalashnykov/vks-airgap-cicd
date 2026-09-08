@@ -838,6 +838,60 @@ is stub-measured.
 
 ## 🔴 B486 — `ARGOCD_SERVER` is published as an **IP**, and `.env.example` says it must be a **NAME** 🔴 open
 
+⚠️ **An idea round (2026-09-08) says: do NOT close this, and do NOT implement its Done-when.**
+
+**The premise HOLDS after #1161.** `.env.example:495` still says
+`# ARGOCD_SERVER=<SET-a-name-the-cert-carries>` and `09-argocd-address.sh:278` still writes the IP.
+PR #1161 DISCLOSED the contradiction with a remedy; it did not fix it — and it is the **third**
+disclosure site, not the first (`.env.example:488-491`, `argocd-auth-check.sh:86` and
+`fetch-ca.sh:344` already prescribed the same remedy).
+
+**Clause 4 of this row is measurably WRONG and must be re-worded.** It says an A record for ArgoCD
+is REFUTED because *"zero of those SANs are externally routable, so there is no name to point an A
+record AT"* — which conflates *"not a routable FQDN of your choosing"* with *"no name at all"*.
+Four sites in this repo say the opposite, one of them a lab measurement — `.env.example:488-491`
+(LAB-VERIFIED 2026-08-17): the LB IP + the correct CA gives `curl (60) no alternative certificate
+subject name matches`, while **`argocd-server` + the same CA gives rc=0, HTTP 200 — "this is the
+working form"**. A "do not build" verdict in a row is read as settled; re-word it to the claim that
+is true (you cannot use an FQDN of your choosing without owning the cert; `argocd-server` IS
+pointable, at the cost of a single-label name most corporate DNS teams will refuse).
+
+**The Done-when — 09 publishes a NAME by default — is REFUTED on ordering and tenant grounds.** At
+scenario-1 Step 5, where `make argocd-address` runs, the operator has not yet created any record —
+that is steps 2-3 of 09's own remedy. Publishing a non-resolving name there makes `fetch-ca.sh:58`
+`die "could not connect"` where today it SUCCEEDS at the IP and is the only thing that prints the
+SAN list; `creds.sh` reads `unresolved`; `70-configure-argocd.sh:322` dies under `auto`. And
+RULE ZERO-B's default audience is a TENANT with no DNS control, for whom the IP is the only address
+that works.
+
+**What to land instead — two small, zero-risk changes:**
+
+1. **Publish `${ARGOCD_HOST}` when it is set**, the IP otherwise (~3 lines in 09's write branch).
+   `ARGOCD_HOST` is already OPTIONAL and already documented as the ArgoCD A-record FQDN, and has
+   exactly **two** consumers, NEITHER of which dials ArgoCD — so today it is documentation-only, and
+   #1161's remedy makes the operator type the same name TWICE (step 2 sets `ARGOCD_HOST`, step 3
+   sets `ARGOCD_SERVER` "to the same name"). That is this repo's own *"anything typed twice is a
+   missing target"* smell. When `ARGOCD_HOST` is unset — the tenant, KinD, and every path today —
+   behaviour is byte-identical, so the blast radius is zero. ⚠️ It does NOT make the name verify:
+   `.env.example`'s own example is `argocd.example.com`, which the default cert can never present,
+   so the NAME-arm disclosure stays.
+2. ~~Make step 1 of the remedy the command that prints the SAN list~~ — **DONE (#1167).**
+
+**Clause 2 (publish `ARGOCD_LB_IP` separately) expires earlier than the row says**: `Makefile:733`
+is `$(if $(ARGOCD_SERVER),$(ARGOCD_SERVER),$(ARGOCD_LB_IP))` — first-wins, so once `ARGOCD_SERVER`
+is a name there is NO IP fallback and no address to fetch the CA from if the name does not resolve.
+Its trigger is change 1 above, not clause 3. Land them together.
+
+⚠️ **Both of this row's code citations are stale**: `.env.example:439` is not the placeholder (it is
+`:495`); `show-dns-records.sh:74` is not the argocd row (it is `:82`).
+
+⚠️ **`make argocd-address` is invoked by NOTHING except its own target and scenario-1 Step 5** — not
+`install-all`, not the KinD e2e (09 is Supervisor-only). So **any change to 09 is structurally
+untestable by the KinD e2e** and needs the walkthrough matrix or a lab run. Budget for that before
+starting.
+
+### The original row follows
+
 **MEASURED on the live 3.7 lab, certification row 1, 2026-08-26.** `09-argocd-address.sh` publishes
 `ARGOCD_SERVER=<LB IP>`. `.env.example:439` says it should be `<SET-a-name-the-cert-carries>`, and the
 lab-verified SAN list beside it carries **no IP SAN** at all (`DNS:localhost, DNS:argocd-server,
@@ -1437,7 +1491,73 @@ verify it. `ca.key` (Jul 11) survived, so a CA regenerated from it with the leaf
 (`CN = vks-lab-harbor-ca`) was the exact repair. Proven by handshake, not file presence:
 `curl --cacert` → **200**; controls with the stale CA and with no CA → **rc=60**.
 
-## 🔴 B461 — a stale `.env.state` silently makes BOTH scenario-2 rows UNRUNNABLE (measured 2026-08-24)
+## ✅ B461 — CLOSED: fixed upstream in `nested-vsphere-lab#97`, the same day it was measured
+
+An idea round (2026-09-08) measured every claim. The **mechanism** holds and is now measured rather
+than source-read. Everything else has rotted:
+
+- **The prescribed fix is already in the tree.** `walk-matrix.sh:1251` reads
+  `HARBOR_CA_FILE="$hca" SKIP_DOTENV=1 \` — landed in **#97 `fix(walk-matrix): name
+  HARBOR_CA_FILE`, 2026-08-24**, the same day the row was written. Rows 5/6 have walked green
+  since: `run-20260826T110115Z` walked **6 of 6**.
+- **The row MISQUOTES its own evidence, in the direction that inflates the harm.** It says the
+  harness reported *"`walked 4 of 6` rather than FAILED — easy to read as fine"*. The actual
+  `VERDICT-20260824T040634Z-1480291.txt` reads: `MATRIX INCOMPLETE — walked 6 of 6 designed rows
+  (1 2 3 4 5 6); row(s) 5 6 were UNRUNNABLE and NEVER WALKED — this run says NOTHING about them`.
+  Not COMPLETE, not "4 of 6", and the loudest possible disclosure — plus
+  `[ -z "${UNRUNNABLE_ROWS}" ] || exit 1`, present since **#64, 2026-08-17**, seven days BEFORE
+  that run. The silent-skip half of this row never existed.
+- **Gating `.env.state` under `SKIP_DOTENV` is REFUTED — do not reach for that lever.** Measured:
+  the make-level `-include` of the overlay reaches **exactly two recipe lines** (`Makefile:712`,
+  `:720`) and **neither is in the KinD e2e chain**, so gating is safe — and worthless, because it
+  is keyed on a flag the one still-exposed actor never sets.
+- **The corrected mechanism is now MEASURED**, 5 cases on a throwaway `git archive` copy: clean →
+  `./secrets/harbor-ca.crt`; `.env.state` planted → the KinD path (**reproduces**); `+SKIP_DOTENV=1`
+  → **still** the KinD path (gated at NEITHER level, confirmed); `+HARBOR_CA_FILE=` prefix → the
+  wanted path (the applied fix works); `.env` vs `.env.state` → **`.env.state` wins** (FIRST-wins,
+  the inversion correction confirmed).
+- **Every line citation rotted** — `walk-matrix.sh:975/:981` are now `:1225`/`:1250-1252`;
+  `.env.example:137` is `:193`. Only the `Makefile:135/:150/:162/:178` citations survived.
+
+⚠️ **The successors are B462 and B464, and a NEW row below — the class is not closed.**
+
+## 🔴 B561 — a stale KinD `.env.state` hijacks BOTH arguments of `make fetch-harbor-ca`, on the OPERATOR path 🔴 open
+
+Found by B461's round, which scoped it out of B461 deliberately: **different actor, different repo,
+different trigger.** B461 was the HARNESS path and is fixed upstream. This is the operator's, in
+THIS repo, and it is live.
+
+`Makefile:712` passes **both** `$(HARBOR_URL)` and `$(HARBOR_CA_FILE)`, so a stale KinD overlay
+hijacks both. MEASURED with a 14-key KinD overlay planted in a `git archive` copy and **no**
+`SKIP_DOTENV` (the operator's real posture):
+
+    ./scripts/fetch-ca.sh "172.18.0.3" "/KIND/secrets/harbor-tls/ca.crt" harbor
+
+— it fetches from the **KinD Harbor** and writes over the **KinD trust anchor**. That is verbatim
+the B465 collateral damage, whose *mechanism* was never closed here; B465 repaired only the damaged
+file.
+
+**Neither script is rescued by the cluster stamp.** `fetch-ca.sh:172` says in its own header that it
+*"does NOT call load_env"*, so `state_check` never runs; `27-harbor-ca-from-cluster.sh:59` takes
+`OUT="$1"` from ARGV, already poisoned by make. The sole writer is `06-install-harbor.sh:311`
+(`state_set HARBOR_CA_FILE "${CERT_DIR}/ca.crt"`, KinD-only), so the exposure window is precisely
+*"a KinD run not torn down"*.
+
+⚠️ **NOT currently exposed on this box**: today's `.env.state` carries 6 keys, none of them
+`HARBOR_CA_FILE`. The row's "14 variables / 172.18.0.3" describes the 2026-08-24 file.
+
+**Done when — NEEDS AN IDEA ROUND FIRST (RULE ZERO-A).** The candidate is to resolve the path AFTER
+`load_env` so `state_check` governs a mismatched stamp — but that contradicts a documented ARGV
+rationale (`27-…:40-42`) and `fetch-ca.sh`'s deliberate no-`load_env`. Do not line-edit it.
+
+⚠️ Also inferred, not measured: that B553's SAN guard does NOT protect this case — the overlay
+hijacks `HARBOR_URL` and `HARBOR_CA_FILE` *consistently*, so the cert genuinely presents the address
+and the check passes, giving a silent wrong-artifact. Settle with a live KinD Harbor + a real-lab
+`.env`.
+
+### The original row follows
+
+## 🔴 B461 (original) — a stale `.env.state` silently makes BOTH scenario-2 rows UNRUNNABLE (measured 2026-08-24)
 
 **Symptom.** Matrix run `run-20260824T040634Z-1480291`: `ROW 5 UNRUNNABLE — could not supply
 scenario-2's credentials`, reason `cannot supply S2 contract: no Harbor CA minted`. Row 6 uses the
