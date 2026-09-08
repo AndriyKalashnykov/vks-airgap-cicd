@@ -188,6 +188,21 @@ if [ -n "$_ing" ]; then
     timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" bash -c "exec 3<>/dev/tcp/${_ing}/${INGRESS_PROBE_PORT:-80}" 2>/dev/null || _ing_live=0
   fi
 fi
+# _ing_authority [addr] -> `host[:port]` for a URL, IPv6-safe. ONE builder, because there were TWO
+# and they were about to drift: `_reach_ingress` grew a `*:*` arm (F2) that `_ing_live`'s probe never
+# had, and NEITHER brackets IPv6 -- a bare `fd00::1` takes the "already has a port" branch and yields
+# `http://fd00::1/`, which is not a URL. `/dev/tcp` is unaffected (it takes host and port as separate
+# path segments), so this only ever mattered to the curl callers, which is exactly why it survived.
+_ing_authority() {
+  local _a="${1:-$_ing}" _p="${INGRESS_PROBE_PORT:-80}"
+  case "$_a" in
+    \[*\]:*)  printf '%s' "$_a" ;;                 # [v6]:port -- complete
+    \[*\])    printf '%s:%s' "$_a" "$_p" ;;        # [v6]      -- bracketed, needs the port
+    *:*:*)     printf '[%s]:%s' "$_a" "$_p" ;;      # bare v6   -- bracket it, then the port
+    *:*)       printf '%s' "$_a" ;;                 # host:port -- complete
+    *)         printf '%s:%s' "$_a" "$_p" ;;
+  esac
+}
 ingress_url() {  # ingress_url <host> -> the URL, or an honest marker when no ingress exists
   # ⚠️ DO NOT WITHHOLD THE URL WHEN THE PROBE FAILS. A first version printed
   # "<ingress NOT ANSWERING>" in the URL column, and test-creds-show refused it with the argument
@@ -766,6 +781,31 @@ echo
 echo "Access the UIs:"
 
 # --- /etc/hosts helper (only when an ingress LB actually exists) -----------------------
+# ⚠️ THE THIRD STATE (B560). `_ing_live` is a bare TCP connect, and Envoy with no routes ACCEPTS the
+# connection and then RSTs -- measured against a listener with SO_LINGER 0, and on the lab
+# (192.168.101.134: tcp/80 OPEN, curl HTTP 000; .135: 200). So the NOT ANSWERING banner never fired
+# in the one case it exists for, and the elif below handed the operator an /etc/hosts line for an LB
+# that completes no request -- exactly what that block says it exists to prevent.
+#
+# ⚠️ THIS ADDS A WARNING; IT DOES NOT REPLACE THE SOCKET VERDICT, and that is the whole design.
+# Making `_ing_live` itself an HTTP verdict was REFUTED by an idea round with four MEASURED
+# false-dead vectors -- a slow/cold-start ingress (5 s responder: /dev/tcp alive in 0.00 s, curl 000
+# at the 2 s default), curl absent (bare Photon ships none; /dev/tcp is a bash builtin), unbracketed
+# IPv6, and TLS on the probe port. `_ing_live` is not banner-local: it short-circuits EVERY ingress
+# row to `silent` (:843), so a false dead blanks all nine Reachable cells AND suppresses
+# `add once to /etc/hosts`, which is the ONLY checkable Expect literal in docs/scenario-1.md:1099
+# and docs/scenario-2.md:929 -- i.e. it would redden the six-row walk matrix, hours later, pointing
+# at a document. Here every one of those vectors costs a warning you do not get, never a suppressed
+# hosts line.
+_ing_http_dead=0
+if [ -n "$_ing" ] && [ "$_ing_live" = 1 ] && [ "$_no_probe_snapshot" != "1" ] && have curl; then
+  _ing_code="$(curl -sS -o /dev/null -w '%{http_code}' \
+                 --max-time "${CREDS_ROUTE_TIMEOUT_SECONDS:-${CREDS_PROBE_TIMEOUT_SECONDS:-2}}" \
+                 "http://$(_ing_authority)/" 2>/dev/null || true)"
+  # No Host header ON PURPOSE: a healthy ingress answers 404 for an unnamed vhost, and 404 is ALIVE.
+  # Only "curl could not complete the request at all" counts, which is the RST signature.
+  case "$_ing_code" in ''|000|*[!0-9]*) _ing_http_dead=1 ;; esac
+fi
 if [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
   echo
   echo "  ⚠️  the recorded ingress ${INGRESS_LB_IP} is NOT ANSWERING on port ${INGRESS_PROBE_PORT:-80}."
@@ -775,6 +815,13 @@ if [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
   echo "      LoadBalancers (shown in the table)."
 elif [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
+  if [ "$_ing_http_dead" = 1 ]; then
+    echo "  ⚠️  ${INGRESS_LB_IP} accepts TCP connections but completes no HTTP request — the signature"
+    echo "      of a gateway with no routes attached. The line below is correct IF this is your"
+    echo "      current ingress; if the UIs still do not load after adding it, re-run the ingress"
+    echo "      install rather than debugging your browser."
+    echo
+  fi
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
   # The trailing space the per-app loop leaves is TRIMMED: this line is COPIED into /etc/hosts.
   _hosts_line="$(printf '%s' "$(ingress_infra_hosts)$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)" | sed 's/[[:space:]]*$//')"
@@ -922,8 +969,7 @@ _reach_ingress() {
   # actually listens on", so it exists for exactly this case.
   # The `*:*` arm keeps `test-creds-reach-ingress.sh` green: it sets `_ing=127.0.0.1:$PORT`, a shape
   # production never produces, which is why 14/14 passed over this defect for the arm's whole life.
-  local _u="$_ing"
-  case "$_ing" in *:*) : ;; *) _u="${_ing}:${INGRESS_PROBE_PORT:-80}" ;; esac
+  local _u; _u="$(_ing_authority)"
   local _code
   _code="$(curl -sS -o /dev/null -w '%{http_code}' \
              --max-time "${CREDS_ROUTE_TIMEOUT_SECONDS:-${CREDS_PROBE_TIMEOUT_SECONDS:-2}}" \
