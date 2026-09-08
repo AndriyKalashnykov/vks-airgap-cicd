@@ -6843,7 +6843,25 @@ the OLD dependency — the CVE stays live in the produced image while the source
 **Done when:** the manifests are bumped AND the two builders are rebuilt and pushed
 (`make builder-build` + `make builder-push`, or `make builder-image` dual-homed) AND
 `make builder-freshness` is clean AND the alerts close. Doing only the first step is the half-fix
-this note exists to prevent.
+this note exists to prevent — and it is worse than inert: Dependabot keys on the MANIFEST, so the
+alerts would CLOSE while the built image still ships the vulnerable dependency.
+
+**The bump itself is settled — MEASURED 2026-09-08, so do not re-derive it:**
+
+```sh
+# qs: transitive via express 5.2.0, which allows ^6.14.0 -- so 6.16.0 is IN RANGE and needs no
+# `overrides` entry. `npm view express@5.2.0 dependencies.qs` -> ^6.14.0
+cd apps/nodejs/nodejswebapp && npm update qs --package-lock-only     # 6.15.3 -> 6.16.0, rc=0
+sed -i 's/^Flask==3\.1\.2$/Flask==3.1.3/' apps/python/pythonwebapp/requirements.txt
+```
+
+Both were applied and reverted in a dry run. `make builder-freshness` then reported **exactly**
+`nodejswebapp` and `pythonwebapp` STALE and the other four fresh — the stamp discriminating
+correctly, which is the confirmation that the rebuild is genuinely required and not optional.
+
+⚠️ **`make builder-image` rebuilds ALL SIX builders and mutates Harbor**, so it is serial work: do
+not run it alongside anything else that touches the registry, and not while editing `scripts/`
+(it sources `lib/os.sh` mid-run — see the never-edit-a-script-mid-run rule).
 
 ## B555 — 🟡 three `fetch-ca.sh` refusal arms are reachable only via a MID-FETCH endpoint change, so nothing pins them
 
