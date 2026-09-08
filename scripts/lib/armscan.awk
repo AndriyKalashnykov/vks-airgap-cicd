@@ -21,7 +21,13 @@ FNR == 1 { depth = 0; n = 0; has = 0; lab = ""; buf = "" }   # per-FILE reset; w
   # ⚠️ OPEN AND CLOSE MUST MATCH THE SAME SET OF LINES. `depth++` once required a quoted `$VAR`
   # subject while `depth--` fired on ANY `esac`, so `case "${VAR}" in`, `case "$1" in` and
   # `case "$(f)" in` were closers with no opener — each one desyncs every later block in the file.
-  if (line ~ /^case[[:space:]]/ && line ~ /esac[[:space:]]*(;;)?[[:space:]]*(#.*)?$/) next
+  # A one-line `case ... in ... esac` opens and closes on the same line, so it must not touch
+  # depth — but it is still part of the enclosing arm's BODY and can carry the remedy. Skipping it
+  # outright emptied the arm, which is the same silence the fall-through above was removed for.
+  if (line ~ /^case[[:space:]]/ && line ~ /esac[[:space:]]*(;;)?[[:space:]]*(#.*)?$/) {
+    if (lab != "") buf = buf " " line
+    next
+  }
   if (line ~ /^case[[:space:]]/) {
     depth++; if (depth == 1) { n = 0; has = 0; lab = ""; buf = "" }
     next
@@ -33,27 +39,32 @@ FNR == 1 { depth = 0; n = 0; has = 0; lab = ""; buf = "" }   # per-FILE reset; w
     }
     depth--; next
   }
-  if (depth != 1) next
+  # ⚠️ ACCUMULATE AT ANY DEPTH. `if (depth != 1) next` dropped the body of a nested `case`, so an
+  # arm whose remedy lived inside one emitted EMPTY text and could prescribe the bind unseen
+  # (creds.sh:873 already uses the idiom). Only LABEL RECOGNITION is depth-1; TEXT is not.
+  if (depth != 1) { if (lab != "") buf = buf " " line; next }
   # ⚠️ A LABEL THE CLASS REJECTS IS EMITTED AS `UNPARSED`, NEVER MERGED. Merging it appended the
   # line to the PRECEDING arm's buffer — and EXPIRED is the first arm in every consumer, so a new
   # arm written after it inherited the one exempting label. MEASURED: 10 of 12 label spellings were
   # false GREEN, isolated to a single character (`REVOKEDSOON*)` caught, `REVOKED-SOON*)` not), and
   # the arm COUNT never moved, so the floor could not see it either. UNPARSED sorts as
   # not-EXPIRED downstream, so an unrecognised label now fails SAFE.
-  if (line ~ /\)/ && line !~ /^\$\(/ && line !~ /^\|\|/) {
+  # ⚠️ THERE IS NO FALL-THROUGH. Every label-shaped line becomes a RECORD — recognised, or
+  # `UNPARSED`. Three successive rounds each answered a refutation by adding ANOTHER FILTER in
+  # front of a silent merge (a character class, then a whitespace test), and each new filter
+  # re-opened the previous hole somewhere else: `"REVOKED"*)` and `REVOKED* )` still merged into
+  # the PRECEDING arm and inherited EXPIRED, the one exempting label. The disease was never the
+  # filter's contents — it was that rejecting a label meant SILENCE.
+  #
+  # The candidate test is `^[^(]*\)`: a label has no `(` before its `)`. PROSE does
+  # (`printf 'the token has NOT expired (valid until %s)`), which is what a weaker test misread as
+  # a label — so this one line replaces the whitespace filter it was patched with.
+  if (line ~ /^[^(]*\)/ && line !~ /^\$\(/ && line !~ /^\|\|/) {
     lbl = line; sub(/\).*$/, ")", lbl)
-    # A LABEL cannot contain these; a body line with parentheses can. Without this the scanner
-    # would call ordinary prose an arm and false-RED on correct code.
-    # A LABEL has NO WHITESPACE before its `)` (`EXPIRED*)`, `*)`, `''|'<not set>')`,
-    # `EXPIRED*|VALID*)`). PROSE does — `printf 'the token has NOT expired (valid until %s)` was
-    # read as a label without this, producing spurious UNPARSED entries on correct code. A label
-    # written `EXPIRED* )` is rejected too, and becomes UNPARSED: it fails SAFE, not silent.
-    if (lbl !~ /[$;=]/ && lbl !~ /[[:space:]]/ && lbl !~ /"[^"]*$/) {
-      if (lab != "") { labs[n] = lab; txts[n] = buf; n++ }
-      lab = (lbl ~ /^[A-Za-z_*|() \t]+\)$/) ? lbl : ("UNPARSED " lbl)
-      buf = line; has = has || (lbl ~ /EXPIRED/)
-      next
-    }
+    if (lab != "") { labs[n] = lab; txts[n] = buf; n++ }
+    lab = (lbl ~ /^[A-Za-z_*|()'"\t -]+\)$/) ? lbl : ("UNPARSED " lbl)
+    buf = line; has = has || (lbl ~ /EXPIRED/)
+    next
   }
   if (lab != "") buf = buf " " line
 }

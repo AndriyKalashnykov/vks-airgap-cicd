@@ -2173,9 +2173,14 @@ supervisor_renew_how() {
   # 🔴 REJECT AN UNKNOWN ARGUMENT, LOUDLY. Falling through to the command-naming branch made a
   # ONE-CHARACTER TYPO (`--nocommand`) silently prescribe a vCenter bind for an undecidable cause,
   # in BOTH consumers, with the whole suite BYTE-IDENTICAL to baseline. MEASURED. This is the
-  # highest-leverage guard in the file: it converts an entire silent class — every misspelling,
-  # every unset `$flag`, every `-n` — into a loud failure, and it does not depend on any caller-side
-  # detector enumerating call spellings correctly.
+  # highest-leverage guard in the file: it converts every MISSPELLED mode into a loud failure
+  # without depending on a caller-side detector enumerating call spellings correctly.
+  #
+  # ⚠️ IT DOES NOT CATCH AN EMPTY ARGUMENT, and an earlier version of this comment claimed it
+  # did. `supervisor_renew_how $flag` with an empty unquoted $flag expands to ZERO arguments —
+  # which IS the valid default mode, so it NAMES the command and this guard never fires.
+  # MEASURED. That shape is caught in test-creds-show.sh instead, by sanctioning the three known
+  # call spellings and flagging every other one.
   case "${1:-}" in
     ''|--ask-only|--no-command) ;;
     *) printf 'BUG: supervisor_renew_how got unknown mode %s — refusing to render a remedy\n' "$1" >&2

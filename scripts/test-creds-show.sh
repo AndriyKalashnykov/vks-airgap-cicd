@@ -1331,6 +1331,30 @@ else
   ok "B548: ...and has not regressed to the no-op remedy"
 fi
 
+# ── _sso_names <arm-text> — TRUE if this text PRESCRIBES the SSO command ────────────────────────
+# A FUNCTION so the self-check below can exercise THIS code rather than a copy of its patterns.
+# The route was previously inline and UNPINNED: deleting it left the whole suite byte-identically
+# green, which is the same defect as `--ask-only` shipping with no coverage one commit earlier.
+#
+# ⚠️ PROXIMITY, NOT A PHRASE LIST. Matching a negation anywhere in the ARM made the undecidable
+# arm's own prose ("NOT necessarily expiry", "Do not re-authenticate blind") a BLANKET SUPPRESSOR,
+# so that arm could literally prescribe the command and the suite said SUCCESS. And the sibling
+# verb allowlist ("run: ", "then: ") missed "try:", "so:" and a bare "Run ". Both are enumerated
+# lists guarding a silent fall-through — the pattern that re-opened this property three rounds
+# running. ANY mention counts, unless a negation sits in the ~24 characters immediately before it.
+_sso_names() {
+  case "$1" in
+    *vks-login*) ;;
+    *) return 1 ;;
+  esac
+  local _pre _near
+  _pre="${1%%vks-login*}"; _near="$(printf '%s' "$_pre" | tail -c 24)"
+  case "$_near" in
+    *[Nn][Oo][Tt]" "*|*[Nn][Ee][Vv][Ee][Rr]" "*|*"without "*) return 1 ;;
+  esac
+  return 0
+}
+
 # ── 🔴 THE SSO-LOCKOUT SAFETY PROPERTY. It regressed TWICE and the suite did not notice. ─────────
 # `make vks-login` performs a vSphere SSO BIND, and vCenter locks out PERMANENTLY after THREE
 # failures. So it may be named ONLY where the cause is a FACT (the token's own `exp` says EXPIRED)
@@ -1358,8 +1382,12 @@ else
     "")                 bad "SSO gate: the undecidable remedy rendered EMPTY — cannot tell 'no command' from 'no output'" ;;
     *)                  ok "SSO gate: the UNDECIDABLE remedy names NO SSO command" ;;
   esac
-  # --ask-only was introduced with no coverage at all. Deleting it from the helper's guard is a
-  # plausible edit and makes BOTH VALID arms name the command while contradicting themselves.
+  # --ask-only was introduced with no coverage at all. Two plausible edits break it differently:
+  # removing it from the helper's MODE GUARD makes it refused (rc=2), so both VALID arms render
+  # an EMPTY remedy; removing it from the RENDERING branch makes them name the command and
+  # contradict themselves. Both are asserted below. (An earlier version of this comment named
+  # only the second outcome — the mode guard added in the same arc changed it, and the comment
+  # did not.)
   _sso_ask="$(bash -c ". '${_CREDS_REPO}/scripts/lib/os.sh' 2>/dev/null; supervisor_renew_how --ask-only" 2>/dev/null || true)"
   case "$_sso_ask" in
     "")                 bad "SSO gate: --ask-only rendered EMPTY" ;;
@@ -1394,8 +1422,25 @@ else
   # rot one level up — measured: a third consumer added to another script, with TWO arms naming the
   # SSO command, left the suite reporting `ok ... across 9 DERIVED arms`. A consumer is any
   # non-test script that reads a token-expiry verdict.
-  _cfiles="$(grep -rl 'kube_token_expiry' "${_CREDS_REPO}"/scripts/*.sh 2>/dev/null | grep -v '/test-' || true)"
+  # ...including scripts/lib/, which `scripts/*.sh` does not descend into. lib/os.sh DEFINES the
+  # function, so it is excluded explicitly rather than by a glob that would also hide a real
+  # consumer placed there.
+  _cfiles="$(grep -rl 'kube_token_expiry' "${_CREDS_REPO}"/scripts/*.sh "${_CREDS_REPO}"/scripts/lib/*.sh 2>/dev/null \
+             | grep -v '/test-' | grep -v '/lib/os\.sh$' || true)"
   _nfiles="$(printf '%s\n' "$_cfiles" | grep -c . || true)"
+  # PIN THE MATCHER ITSELF. Deleting the literal route left the suite green, because the
+  # helper-call route alone satisfied every other assertion. These two fixtures fail if either
+  # direction breaks — and they run the SAME function the loop does.
+  if _sso_names "unknown state — if you own the lab, run: make vks-login VKS_AUTH_METHOD=vcf"; then
+    ok "SSO gate: the matcher flags a PRESCRIPTION"
+  else
+    bad "SSO gate: the matcher no longer flags a prescription — the literal route is dead"
+  fi
+  if _sso_names "this is undecidable, so do NOT run make vks-login here"; then
+    bad "SSO gate: the matcher flags a WARNING against the command — a false RED whose only remedy is deleting the warning"
+  else
+    ok "SSO gate: the matcher stays silent on a WARNING against the command"
+  fi
   # shellcheck disable=SC2086  # deliberate word-splitting: one path per line, no spaces in them
   _arms="$(awk -f "${_CREDS_REPO}/scripts/lib/armscan.awk" $_cfiles 2>/dev/null || true)"
   _narms="$(printf '%s\n' "$_arms" | grep -c . || true)"
@@ -1408,7 +1453,10 @@ else
   # The floor is DERIVED: at least 2 arms per consumer file. A hardcoded 9 went RED when a block
   # was legitimately removed, accusing the scanner and inviting the maintainer to edit the number
   # DOWN -- i.e. to weaken the gate as the cheapest way to go green.
-  _floor=$((_nfiles * 2))
+  # DERIVED FROM BLOCKS, not files: creds.sh holds TWO consumer blocks, so a per-file floor was
+  # 4 against a true 9 — 44% of truth, which is why every merged-arm defect slid under it.
+  _nblocks="$(printf '%s\n' "$_arms" | awk -F'\t' '$2 ~ /EXPIRED/ {n++} END{print n+0}')"
+  _floor=$(( (_nblocks > 0 ? _nblocks : _nfiles) * 2 ))
   if [ "${_narms:-0}" -lt "$_floor" ]; then
     bad "SSO gate: EITHER a consumer block was legitimately removed OR the scanner desynced — it returned ${_narms:-0} arms across ${_nfiles} consumer file(s), expected >= ${_floor}"
   else
@@ -1417,22 +1465,20 @@ else
       [ -n "${_al:-}" ] || continue
       # does this arm name the SSO command, by EITHER route?
       _names=0
-      # ⚠️ NOT a bare substring: prose that WARNS AGAINST the command ("do NOT run make vks-login")
-      # contains it too, and flagging that is the false-RED class this file records as refuted at
-      # :1321-1325 — whose only remedy is deleting the warning. Require the literal to be a
-      # PRESCRIPTION: preceded by `run`/`:`/`then` and not by a negation.
-      case "$_at" in
-        *[Nn][Oo][Tt]\ *vks-login*|*[Nn][Ee][Vv][Ee][Rr]\ *vks-login*|*"do not "*vks-login*) ;;
-        *"run: "*vks-login*|*"then: "*vks-login*|*"Run "*vks-login*|*"run "*vks-login*) _names=1 ;;
-      esac
+      _sso_names "$_at" && _names=1
       case "$_at" in *"renew_how)"*|*'renew_how "'*) _names=1 ;; esac
       # A FLAG THE HELPER DOES NOT KNOW is now refused (it returns 2 and prints nothing), so the
       # arm renders an EMPTY remedy instead of prescribing a bind — safe, but still a defect, and
       # the property check above cannot see it because nothing is named. Catch it here.
+      # ⚠️ FAIL CLOSED: sanction the KNOWN spellings, flag everything else. Flagging only
+      # `--`-prefixed modes missed `renew_how ` (one trailing space) and `renew_how $flag` with an
+      # empty flag — both expand to ZERO arguments, i.e. the DEFAULT mode, which NAMES the command.
+      # An allowlist of what is wrong is another enumerated list; an allowlist of what is RIGHT
+      # cannot be out-run by a new way of being wrong.
       case "$_at" in
-        *"renew_how --ask-only"*|*"renew_how --no-command"*) ;;
-        *"renew_how --"*) _viol=$((_viol + 1))
-          printf '        ^ %s %s calls the remedy with an UNKNOWN mode — it renders EMPTY\n' "$_af" "$_al" >&2 ;;
+        *"renew_how --ask-only"*|*"renew_how --no-command"*|*"renew_how)"*) ;;
+        *renew_how*) _viol=$((_viol + 1))
+          printf '        ^ %s %s calls the remedy with an unrecognised mode\n' "$_af" "$_al" >&2 ;;
       esac
       # EXPIRED is the ONLY label allowed to name it. Anything unrecognised counts as NOT-expired,
       # so a new or oddly-spelled label fails SAFE instead of inheriting the exempting value --
