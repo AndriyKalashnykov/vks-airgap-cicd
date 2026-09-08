@@ -155,110 +155,7 @@ else
   authority', pointing you at the wrong thing). Ask the platform team for ${LABEL}'s issuing CA."
 fi
 
-# ⚠️ THE ADDRESS CHECK RUNS BEFORE THE PIN GATE, DELIBERATELY. It used to sit after it, so on the
-# NON-TTY path (the walk, CI, any automated tenant caller) the run died at "no terminal to confirm it
-# on — pass the expected digest explicitly" and the operator went off to obtain a fingerprint from the
-# platform team for a problem that was not theirs; interactively they were made to perform an
-# out-of-band verification and answer `y` before being refused, which teaches that `y` is
-# inconsequential. Nothing in this block depends on the pin.
 UPPER="$(printf '%s' "$LABEL" | tr '[:lower:]' '[:upper:]')"
-
-# ---- DOES THIS ANCHOR ACTUALLY VERIFY THIS ADDRESS? Asked BEFORE anything is written. ----------------
-# ⚠️ THIS RUNS ON $CAND, NOT $OUT, AND THAT ORDERING IS THE WHOLE POINT. The first version of this
-# check ran AFTER `install`, so a refusal printed "do NOT set X_CA_FILE" about a file it had ALREADY
-# REPLACED — and *_CA_FILE defaults into ./secrets/, gitignored and untracked, so the operator's good
-# anchor was unrecoverable. That is exactly the class the comment at :125-131 records paying for on
-# 2026-08-05 and swore off: "a refusal must be a NO-OP on the operator's filesystem, not a rollback."
-# Of the four CA producers in this repo, the other three (27-harbor-ca-from-cluster, fetch-supervisor-ca,
-# fetch-vcenter-ca) all check before writing. This one now does too.
-#
-# WHY THE CHECK EXISTS AT ALL: everything above proves the CHAIN (`openssl verify -CAfile`), which for
-# a SELF-SIGNED leaf is `verify(X,X)` — true for ANY self-signed cert, as :141-143 concedes. Nothing
-# asked the only question a caller has: WILL THIS ANCHOR VERIFY THIS ENDPOINT? Measured on a live lab:
-# with ARGOCD_SERVER a bare IP and the cert carrying no IP SAN, this script "verified" vacuously and
-# told the operator to set it — flipping lib/argocd.sh:385 into a VERIFIED branch that cannot succeed,
-# taking `make argocd-auth-check` from `PASS (credential only)` to `NO token (curl rc=60)`.
-
-# SANs come from the LEAF, never from $CAND. On a chain $CAND is the ISSUER, a different certificate,
-# and a real CA carries no subjectAltName at all — so reading $CAND printed an EMPTY list under
-# "It presents:" and then said "point the address at a name above", pointing at nothing.
-# `tail -n +2` (not `sed -n 2p`) matches the sibling read at 70-configure-argocd.sh:474.
-_sans="$(openssl x509 -in "$leaf" -noout -ext subjectAltName 2>/dev/null \
-         | tail -n +2 | sed 's/^[[:space:]]*//' | tr -d '\n' || true)"
-
-_ep_rc=0
-ca_verifies_endpoint "$host" "$port" "$CAND" >/dev/null 2>&1 || _ep_rc=$?
-
-# ⚠️ rc=0 IS NOT SUFFICIENT. A certificate with NO subjectAltName passes openssl's -verify_hostname,
-# which falls back to the CN — but every Go client refuses it outright ("x509: certificate relies on
-# legacy Common Name field, use SANs instead"), and crane, Kaniko, podman, containerd and the argocd
-# CLI are ALL Go. So a bare rc=0 would prescribe an anchor that fails closed in the same shape as the
-# incident this check exists to prevent. rc=6 is ours, not the primitive's.
-# ⚠️ AND IT MUST BE A SAN OF THE RIGHT TYPE. Requiring merely that SOME SAN exists is not enough:
-# openssl's -verify_hostname falls back to the CN whenever the SAN carries no dNSName, so a cert with
-# `CN=localhost` and only `IP:10.9.9.9` PASSED and was prescribed — while Go says "certificate is not
-# valid for any names". That is verbatim the incident this check exists to prevent, surviving inside
-# the fix for it. (-verify_ip does NOT fall back, so the hole was confined to the NAME branch — which
-# is precisely the branch every remedy here pushes the operator toward.)
-case "$host" in
-  *[!0-9.]*) _need='DNS:' ;;
-  *)         _need='IP Address:' ;;
-esac
-if [ "$_ep_rc" -eq 0 ]; then
-  case "$_sans" in
-    *"$_need"*) : ;;
-    *) _ep_rc=6 ;;
-  esac
-fi
-
-# rc=2 is "unreachable/timed out": it proves nothing either way, and the anchor IS authentic, so it is
-# written with a warning rather than refused. Everything else refuses.
-if [ "$_ep_rc" -ne 0 ] && [ "$_ep_rc" -ne 2 ]; then
-  # ⚠️ STDERR, not stdout. Same lesson as the consent block at :229: with the warning on stdout,
-  # `make fetch-argocd-ca > log` swallowed it entirely and left rc the only signal.
-  {
-    printf '\n  🔴 REFUSING TO WRITE %s — this anchor cannot verify %s.\n' "$OUT" "$hostport"
-    case "$_ep_rc" in
-      3) printf '     The chain is fine; the ADDRESS is wrong. The certificate does not present\n'
-         printf '     %s (an IP needs an IP SAN, and most self-signed server certs carry none).\n' "$host" ;;
-      6) if [ -z "$_sans" ]; then
-           printf '     The certificate presents NO subjectAltName. openssl accepted it by falling back\n'
-           printf '     to the CN, but every Go client refuses it outright:\n'
-           printf '       x509: certificate relies on legacy Common Name field, use SANs instead\n'
-         else
-           printf '     The certificate has SANs but none of the type this address needs (%s).\n' "$_need"
-           printf '     openssl accepted it by falling back to the CN; Go refuses it outright:\n'
-           printf '       x509: certificate is not valid for any names, but wanted to match %s\n' "$host"
-           printf '     It presents: %s\n' "$_sans"
-         fi
-         printf '     crane, Kaniko, podman, containerd and the argocd CLI are all Go.\n' ;;
-      5) printf '     The file fetched is not usable as a trust anchor at all.\n' ;;
-      *) printf '     The chain we fetched verified, but the endpoint did not on a second dial —\n'
-         printf '     usually a certificate that ROTATED between the two probes (02-env.sh:570-575\n'
-         printf '     documents that case). Retry; if it repeats, the anchor is genuinely wrong.\n' ;;
-    esac
-    if [ -n "$_sans" ]; then
-      printf '     The certificate presents: %s\n' "$_sans"
-      printf '     Point the address at one of those (add it to /etc/hosts if it does not resolve),\n'
-      printf '     re-run this, and THEN set %s_CA_FILE.\n' "$UPPER"
-    else
-      printf '     Ask whoever issued it for a certificate carrying a SAN for the address you use.\n'
-    fi
-    printf '\n     %s is UNCHANGED — nothing was written.\n' "$OUT"
-    # ⚠️ NO MECHANISM CLAIM HERE. This script is SHARED by fetch-harbor-ca and fetch-argocd-ca, and
-    # the two behave OPPOSITELY when the CA is unset: lib/argocd.sh:388 falls back to `-k` (unverified
-    # but working), while lib/harbor.sh:39 sets CURL_CACERT=() — the SYSTEM trust store — so against a
-    # self-signed Harbor it fails `x509: signed by unknown authority` and :386 skips the auth probe
-    # entirely. Asserting the argocd behaviour for both is a false sentence for half the callers; the
-    # generic-die rule at :94-97 exists for exactly this. State only the half that is true of both.
-    printf '     Leave %s_CA_FILE UNSET meanwhile — a non-verifying CA fails CLOSED, which is strictly\n' "$UPPER"
-    printf '     worse than not setting one. What that costs you differs per service; see docs/.\n'
-  } >&2
-  # Distinguishable per cause: 3 = wrong address, 6 = no usable SAN, 5 = unusable anchor, 1 = chain.
-  # Collapsing them all to 3 left a caller unable to tell "wrong address" from "cert rotated".
-  exit "$_ep_rc"
-fi
-
 
 # ---- AUTHENTICITY: an out-of-band fingerprint is the ONLY thing that provides it. -----------------------
 # ⚠️ PIN THE CA, NOT THE LEAF. lib/tls.sh keeps the CA stable across runs (3650d) and REGENERATES the leaf
@@ -319,7 +216,141 @@ if [ "$verdict" -ne 3 ]; then
   Do NOT proceed by clearing ${pin_var}. Confirm the correct fingerprint with whoever operates
   ${LABEL} — by a channel that is not this connection — and re-run."
   fi
-else
+fi
+
+# ⚠️ THE ADDRESS CHECK SITS BETWEEN THE PIN COMPARISON AND THE NO-PIN CONSENT, AND BOTH HALVES OF THAT
+# ARE LOAD-BEARING. It must come AFTER the pin: when the digest MISMATCHES — an active-interception
+# signal the script already holds — running this first replaced "CA FINGERPRINT MISMATCH ... something
+# is intercepting this connection" with "the chain is fine; the ADDRESS is wrong", and then told the
+# operator to put the ATTACKER'S CHOSEN NAME in /etc/hosts. MEASURED on both trees. "The chain is
+# fine" is also simply false there — the pin proves it is not. It must come BEFORE the no-pin consent
+# because that branch dies on a non-TTY ("no terminal to confirm it on"), which sent an automated
+# caller off to obtain a fingerprint for a problem that was not theirs, and made an interactive
+# operator perform an out-of-band verification and answer `y` only to be refused afterwards.
+# ---- DOES THIS ANCHOR ACTUALLY VERIFY THIS ADDRESS? Asked BEFORE anything is written. ----------------
+# ⚠️ THIS RUNS ON $CAND, NOT $OUT, AND THAT ORDERING IS THE WHOLE POINT. The first version of this
+# check ran AFTER `install`, so a refusal printed "do NOT set X_CA_FILE" about a file it had ALREADY
+# REPLACED — and *_CA_FILE defaults into ./secrets/, gitignored and untracked, so the operator's good
+# anchor was unrecoverable. That is exactly the class the comment at :125-131 records paying for on
+# 2026-08-05 and swore off: "a refusal must be a NO-OP on the operator's filesystem, not a rollback."
+# Of the four CA producers in this repo, the other three (27-harbor-ca-from-cluster, fetch-supervisor-ca,
+# fetch-vcenter-ca) all check before writing. This one now does too.
+#
+# WHY THE CHECK EXISTS AT ALL: everything above proves the CHAIN (`openssl verify -CAfile`), which for
+# a SELF-SIGNED leaf is `verify(X,X)` — true for ANY self-signed cert, as :141-143 concedes. Nothing
+# asked the only question a caller has: WILL THIS ANCHOR VERIFY THIS ENDPOINT? Measured on a live lab:
+# with ARGOCD_SERVER a bare IP and the cert carrying no IP SAN, this script "verified" vacuously and
+# told the operator to set it — flipping lib/argocd.sh:385 into a VERIFIED branch that cannot succeed,
+# taking `make argocd-auth-check` from `PASS (credential only)` to `NO token (curl rc=60)`.
+
+# SANs come from the LEAF, never from $CAND. On a chain $CAND is the ISSUER, a different certificate,
+# and a real CA carries no subjectAltName at all — so reading $CAND printed an EMPTY list under
+# "It presents:" and then said "point the address at a name above", pointing at nothing.
+# `tail -n +2` (not `sed -n 2p`) matches the sibling read at 70-configure-argocd.sh:474.
+_sans="$(openssl x509 -in "$leaf" -noout -ext subjectAltName 2>/dev/null \
+         | tail -n +2 | sed 's/^[[:space:]]*//' | tr -d '\n' || true)"
+
+_ep_rc=0
+ca_verifies_endpoint "$host" "$port" "$CAND" >/dev/null 2>&1 || _ep_rc=$?
+
+# ⚠️ rc=0 IS NOT SUFFICIENT. A certificate with NO subjectAltName passes openssl's -verify_hostname,
+# which falls back to the CN — but every Go client refuses it outright ("x509: certificate relies on
+# legacy Common Name field, use SANs instead"), and crane, Kaniko, podman, containerd and the argocd
+# CLI are ALL Go. So a bare rc=0 would prescribe an anchor that fails closed in the same shape as the
+# incident this check exists to prevent. rc=6 is ours, not the primitive's.
+# ⚠️ AND IT MUST BE A SAN OF THE RIGHT TYPE. Requiring merely that SOME SAN exists is not enough:
+# openssl's -verify_hostname falls back to the CN whenever the SAN carries no dNSName, so a cert with
+# `CN=localhost` and only `IP:10.9.9.9` PASSED and was prescribed — while Go says "certificate is not
+# valid for any names". That is verbatim the incident this check exists to prevent, surviving inside
+# the fix for it. (-verify_ip does NOT fall back, so the hole was confined to the NAME branch — which
+# is precisely the branch every remedy here pushes the operator toward.)
+# ONE classification, shared with ca_verifies_endpoint (lib/tls.sh) — it picks the openssl flag from
+# the same answer this picks the SAN type from, and a disagreement is a false REFUSE.
+case "$(ca_addr_kind "$host")" in
+  name) _need='DNS:' ;;
+  *)    _need='IP Address:' ;;
+esac
+# ⚠️ SPLIT ON openssl's OWN SEPARATOR, ANCHORED AT ENTRY START — a substring test is NOT a type test.
+# MEASURED: `*"DNS:"*` over the rendered list accepts a cert whose ONLY SAN is
+# `URI:https://x/?q=DNS:evil.com` (also `email:DNS:x@y`, `otherName:...UTF8:DNS:evil`) — rc=0, written,
+# prescribed — while Go says "certificate is not valid for any names". That is the round-1 lab break,
+# reachable again inside the fix for it. `openssl x509 -checkhost` is NOT the alternative: measured, it
+# falls back to the CN identically on those certs, so the obvious hardening is a no-op.
+#
+# ⚠️ RESIDUAL, NOT CLOSED: this parses a DISPLAY string, which is LOSSY. A URI value containing a
+# literal comma renders as `URI:https://h/?a=1,DNS:evil` — textually indistinguishable from two
+# entries. Requiring ", " raises the bar (a URI cannot carry a raw space) but an email/otherName value
+# holding ", DNS:" still passes. No shell parse of this string can be sound; the sound form reads DER.
+_san_has_type() {  # $1=rendered SAN list  $2=type prefix
+  local rest="$1" e
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *", "*) e="${rest%%, *}"; rest="${rest#*, }" ;;
+      *)      e="$rest"; rest="" ;;
+    esac
+    case "$e" in "$2"*) return 0 ;; esac
+  done
+  return 1
+}
+if [ "$_ep_rc" -eq 0 ]; then
+  _san_has_type "$_sans" "$_need" || _ep_rc=6
+fi
+
+# rc=2 is "unreachable/timed out": it proves nothing either way, and the anchor IS authentic, so it is
+# written with a warning rather than refused. Everything else refuses.
+if [ "$_ep_rc" -ne 0 ] && [ "$_ep_rc" -ne 2 ]; then
+  # ⚠️ STDERR, not stdout. Same lesson as the consent block at :229: with the warning on stdout,
+  # `make fetch-argocd-ca > log` swallowed it entirely and left rc the only signal.
+  {
+    printf '\n  🔴 REFUSING TO WRITE %s — this anchor cannot verify %s.\n' "$OUT" "$hostport"
+    case "$_ep_rc" in
+      3) printf '     The chain is fine; the ADDRESS is wrong. The certificate does not present\n'
+         printf '     %s (an IP needs an IP SAN, and most self-signed server certs carry none).\n' "$host" ;;
+      6) if [ -z "$_sans" ]; then
+           printf '     The certificate presents NO subjectAltName. openssl accepted it by falling back\n'
+           printf '     to the CN, but every Go client refuses it outright:\n'
+           printf '       x509: certificate relies on legacy Common Name field, use SANs instead\n'
+         else
+           printf '     The certificate has SANs but none of the type this address needs (%s).\n' "$_need"
+           printf '     openssl accepted it by falling back to the CN; Go refuses it outright:\n'
+           printf '       x509: certificate is not valid for any names, but wanted to match %s\n' "$host"
+         fi
+         printf '     crane, Kaniko, podman, containerd and the argocd CLI are all Go.\n' ;;
+      5) printf '     The file fetched is not usable as a trust anchor at all.\n' ;;
+      4) printf '     The endpoint ANSWERED but served no TLS certificate — it is speaking plaintext\n'
+         printf '     (or a different protocol) on this port. Do NOT re-fetch the CA; fix the port or\n'
+         printf '     the scheme. 02-env.sh:604 gives this its own arm for the same reason.\n' ;;
+      *) printf '     The chain we fetched verified, but the endpoint did not on a second dial —\n'
+         printf '     usually a certificate that ROTATED between the two probes (02-env.sh:570-575\n'
+         printf '     documents that case). Retry; if it repeats, the anchor is genuinely wrong.\n' ;;
+    esac
+    if [ -n "$_sans" ]; then
+      printf '     The certificate presents: %s\n' "$_sans"
+      printf '     Point the address at one of those (add it to /etc/hosts if it does not resolve),\n'
+      printf '     re-run this, and THEN set %s_CA_FILE.\n' "$UPPER"
+    else
+      printf '     Ask whoever issued it for a certificate carrying a SAN for the address you use.\n'
+    fi
+    printf '\n     %s is UNCHANGED — nothing was written.\n' "$OUT"
+    # ⚠️ NO MECHANISM CLAIM HERE. This script is SHARED by fetch-harbor-ca and fetch-argocd-ca, and
+    # the two behave OPPOSITELY when the CA is unset: lib/argocd.sh:388 falls back to `-k` (unverified
+    # but working), while lib/harbor.sh:39 sets CURL_CACERT=() — the SYSTEM trust store — so against a
+    # self-signed Harbor it fails `x509: signed by unknown authority` and :386 skips the auth probe
+    # entirely. Asserting the argocd behaviour for both is a false sentence for half the callers; the
+    # generic-die rule at :94-97 exists for exactly this. State only the half that is true of both.
+    printf '     Leave %s_CA_FILE UNSET meanwhile — a non-verifying CA fails CLOSED, which is strictly\n' "$UPPER"
+    printf '     worse than not setting one. What that costs you differs per service; see docs/.\n'
+  } >&2
+  # Distinguishable per cause: 3 = wrong address, 6 = no usable SAN, 5 = unusable anchor.
+  # ⚠️ rc=1 is REMAPPED to 7: `die` (lib/os.sh:86) is `exit 1`, so ~10 fatal paths already use it and
+  # a caller could not tell the chain arm from any of them — the comment here used to claim exactly
+  # the distinguishability the codes lacked.
+  case "$_ep_rc" in 1) exit 7 ;; *) exit "$_ep_rc" ;; esac
+fi
+
+
+
+if [ "$verdict" -eq 3 ]; then
   # NO PIN. This is trust-on-first-use, so make the operator SEE it and CONSENT to it.
   # ⚠️ The consent text names what a wrong anchor costs, because it is NOT just image trust:
   # lib/harbor.sh writes `user = "$HARBOR_USERNAME:$HARBOR_PASSWORD"` into a curl -K config and every

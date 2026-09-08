@@ -101,7 +101,9 @@ fi
 # ── 2. RED: same cert, same server, same digest — an IP address, and no IP SAN. ──
 r="$(_run "$D" "127.0.0.1:$P" r.crt)"
 if [ "$r" != 0 ]; then
-  ok "an address the cert does not present -> refused, rc=$r"
+  if [ "$r" = 3 ]; then ok "an address the cert does not present -> refused, rc=3 (per-cause)"
+  else bad "refused, but rc=$r not 3 — the per-cause exit codes are what let a caller tell 'wrong
+      address' from 'no usable SAN'; collapsing them loses that."; fi
 else
   bad "an address with no matching SAN was accepted (rc=0). Only the NAME check can catch this:
       the chain verifies vacuously for any self-signed cert."
@@ -149,7 +151,8 @@ _selfsigned nosan "/CN=localhost"
 if P2="$(_serve "$T/nosan.c" "$T/nosan.k")"; then
   r="$(_run "$(_fp "$T/nosan.c")" "localhost:$P2" n.crt)"
   if [ "$r" != 0 ]; then
-    ok "a CN-only cert (no SAN) -> refused, though openssl alone accepts it"
+    if [ "$r" = 6 ]; then ok "a CN-only cert (no SAN) -> refused rc=6, though openssl accepts it"
+    else bad "refused with rc=$r, expected 6 (no usable SAN)."; fi
   else
     bad "a CN-only cert was PRESCRIBED. openssl's -verify_hostname falls back to the CN, but Go says
       'x509: certificate relies on legacy Common Name field' — and crane, Kaniko, podman, containerd
@@ -188,6 +191,39 @@ if P2c="$(_serve "$T/kindshape.c" "$T/kindshape.k")"; then
   fi
 else
   echo "SKIP: s_server did not start for the KinD-shape control"
+fi
+
+# ── 4d. THE PIN OUTRANKS THE ADDRESS. A round measured that running the address check FIRST replaced
+# "CA FINGERPRINT MISMATCH ... something is intercepting this connection" with "the chain is fine;
+# the ADDRESS is wrong" — and then told the operator to put the ATTACKER'S chosen name in /etc/hosts.
+# An active-interception signal must not be reported as an addressing mistake.
+r="$(_run "$(printf 'a%.0s' $(seq 64))" "127.0.0.1:$P" mm.crt)"
+if grep -qF 'CA FINGERPRINT MISMATCH' "$T/mm.crt.out" "$T/mm.crt.err" 2>/dev/null; then
+  ok "a wrong PIN outranks a wrong address (says MISMATCH, not 'the ADDRESS is wrong')"
+else
+  bad "with a MISMATCHING pin AND a wrong address, the script blamed the ADDRESS. The pin is the only
+      authenticity signal here and it must be reported first; diagnosing the address instead walks the
+      operator toward the interceptor."
+fi
+if grep -q 'etc/hosts' "$T/mm.crt.out" "$T/mm.crt.err" 2>/dev/null; then
+  bad "under a pin MISMATCH it advises editing /etc/hosts — i.e. adopt the name the attacker offered."
+else
+  ok "...and does not advise adopting the offered name"
+fi
+
+# ── 4e. A SUBSTRING IS NOT A TYPE. `case $_sans in *"DNS:"*` accepted a cert whose ONLY SAN is a URI
+# that happens to CONTAIN "DNS:" — measured rc=0, written, prescribed, while Go refuses it.
+_selfsigned urisan "/CN=localhost" "subjectAltName=URI:https://x/?q=DNS:evil.com"
+if P4="$(_serve "$T/urisan.c" "$T/urisan.k")"; then
+  r="$(_run "$(_fp "$T/urisan.c")" "localhost:$P4" u.crt)"
+  if [ "$r" = 6 ]; then
+    ok "a URI SAN merely CONTAINING 'DNS:' is refused (rc=6), not read as a dNSName"
+  else
+    bad "a cert whose only SAN is URI:https://x/?q=DNS:evil.com was accepted (rc=$r). The gate is
+      testing a SUBSTRING of openssl's rendered list, not a SAN TYPE; Go refuses this cert."
+  fi
+else
+  echo "SKIP: s_server did not start for the URI-SAN case"
 fi
 
 # ── 5. A CHAIN: the SANs must come from the LEAF, not the CA (which carries none). ──

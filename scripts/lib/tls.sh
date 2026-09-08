@@ -120,6 +120,20 @@ ca_bundle_with_system() {
 #      There is a security edge too: VMCA signs EVERY ESXi host's certificate in the same vCenter, so a
 #      leaf issued by the pinned CA for a DIFFERENT host passed this check.
 #      Hence rc 3 — chain OK, NAME wrong — as its own verdict, so callers stop reporting it as staleness.
+# ca_addr_kind — IPv4 LITERAL or NAME? ONE definition, because TWO consumers must agree and the
+# consequence of disagreement is a FALSE REFUSE of a working anchor (the round-1 lab break, inverted):
+# ca_verifies_endpoint picks -verify_ip vs -verify_hostname from this, and fetch-ca.sh picks WHICH SAN
+# TYPE it requires (DNS: vs IP Address:). They were two hand-typed copies of `*[!0-9.]*` with nothing
+# asserting they agree; IPv6 is the obvious trigger that would have split them.
+# Note this deliberately does NOT classify IPv6 — `${hostport%%:*}` upstream cannot parse one anyway
+# (`[::1]:8443` -> host="["), so an IPv6 literal is broken well before it reaches here.
+ca_addr_kind() {
+  case "${1:?ca_addr_kind: address required}" in
+    *[!0-9.]*) printf 'name' ;;
+    *)         printf 'ip' ;;
+  esac
+}
+
 ca_verifies_endpoint() {
   local host="$1" port="${2:-443}" ca="$3" out rc=0 namearg
   # ⚠️ 5, NOT 1. Returning 1 here said "connected, and the anchor does NOT verify" — i.e. STALE — for
@@ -137,9 +151,9 @@ ca_verifies_endpoint() {
   openssl x509 -in "$ca" -noout >/dev/null 2>&1 || return 5
   # An IPv4 literal needs -verify_ip; a name needs -verify_hostname. Passing the wrong one silently
   # verifies nothing, which is the defect this is fixing.
-  case "$host" in
-    *[!0-9.]*) namearg="-verify_hostname" ;;
-    *)         namearg="-verify_ip" ;;
+  case "$(ca_addr_kind "$host")" in
+    name) namearg="-verify_hostname" ;;
+    *)    namearg="-verify_ip" ;;
   esac
   out=$(printf '' | timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client \
           -connect "${host}:${port}" -servername "$host" \
