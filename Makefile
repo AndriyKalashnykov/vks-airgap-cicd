@@ -953,7 +953,14 @@ kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-*
 e2e-kind: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admission check). .env IGNORED (fresh-box fidelity; E2E_SKIP_DOTENV=0 to use yours). E2E_FRESH=1 forces a COLD cluster (proves create-ordering)
 	@if [ "$(E2E_FRESH)" = "1" ]; then echo "==> E2E_FRESH=1: COLD run — tearing down first so namespace create-ordering is actually exercised"; $(MAKE) kind-down; fi
-	@$(MAKE) kind-up install-harbor install-argocd install-all install-ingress verify-gateway-image verify verify-ingress
+# ⚠️ INGRESS_CONTROLLER=istio IS EXPLICIT, and it closes a measured hole. `E2E_FRESH ?= 0` is the
+# default, so this does NOT tear down and `.env.state` SURVIVES; `verify-ingress-both` ends by
+# installing traefik and publishing it; and 44-install-ingress.sh resolves
+# `${_override:-${INGRESS_CONTROLLER:-istio}}`, so with no override the STALE STATE wins. The whole
+# e2e then installed traefik, `verify-gateway-image` SKIPPED (its assertion is istio-only), and
+# `verify`/`verify-ingress` passed because traefik routes fine -- a green e2e that never asserted
+# image provenance. Naming the controller here makes the run mean what its name says.
+	@$(MAKE) kind-up install-harbor install-argocd install-all INGRESS_CONTROLLER=istio install-ingress verify-gateway-image verify verify-ingress
 # psa-check in a SEPARATE make invocation, deliberately. It is also a prerequisite of `preflight`
 # (:301), which `install-all` (:459) needs — so in ONE invocation make runs it EARLY, against an
 # empty cluster, and then reports `Nothing to be done for 'psa-check'` at the end. Measured
