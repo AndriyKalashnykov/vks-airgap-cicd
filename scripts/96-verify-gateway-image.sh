@@ -34,12 +34,34 @@
 # `gateway.networking.k8s.io/gateway-name: <name>` with NO `istio:` key, and istio_discover filters on
 # exactly that key. So the default is mirrored from lib/istio.sh:270 by hand, on purpose.
 #
-# 🔴 HOW TO RED-PROVE THE MODE GUARD — the obvious way DOES NOT WORK. `INGRESS_CONTROLLER` is
-# published via `state_set` and is NOT in load_env's SELECTORS snapshot (lib/os.sh:322), so .env.state
-# WINS over the environment: `INGRESS_CONTROLLER=traefik make verify-gateway-image` does NOT exercise
-# the SKIP branch. (Correct for a verifier — it must check what was INSTALLED, not what the caller
-# claims — and it is the identical trap that silently passed B50's controller-guard proof.) The
-# working proof rewrites the PUBLISHED value:
+# ⚠️ A MACHINE-READABLE VERDICT ON EVERY PATH, because a SKIP and a PASS were both rc=0 with no
+# token, and `grep -rn provenance scripts/*.sh Makefile` finds ZERO consumers of the human line --
+# so the only machine signal was the exit code, where skip == pass. MEASURED against a fixture
+# carrying the exact defect this gate exists for (a data-plane proxy from docker.io):
+#     INGRESS_CONTROLLER=istio    -> rc=1, "FAILED — 1 of 2 ... did not come from h.local"   ✅
+#     INGRESS_CONTROLLER unset, .env.state=traefik -> rc=0, "NOTHING was verified here."     ❌
+# The second is the e2e-kind shape: E2E_FRESH defaults to 0 so the overlay survives, and
+# verify-ingress-both leaves traefik published. STDOUT, not the log stream: log_warn goes to stderr
+# (lib/os.sh:186), which the walk harness merges into one file and greps for nothing.
+_verdict() { printf 'gateway-image-verdict: %s\n' "$1"; }
+
+# 🔴 HOW TO RED-PROVE THE MODE GUARD — the env prefix WORKS, and this comment used to say it did not.
+#     INGRESS_CONTROLLER=traefik make verify-gateway-image     # exercises the SKIP branch
+#
+# ⚠️ CORRECTED 2026-09-08, and it is worth reading because the old text was actionable and wrong.
+# It said INGRESS_CONTROLLER "is NOT in load_env's SELECTORS snapshot (lib/os.sh:322), so .env.state
+# WINS over the environment", and prescribed a `sed -i` on the published value instead. All three
+# clauses are false today: it IS in the snapshot (lib/os.sh:713 — added by #1038, 2026-08-26,
+# precisely so a per-run override cannot be clobbered), the ENVIRONMENT wins, and the env prefix
+# does exercise the skip. MEASURED: env=traefik + state=istio -> `traefik`.
+#
+# The comment was TRUE when written (382c1a9, 2026-07-19) and was falsified by a change to a
+# DIFFERENT file that did not know this one quoted it. That is the "a fact inside a control is part
+# of the control" rot: nothing gates a code comment, and this one was a recipe, so a reader would
+# have run the form that no longer needs running and concluded the simple one was broken.
+#
+# The `state_file` rewrite still works and is the right proof when you want to exercise what was
+# INSTALLED rather than what the caller claims:
 #     sed -i 's/^INGRESS_CONTROLLER=.*/INGRESS_CONTROLLER=traefik/' "$(bash -c '. scripts/lib/os.sh; state_file')"
 #
 # shellcheck shell=bash
@@ -67,6 +89,7 @@ case "$CONTROLLER" in
       log_warn "  Software Depot), not from \${HARBOR_URL}. Asserting our registry would RED a correct"
       log_warn "  install. NOTHING was verified about provenance in this mode — the air-gap question"
       log_warn "  for the package path is answered by 43-install-istio-package.sh's bundle-host check."
+      _verdict SKIPPED:package
       exit 0
     fi
     ;;
@@ -75,9 +98,11 @@ case "$CONTROLLER" in
     log_warn "  theirs, not our Harbor; asserting our registry would RED a correctly-configured foreign"
     log_warn "  mesh. Also redundant: verify-ingress routes THROUGH the auto-provisioned proxy, so an"
     log_warn "  ImagePullBackOff already reddens it. NOTHING was verified about provenance in this mode."
+    _verdict SKIPPED:istio-existing
     exit 0 ;;
   traefik)
     log_warn "SKIP: INGRESS_CONTROLLER=traefik — no Istio proxy exists. NOTHING was verified here."
+    _verdict SKIPPED:traefik
     exit 0 ;;
   *) die "unknown INGRESS_CONTROLLER='${CONTROLLER}' (expected istio, istio-existing or traefik)" ;;
 esac
@@ -146,3 +171,4 @@ done
 
 [ "$bad" -eq 0 ] || { log_error "gateway image provenance: FAILED — ${bad} of ${checked} container image(s) did not come from ${HARBOR_URL}"; exit 1; }
 log_info "gateway image provenance: OK — all ${checked} running container image(s) came from ${HARBOR_URL} (control-plane ${cp_seen}, data-plane ${dp_seen})"
+_verdict ASSERTED

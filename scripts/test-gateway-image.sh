@@ -34,10 +34,12 @@ public_pod()  { printf '{"items":[{"metadata":{"name":"%s"},"status":{"container
 #       the fixture directory after the very first case and every later one read a missing file.
 # Output goes to a FILE and rc is read directly from the gate's own invocation.
 GATE_OUT="$(mktemp)"
-case_is() { # <label> <want-rc: 0|nonzero> <grep-ERE or ""> [ISTIO_INSTALL_METHOD]
+case_is() { # <label> <want-rc: 0|nonzero> <grep-ERE or ""> [ISTIO_INSTALL_METHOD] [INGRESS_CONTROLLER]
   ran=$((ran + 1))
   local rc
-  HARBOR_URL=h.local INGRESS_CONTROLLER=istio GATEWAY_IMAGE_FIXTURE="$FIX" \
+  # ⚠️ THE MODE IS A PARAMETER. It was hardcoded to `istio`, so the two SKIP arms had ZERO offline
+  # coverage -- this file could not express an input for the branches a backlog row wanted to edit.
+  HARBOR_URL=h.local INGRESS_CONTROLLER="${5:-istio}" GATEWAY_IMAGE_FIXTURE="$FIX" \
     ISTIO_INSTALL_METHOD="${4:-helm}" \
     bash "$GATE" > "$GATE_OUT" 2>&1
   rc=$?
@@ -45,6 +47,19 @@ case_is() { # <label> <want-rc: 0|nonzero> <grep-ERE or ""> [ISTIO_INSTALL_METHO
   if [ "$2" = 0 ]; then [ "$rc" -eq 0 ] && okrc=0; else [ "$rc" -ne 0 ] && okrc=0; fi
   if [ "$okrc" -ne 0 ]; then
     printf 'FAIL  %s — rc=%s (wanted %s)\n' "$1" "$rc" "$2"; sed 's/^/        /' "$GATE_OUT"; fail=1; return
+  fi
+  # ⚠️ EXACTLY ONE VERDICT TOKEN, ALWAYS. Every assertion in this file is a POSITIVE grep, so an
+  # extra token is invisible to all of them -- MEASURED: one spurious `_verdict ASSERTED` beside the
+  # definition made a traefik SKIP emit `ASSERTED` *and* `SKIPPED:traefik`, and this suite reported
+  # `OK — 15 cases`, rc 0. That is precisely the ambiguity the token was added to remove ("rc=0 alone
+  # cannot tell 'verified clean' from 'looked at nothing'"), re-created one layer up: a consumer
+  # grepping for ASSERTED would read all three skips as verified passes.
+  # Scoped to rc=0. A FAILING run needs no token -- rc!=0 is already unambiguous, and the gate
+  # deliberately emits none on its three `die`s. The ambiguity this guards is rc=0-only.
+  local _vn
+  _vn="$(grep -c 'gateway-image-verdict:' "$GATE_OUT" || true)"
+  if [ "$2" = 0 ] && [ "${_vn:-0}" -ne 1 ]; then
+    printf 'FAIL  %s — emitted %s verdict tokens, want exactly 1\n' "$1" "$_vn"; sed 's/^/        /' "$GATE_OUT"; fail=1; return
   fi
   if [ -n "${3:-}" ] && ! grep -qE "$3" "$GATE_OUT"; then
     printf 'FAIL  %s — rc ok but the message did not match /%s/\n' "$1" "$3"; sed 's/^/        /' "$GATE_OUT"; fail=1; return
@@ -96,6 +111,35 @@ case_is "SKIPS in package mode — depot images must not be judged against our H
 # ...and the SAME fixture must still RED under the default helm method, or the skip is unconditional.
 case_is "REDS on the same depot images under the DEFAULT helm method" 1 'NOT from h.local'
 
-[ "$ran" -eq 9 ] || die "expected 9 cases, ran ${ran} — this harness lost track of itself"
+# ── THE TWO SKIP ARMS, AND THE VERDICT TOKEN. ────────────────────────────────────────────────────
+# ⚠️ THE FIXTURE CARRIES THE DEFECT THIS GATE EXISTS FOR (a data-plane image not from h.local), so
+# these cases assert that each skip returns 0 OVER A REAL DEFECT -- which is the point: a skip must
+# be a skip, not a silent pass. That is exactly why the verdict token matters, and why the token is
+# asserted here rather than only the rc: rc=0 alone cannot tell "verified clean" from "looked at
+# nothing", and an adversary measured that ambiguity reaching e2e-kind on DEFAULT settings.
+case_is "istio-existing SKIPS over the defect (the mesh is the platform's)" 0 'NOTHING was verified about provenance' helm istio-existing
+case_is "...and says so in a MACHINE-READABLE verdict"                      0 'gateway-image-verdict: SKIPPED:istio-existing' helm istio-existing
+case_is "traefik SKIPS over the defect (no Istio proxy exists)"             0 'NOTHING was verified here' helm traefik
+case_is "...and says so in a MACHINE-READABLE verdict"                      0 'gateway-image-verdict: SKIPPED:traefik' helm traefik
+case_is "package SKIPS, with its own verdict"                               0 'gateway-image-verdict: SKIPPED:package' package
+# The POSITIVE control: the token must DIFFER on the path that actually asserts, or it is decoration.
+# The fixture is a DIRECTORY of per-namespace payloads (see the helpers at the top) -- a flat file
+# here made the gate FATAL "no running container found in the CONTROL-PLANE namespace", which is the
+# gate correctly refusing an empty read rather than the case failing for its own reason.
+rm -f "${FIX}"/*.json
+harbor_pod istiod-1     pilot    > "${FIX}/istio-system.json"
+harbor_pod vks-uis-istio proxyv2 > "${FIX}/vks-ingress.json"
+case_is "a clean tree emits ASSERTED, not SKIPPED"                          0 'gateway-image-verdict: ASSERTED'
+# The label says "not SKIPPED" -- so assert it. The one-token check above already forbids a second
+# token, but this pins the DIRECTION too: a gate that emitted only `SKIPPED:istio` on the assert path
+# would satisfy the count and still be wrong.
+ran=$((ran + 1))
+if grep -q 'gateway-image-verdict: SKIPPED' "$GATE_OUT"; then
+  printf 'FAIL  the clean-tree run emitted a SKIPPED verdict\n'; fail=1
+else
+  printf 'ok    ...and emits no SKIPPED verdict (the label is asserted, not just claimed)\n'
+fi
+
+[ "$ran" -eq 16 ] || die "expected 16 cases, ran ${ran} — this harness lost track of itself"
 [ "$fail" -eq 0 ] || { log_error "gateway-image gate: FAILED"; exit 1; }
 log_info "gateway-image gate: OK — ${ran} cases (classifier only; the LIVE integration is proven by e2e-kind)"

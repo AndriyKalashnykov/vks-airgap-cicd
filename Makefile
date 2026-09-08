@@ -950,10 +950,28 @@ kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-*
 # with SKIP_DOTENV in its environment, so `.env` is ignored end-to-end. Make also treats an
 # environment variable as a make variable, so the sub-make's `ifneq ($(SKIP_DOTENV),1)` sees it.
 .PHONY: e2e-kind
+# ⚠️ `$(origin)`, NOT `?=`, AND NOT A MID-CHAIN OVERRIDE. Both simpler forms are wrong, measured:
+#   - `INGRESS_CONTROLLER=istio` inside the `$(MAKE) …` goal list is a GLOBAL override that beats the
+#     operator's OWN command line, so `make e2e-kind INGRESS_CONTROLLER=traefik` silently ran istio --
+#     this PR's own bug class with the arrow reversed, and an inversion of Makefile:147's stated
+#     invariant ("`make <target> VAR=value` still wins over both, as it should").
+#   - `INGRESS_CONTROLLER ?= istio` does not close the hole at all: `-include .env.state` (:150) sets
+#     the key BEFORE the `?=`, so a stale overlay from `verify-ingress-both` still wins. That is the
+#     exact path this fix exists for.
+# `origin` asks WHERE the value came from, which is the actual question: honour a COMMAND-LINE choice,
+# and otherwise force istio regardless of what a previous run published.
+e2e-kind: export INGRESS_CONTROLLER = $(if $(filter command line,$(origin INGRESS_CONTROLLER)),$(INGRESS_CONTROLLER),istio)
 e2e-kind: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admission check). .env IGNORED (fresh-box fidelity; E2E_SKIP_DOTENV=0 to use yours). E2E_FRESH=1 forces a COLD cluster (proves create-ordering)
 	@if [ "$(E2E_FRESH)" = "1" ]; then echo "==> E2E_FRESH=1: COLD run — tearing down first so namespace create-ordering is actually exercised"; $(MAKE) kind-down; fi
-	@$(MAKE) kind-up install-harbor install-argocd install-all install-ingress verify-gateway-image verify verify-ingress
+# ⚠️ INGRESS_CONTROLLER=istio IS EXPLICIT, and it closes a measured hole. `E2E_FRESH ?= 0` is the
+# default, so this does NOT tear down and `.env.state` SURVIVES; `verify-ingress-both` ends by
+# installing traefik and publishing it; and 44-install-ingress.sh resolves
+# `${_override:-${INGRESS_CONTROLLER:-istio}}`, so with no override the STALE STATE wins. The whole
+# e2e then installed traefik, `verify-gateway-image` SKIPPED (its assertion is istio-only), and
+# `verify`/`verify-ingress` passed because traefik routes fine -- a green e2e that never asserted
+# image provenance. Naming the controller here makes the run mean what its name says.
+	@$(MAKE) kind-up install-harbor install-argocd install-all INGRESS_CONTROLLER=istio install-ingress verify-gateway-image verify verify-ingress
 # psa-check in a SEPARATE make invocation, deliberately. It is also a prerequisite of `preflight`
 # (:301), which `install-all` (:459) needs — so in ONE invocation make runs it EARLY, against an
 # empty cluster, and then reports `Nothing to be done for 'psa-check'` at the end. Measured
