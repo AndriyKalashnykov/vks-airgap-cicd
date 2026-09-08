@@ -282,6 +282,21 @@ echo
 echo "  ArgoCD:   https://${ARGOCD_SERVER:-$ip}"
 echo "  Log in:   argocd login \"\$ARGOCD_SERVER\" --username admin --insecure"
 echo "  Password: make argocd-password"
+# SAY WHY THE LOGIN LINE CARRIES --insecure. This script has just written an IP, and
+# argocd-server's default certificate carries DNS SANs only -- no IP SAN -- so that address CANNOT
+# be verified by any CA. The debt was recorded in a comment above since the line was written; the
+# operator, who is the one typing --insecure, never saw it. B552: scenario-1 never tells them to
+# fetch the ArgoCD CA either, so without this the whole trust story is invisible on that path.
+case "${ARGOCD_SERVER:-$ip}" in
+  *[a-zA-Z]*) ;;   # a NAME: it can verify, given the right anchor. Say nothing.
+  *)
+    echo "  ⚠️  That address is an IP, and it CANNOT be verified by any CA: argocd-server's"
+    echo "      default certificate carries DNS SANs only, with no IP SAN. That is why the login"
+    echo "      line above says --insecure, and why fetching a CA would not help while the address"
+    echo "      is an IP. To verify instead of bypassing: publish an A record (make show-dns-records"
+    echo "      prints one for argocd-server), set ARGOCD_SERVER to that NAME, then: make fetch-argocd-ca"
+    ;;
+esac
 echo
 # ⚠️ DO NOT tell the reader to override this with an env PREFIX. .env.example:345 records the
 # measured trap: once this value is in .env, `ARGOCD_SERVER=1.2.3.4 make <target>` is IGNORED,

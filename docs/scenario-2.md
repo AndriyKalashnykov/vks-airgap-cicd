@@ -466,7 +466,11 @@ ConfigMap **`harbor-ca`** (key `ca.crt`) so Kaniko/Tekton trust it too. If your 
 publicly-trusted certificate, leave `HARBOR_CA_FILE` empty and skip this step.
 
 **ArgoCD's self-signed CA is needed too**, and for the same reason — fetch it the same way. Run
-**`make fetch-argocd-ca`** (writes `ARGOCD_CA_FILE`); `ARGOCD_SERVER` is already set from discovery.
+**`make fetch-argocd-ca`** — but only after `ARGOCD_SERVER` names something the certificate
+carries. It does **not** set `ARGOCD_CA_FILE` for you: it writes the file and PRINTS the line to
+add, and you add it. And discovery yields an **IP**, which is exactly what the table above and
+the step below say must not be used — an IP cannot verify against any CA. Follow that step, not
+this paragraph, for the order: it is the one that makes the name resolve first.
 
 Do not skip it on the grounds that `argocd login` sorts the trust out for you. It establishes the
 CLI's TLS trust only when it can **verify** the server, and verification needs **both** knobs: an
