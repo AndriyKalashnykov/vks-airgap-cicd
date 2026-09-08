@@ -277,6 +277,14 @@ esac
 # reachable again inside the fix for it. `openssl x509 -checkhost` is NOT the alternative: measured, it
 # falls back to the CN identically on those certs, so the obvious hardening is a no-op.
 #
+# The two things this depends on — the `DNS:` / `IP Address:` spellings and the ", " separator — are
+# MEASURED STABLE across every OS this repo targets, on the SAME certificate (2026-09-07):
+#   photon:5.0   OpenSSL 3.5.8   DNS:localhost, IP Address:127.0.0.1, email:a@b.test
+#   ubuntu:24.04 OpenSSL 3.0.13  (identical)
+#   ubuntu:26.04 OpenSSL 3.5.5   (identical)
+# So a FALSE REFUSE from a rendering difference is ruled out on those three. (LibreSSL and openssl 1.x
+# are still unmeasured; the repo ships none of them.)
+#
 # ⚠️ RESIDUAL, NOT CLOSED: this parses a DISPLAY string, which is LOSSY. A URI value containing a
 # literal comma renders as `URI:https://h/?a=1,DNS:evil` — textually indistinguishable from two
 # entries. Requiring ", " raises the bar (a URI cannot carry a raw space) but an email/otherName value
