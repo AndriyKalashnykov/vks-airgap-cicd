@@ -72,6 +72,59 @@ else
   bad "the scanner invented findings from an empty corpus"
 fi
 
+# ── THE DENOMINATOR: "clean" vs "I could not read it" ────────────────────────────────────────────
+# The scanner tolerates I/O errors by design (2>/dev/null, || true) so a permissions blip cannot
+# kill `make mirror-pull`. That is right, and it is exactly what makes an UNREADABLE corpus print
+# the same sentence as a clean one -- MEASURED before the fix: chmod 000 on the one file holding a
+# real violation gave an empty result and rc=0, i.e. OK over the breach the gate exists to catch.
+# The counts are what discriminate, so the CALLER refuses on either zero.
+printf '%s\n' '  image: notmirrored.example.io/x/y@sha256:abc123' > "$T/m.yaml"
+if [ "$(hostscan_nfiles "$T")" = 1 ] && [ "$(hostscan_nrefs "$T")" = 1 ]; then
+  ok "the denominator counts a readable corpus (1 file, 1 ref)"
+else
+  bad "denominator wrong on a readable corpus: files=$(hostscan_nfiles "$T") refs=$(hostscan_nrefs "$T")"
+fi
+
+# root can read a 0000 file, so this case cannot discriminate there -- SKIP loudly rather than
+# report a pass it did not earn.
+if [ "$(id -u)" -eq 0 ]; then
+  printf '  SKIP  running as root: chmod 000 is not a barrier, so the unreadable-corpus case CANNOT be measured here\n'
+else
+  chmod 000 "$T/m.yaml"
+  _nf="$(hostscan_nfiles "$T")"; _nr="$(hostscan_nrefs "$T")"; _un="$(hostscan_unhandled "$T")"
+  chmod 644 "$T/m.yaml"
+  # files>0 AND refs==0 is the signature the caller dies on. Note _un is EMPTY here -- that is the
+  # fail-open, and it is why the verdict cannot be read off the scan result alone.
+  if [ "$_nf" = 1 ] && [ "$_nr" = 0 ] && [ -z "$_un" ]; then
+    ok "an UNREADABLE corpus is distinguishable from a clean one (files=1 refs=0, scan empty)"
+  else
+    bad "unreadable corpus not distinguishable: files=$_nf refs=$_nr unhandled=[$_un]"
+  fi
+fi
+
+rm -f "$T"/*.yaml
+if [ "$(hostscan_nfiles "$T")" = 0 ] && [ "$(hostscan_nfiles "$T/nope")" = 0 ]; then
+  ok "the denominator reports 0 files for an empty and for an absent corpus"
+else
+  bad "denominator wrong on an empty/absent corpus"
+fi
+
+# ── THE TRUNCATION THAT FORGED AN EXEMPTION ──────────────────────────────────────────────────────
+# A lowercase-only host class cannot BEGIN on an uppercase or `_` label, so the leftmost match
+# started AFTER it and the reported host was a TRUNCATION -- which then matched the mirrored-host
+# list and was silently EXEMPTED. eu.gcr.io/us.gcr.io are real Google hosts nothing here rewrites.
+# RED-proof: narrow HOSTSCAN_REF_RE's host class back to [a-z0-9] and these three go quiet.
+for _r in 'EU.gcr.io/myteam/app:v1' 'my_mirror.gcr.io/team/app:v1' 'MIRROR.quay.io/team/app:v1'; do
+  printf '%s\n' "  image: ${_r}" > "$T/m.yaml"
+  _h="$(hostscan_unhandled "$T" | cut -f1)"
+  _want="${_r%%/*}"
+  if [ "$_h" = "$_want" ]; then
+    ok "reports the FULL host for ${_r} (not the truncation that would be exempted)"
+  else
+    bad "truncation: ${_r} reported host [$_h], want [$_want]"
+  fi
+done
+
 # ── THE CALLER'S SET FLAGS: the one failure the cases above CANNOT see ───────────────────────────
 # Every caller runs `set -euo pipefail`, and this harness does not -- so a pipefail trap inside the
 # function is invisible to every case above, all of which passed while `make mirror-pull` would have

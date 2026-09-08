@@ -113,6 +113,16 @@ mirror_prune_manifests "$MANIFEST_DIR" "${!MANIFESTS[@]}"
 # operator is still on the internet side, where an unmirrored host can actually be fixed.
 # shellcheck source=scripts/lib/hostscan.sh
 . "${SCRIPT_DIR}/lib/hostscan.sh"
+# THE DENOMINATOR FIRST. `hostscan_unhandled` tolerates I/O errors by design (2>/dev/null, || true),
+# which is right -- and is PRECISELY what makes an unreadable corpus indistinguishable from a clean
+# one. MEASURED: `chmod 000` on the single file holding a real violation gave an empty result and
+# rc=0, i.e. this gate printed OK over the exact air-gap breach it exists to catch. A plausible
+# trigger on the internet-side box is a root-owned leftover from an earlier `sudo` run, or the
+# uid-1000-vs-1001 asymmetry this repo already documents for the jump-box containers.
+_nfiles="$(hostscan_nfiles "$MANIFEST_DIR")"
+_nrefs="$(hostscan_nrefs "$MANIFEST_DIR")"
+[ "${_nfiles:-0}" -gt 0 ] || die "manifest registry-host scan read ZERO files from ${MANIFEST_DIR} — refusing rather than reporting a vacuous OK"
+[ "${_nrefs:-0}" -gt 0 ] || die "manifest registry-host scan found ZERO tagged image refs in ${_nfiles} file(s) — the carried manifests are full of them (measured: 15), so this means the corpus is unreadable, not clean"
 _unhandled="$(hostscan_unhandled "$MANIFEST_DIR")"
 if [ -n "$_unhandled" ]; then
   log_error "carried manifests name registry host(s) that NOTHING will mirror or rewrite:"
@@ -124,7 +134,7 @@ if [ -n "$_unhandled" ]; then
   log_error "  (lib/hostscan.sh) WITH the reason and the measurement that supports it."
   die "refusing to build a bundle that would pull from the public internet at run time"
 fi
-log_info "manifest registry hosts: OK — every tagged/digested ref is on a mirrored host"
+log_info "manifest registry hosts: OK — ${_nrefs} tagged ref(s) across ${_nfiles} file(s), all on mirrored hosts"
 
 # ---- 2. Collect the full image list ----
 mapfile -t IMAGES < <(mirror_collect_images)
