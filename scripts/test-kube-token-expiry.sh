@@ -46,13 +46,33 @@ case "$(kube_token_expiry "$_T/multi")" in
   *)        bad "multi-user: read users[0] — a live guest token hides a DEAD Supervisor one (--minify missing?)" ;;
 esac
 
-# ── 2. the FIRST exp claim, not the last ────────────────────────────────────────────────────────
-# MEASURED defect: the payload is one line, so a greedy .* took the LAST "exp" — a nested claim
-# turned an expired token into a valid one.
-_kc "$_T/nested" "u:{\"exp\":$_past,\"aud_claims\":{\"exp\":$_future}}"
-case "$(kube_token_expiry "$_T/nested")" in
-  EXPIRED*) ok  "nested exp: takes the FIRST claim, so a nested future exp cannot mask a dead token" ;;
-  *)        bad "nested exp: took the LAST claim — a DEAD token reports VALID (comma split missing?)" ;;
+# ── 2. MORE THAN ONE exp -> REFUSE, in EITHER order ─────────────────────────────────────────────
+# Two measured defects, one after the other. First: no comma split, so a greedy .* took the LAST
+# "exp" and a nested future claim made a dead token report VALID. The comma-split fix was then
+# itself refuted: `head -1` is the first TEXTUAL match, NOT the top-level claim, so putting the
+# nested claim FIRST reproduced the identical failure — and that order is realistic, because Go's
+# encoding/json sorts map keys and act/amr/aud/azp/cnf all sort BEFORE exp.
+# ⚠️ BOTH ORDERS ARE ASSERTED ON PURPOSE. The version that only tested the top-level-first order
+# passed while the reversed order reported a DEAD TOKEN LIVE.
+_kc "$_T/nest_a" "u:{\"exp\":$_past,\"aud_claims\":{\"exp\":$_future}}"
+_kc "$_T/nest_b" "u:{\"aud_claims\":{\"exp\":$_future},\"exp\":$_past}"
+_kc "$_T/nest_c" "u:{\"cnf\":{\"exp\":$_future},\"exp\":$_past}"
+for _n in nest_a nest_b nest_c; do
+  if [ "$(kube_token_expiry "$_T/$_n")" = UNKNOWN ]; then
+    ok  "two exp claims ($_n): REFUSES rather than picking one"
+  else
+    bad "two exp claims ($_n): picked one — a nested future exp can mask a DEAD token"
+  fi
+done
+
+# ── 2b. base64url really is decoded ─────────────────────────────────────────────────────────────
+# MEASURED: deleting the ${pay//_//} / ${pay//-/+} substitutions left the suite 17/17 GREEN,
+# because no other payload's base64 contains + or /. This one does (sub is "?\\>"), so the case
+# dies if the replacement is ever "simplified" away.
+_kc "$_T/b64url" "u:{\"sub\":\"?\\\\>\",\"exp\":$_past}"
+case "$(kube_token_expiry "$_T/b64url")" in
+  EXPIRED*) ok  "base64url with both - and _ decodes (pins the // substitutions)" ;;
+  *)        bad "base64url with - and _ failed to decode — the // substitutions are gone?" ;;
 esac
 
 # ── 3. an exp the shell cannot compare must REFUSE, not guess ───────────────────────────────────

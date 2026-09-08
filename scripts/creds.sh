@@ -351,18 +351,25 @@ if [ "$_have_sink" = 1 ] && [ "${_VKS_STATE_SOURCED-1}" = "0" ]; then _sink_refu
 # overlay. Telling a KinD operator to go and set a password is inventing a chore for them, and it is the
 # same defect as the old ArgoCD note. Only a REAL LAB must supply one (there, Harbor/ArgoCD are given to
 # you, not created by us).
-# ── _renew_how — the remedy. NAMES BOTH PATHS; it must never WITHHOLD the command. ──────────────
+# ── _renew_how [--no-command] — the remedy. NAMES BOTH PATHS; never WITHHOLDS by guessing. ──────
 # ⚠️ AN EARLIER VERSION BRANCHED ON `VKS_AUTH_METHOD` AND INVERTED THE ANSWER. scenario-1 Step 6
 # writes `kubeconfig` (docs/scenario-1.md:614), so the scenario-1 operator — who DOES have the
-# command, eight lines later at :622 — was told "no command here renews it" and pointed at
-# scenario-2. That withheld the very fix this whole change exists to deliver, and it keyed on the
-# ONE variable already proven not to indicate WHICH kubeconfig is being renewed (that is why the
-# `VKS_AUTH_METHOD=vcf` override is needed at all).
+# command, at :622 — was told "no command here renews it". That withheld the very fix this change
+# exists to deliver, and it keyed on the ONE variable already proven not to indicate WHICH
+# kubeconfig is being renewed. So: no discriminator. Both sentences are true for every reader, and
+# the reader knows which is theirs — they know whether they minted this or were handed it.
 #
-# So: no discriminator. Both sentences are TRUE for every reader, and the reader knows which one is
-# theirs — they know whether they minted this or were handed it. A wrong guess costs the command;
-# naming both costs one line. (RULE ZERO-B: the tenant must not be sent to a dead end either.)
+# 🔴 `--no-command` IS A SAFETY GATE, NOT A STYLE FLAG. On the UNDECIDABLE arm the cause is NOT
+# known to be expiry, and `make vks-login` spends one of the THREE vCenter SSO attempts before
+# PERMANENT lockout. Commit 251df27 closed exactly this ("stop prescribing make vks-login for a
+# state that is undecidable"); removing the VKS_AUTH_METHOD gate re-opened it for every reader
+# until this flag was added. A round measured the rendered footnote putting "Do not re-authenticate
+# blind" and the command FOUR WORDS APART. EXPIRED (a fact) names the command; nothing else does.
 _renew_how() {
+  if [ "${1:-}" = --no-command ]; then
+    printf 'Ask whoever owns the lab for a current credential — this report cannot tell you which fix applies, and guessing costs an SSO attempt.'
+    return 0
+  fi
   printf 'If you minted this kubeconfig here (scenario-1): VKS_AUTH_METHOD=vcf make vks-login — the AUTH_METHOD is required because Step 6 leaves .env on kubeconfig, so a bare make vks-login renews the GUEST kubeconfig instead (docs/scenario-1.md, "3. Log in to the Supervisor"). If it was HANDED to you (scenario-2 tenant): nothing here renews it — ask whoever owns the lab.'
 }
 
@@ -1000,13 +1007,13 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
     # the JWT's own `exp` reports what the API SERVER granted, not what we asked for — the request
     # is a ceiling and a cluster with a lower --service-account-max-token-expiration silently
     # clamps it. The exp is NOT a secret; only the token is, and that stays masked above.
-    _hl_p="${_hl_t#*.}"; _hl_p="${_hl_p%%.*}"
-    case $(( ${#_hl_p} % 4 )) in 2) _hl_p="${_hl_p}==" ;; 3) _hl_p="${_hl_p}=" ;; esac
-    # base64url without `tr` — same reason as lib/os.sh's kube_token_expiry: photon:5.0 has none.
-    # (MEASURED equivalent to `tr '_-' '/+'` on 11/11 payloads incl. leading - and _.)
-    _hl_p="${_hl_p//_//}"; _hl_p="${_hl_p//-/+}"
-    _hl_exp="$(printf '%s' "$_hl_p" | base64 -d 2>/dev/null \
-                 | sed -n 's/.*"exp":\([0-9]*\).*/\1/p' | head -1)"
+    # ⚠️ ONE PARSER, shared with kube_token_expiry. This was a hand-rolled COPY and the two
+    # diverged: it kept a greedy `.*` (LAST match wins, so a nested `exp` beat the real one), a
+    # `[0-9]*` (zero-or-more), and no sanity ceiling — so a microsecond epoch rendered
+    # "valid until 55679083-07-23T03:33Z" as a stated fact. A round found them disagreeing on the
+    # same input. `jwt_exp_seconds` refuses on ambiguity rather than picking; empty => we simply
+    # do not print an expiry, which is the pre-existing behaviour for an unparseable token.
+    _hl_exp="$(jwt_exp_seconds "$_hl_t")"
     # ⚠️ WARN WHEN THE COOKIE WILL OUTLIVE THE TOKEN DURATION. `-session-ttl` is a DEPLOY-TIME
     # flag: it cannot track a token minted here. So `make creds HEADLAMP_TOKEN_DURATION=8h` against
     # a Deployment still at 24h hands the operator an 8h token in a 24h cookie, and for the other
@@ -1108,7 +1115,7 @@ _rejected_why() {
       # would discard the one discrimination kubectl cannot make.
       printf 'the token has NOT expired (valid until %s), so the Supervisor rejected a LIVE token — this is a ROTATED or REVOKED credential, not an expiry. Re-authenticating will NOT help, and vCenter SSO locks out PERMANENTLY after 3 failures: ask whoever owns the lab for a current credential.' "${_e#VALID }" ;;
     *)
-      printf 'the Supervisor REJECTED this kubeconfig, and its token carries no readable expiry (a client-cert kubeconfig has none), so this is NOT necessarily expiry — it may be a rotated or revoked credential. Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. %s' "$(_renew_how)" ;;
+      printf 'the Supervisor REJECTED this kubeconfig, and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this is NOT necessarily expiry — it may be a rotated or revoked credential. Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. %s' "$(_renew_how --no-command)" ;;
   esac
 }
 
@@ -1134,8 +1141,12 @@ _kube_classify() {
     # MEASURED 2026-09-07: with VKS_AUTH_METHOD=kubeconfig that arm (30-vks-login.sh:42-45) is a
     # [ -s ] test on the GUEST kubeconfig plus `kubectl cluster-info`; it never touches the
     # Supervisor. docs/scenario-1.md:616-626 already said so and this file had not heard.
-    # 🔴 IT DELIBERATELY NAMES NO SSO COMMAND. The obvious remedy — VKS_AUTH_METHOD=vcf make
-    # vks-login — performs a vSphere SSO BIND (30-vks-login.sh:397). Today's message costs ZERO
+    # 🔴 IT NAMES THE SSO COMMAND ON EXACTLY ONE ARM: EXPIRED, where the cause is a FACT read from
+    # the token's own `exp`. Every other arm calls `_renew_how --no-command`. The obvious remedy —
+    # VKS_AUTH_METHOD=vcf make vks-login — performs a vSphere SSO BIND (30-vks-login.sh:397), and
+    # vCenter locks out PERMANENTLY after 3 failures, so it must never be prescribed for a state
+    # this report cannot decide. (This comment said "DELIBERATELY NAMES NO SSO COMMAND" and was
+    # falsified by the commit that added the EXPIRED arm; a round caught it.) The message costs ZERO
     # attempts; prescribing that one costs >=1 PER INVOCATION of a report people re-run, and this
     # arm cannot tell "token expired, password fine" from "password rotated" (30-vks-login.sh:582-585
     # says so), so on the second it burns an attempt every time. vCenter locks out PERMANENTLY at 3.
@@ -1917,7 +1928,10 @@ else
                    -n "$VKS_NAMESPACE" get vm -l "cluster.x-k8s.io/cluster-name=${VKS_CLUSTER_NAME:-}" \
                    -o jsonpath='{range .items[*]}{.status.network.primaryIP4}{" "}{end}' \
                    </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
-    if [ "${_ssh_vrc:-1}" -eq 0 ] && [ -z "$(printf '%s' "${_ssh_addr:-}" | tr -d ' \n\t')" ]; then
+    # sed, not tr: bare photon:5.0 has NO tr, and on such a box this substitution would be empty,
+    # making the emptiness test ALWAYS true — a silent wrong branch. (MEASURED: photon:5.0 ships
+    # base64/date/sed/head/cut and no tr; the script that would install it is internet-side only.)
+    if [ "${_ssh_vrc:-1}" -eq 0 ] && [ -z "$(printf '%s' "${_ssh_addr:-}" | sed 's/[[:space:]]//g')" ]; then
       _ssh_scoped=0
       _ssh_addr="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
                      -n "$VKS_NAMESPACE" get vm \
@@ -1925,7 +1939,10 @@ else
                      </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
     fi
     # squeeze the jsonpath separators; an item with no primaryIP4 contributes an empty field.
-    _ssh_addr="$(printf '%s' "${_ssh_addr:-}" | tr -s ' \n\t' ' ' | sed 's/^ *//; s/ *$//')"
+    # sed, not tr — same reason. WORSE here: this is a bare assignment from a pipeline under
+    # `set -euo pipefail`, so a missing tr does not merely blank it, it KILLS the script; and if it
+    # did not, the cell would read "<no node address yet>" for a cluster that just returned three.
+    _ssh_addr="$(printf '%s' "${_ssh_addr:-}" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ *//; s/ *$//')"
     # ⚠️ ONE address in the cell, the rest in the note. MY OWN BUG, caught by an adversary: the
     # jsonpath collects EVERY node's primaryIP4 space-separated, so a 3-node guest cluster puts
     # ~44 chars into a column whose width is a max over all rows -- re-creating the width defect

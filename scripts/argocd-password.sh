@@ -273,8 +273,11 @@ if command -v kubectl >/dev/null 2>&1; then
     _ap_cls="$(classify_kube_failure "$_ap_err" 2>/dev/null || true)"
     log_warn "not waiting: the read did not fail with a NotFound naming argocd-initial-admin-secret,"
     log_warn "so the secret is not merely reconciling (classified: ${_ap_cls:-UNKNOWN})."
-    # ⚠️ NO SSO COMMAND HERE, deliberately — creds.sh records why: the obvious remedy performs a
-    # vSphere SSO bind, and vCenter locks out PERMANENTLY after 3 failures.
+    # ⚠️ THE SSO COMMAND APPEARS ON EXACTLY ONE ARM BELOW: EXPIRED, where the token's own `exp`
+    # makes the cause a FACT. Everywhere else there is deliberately NO command — the obvious remedy
+    # performs a vSphere SSO bind and vCenter locks out PERMANENTLY after 3 failures, so it must
+    # never be prescribed for a state this cannot decide. Keep this arm-for-arm identical to
+    # creds.sh's `_rejected_why`; a round found the two copies DISAGREEING on the undecidable arm.
     if [ "$_ap_cls" = UNAUTHORIZED ]; then
       # The token's own exp claim separates "expired" from "rotated/revoked" — kubectl reports both
       # as Unauthorized. Offline, so it costs none of the THREE vCenter SSO attempts before lockout.
@@ -288,7 +291,7 @@ if command -v kubectl >/dev/null 2>&1; then
           # Rejected while still VALID => rotated/revoked. Re-authenticating cannot help, and
           # guessing costs one of the THREE vCenter SSO attempts before permanent lockout.
           log_warn "the cluster REJECTED this kubeconfig although its token has NOT expired (valid until ${_ap_exp#VALID }) — that is a ROTATED or REVOKED credential, not an expiry. Ask whoever owns the lab; do not re-authenticate blind." ;;
-        *)        log_warn "the cluster REJECTED this kubeconfig and its token carries no readable expiry (a client-cert kubeconfig has none), so this may be a ROTATED credential rather than an expired one — do not re-authenticate blind." ;;
+        *)        log_warn "the cluster REJECTED this kubeconfig and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this may be a ROTATED credential rather than an expired one — do not re-authenticate blind; ask whoever owns the lab." ;;
       esac
     fi
   fi

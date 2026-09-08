@@ -2146,6 +2146,37 @@ kube_is_notfound() {
   grep -qF -- "$token" <<< "$(grep -F 'Error from server (NotFound)' "$errfile" 2>/dev/null)"
 }
 
+# ── jwt_exp_seconds <jwt> — the `exp` claim in SECONDS, or EMPTY. Never guesses. ─────────────────
+# ONE parser, because there were TWO and they diverged: the headlamp decoder in creds.sh kept a
+# greedy `.*` (last match wins), a `[0-9]*` (zero-or-more), and no ceiling, while this one was
+# fixed. Two copies of a parser is the disease; a round found them disagreeing on the same input.
+#
+# ⚠️ `head -1` IS NOT "the top-level claim" — it is the first TEXTUAL match, and a NESTED `exp`
+# can come first. MEASURED: {"aud_claims":{"exp":4102444800},"exp":1000000000} -> the nested
+# FUTURE value, i.e. a DEAD TOKEN REPORTED LIVE. And the order is realistic, not contrived: Go's
+# encoding/json sorts map keys, so `act`/`amr`/`aud`/`azp`/`cnf` (RFC 7800, RFC 8693) all sort
+# BEFORE `exp`. So: MORE THAN ONE `exp` => REFUSE. That is the contract — degrade, never guess.
+#
+# NO `tr` (photon:5.0 has none) and NO python3. `sed s/,/\n/g` is measured working on toybox sed.
+jwt_exp_seconds() {
+  local tok="${1:-}" pay all n
+  case "$tok" in *.*.*) ;; *) return 0 ;; esac
+  pay="${tok#*.}"; pay="${pay%%.*}"
+  pay="${pay//_//}"; pay="${pay//-/+}"            # base64url -> base64, without tr
+  case $(( ${#pay} % 4 )) in 2) pay="${pay}==" ;; 3) pay="${pay}=" ;; esac
+  all="$(printf '%s' "$pay" | base64 -d 2>/dev/null | sed 's/,/\n/g' \
+         | sed -n 's/.*"exp":[[:space:]]*\([0-9]\{1,\}\).*/\1/p')"
+  [ -n "$all" ] || return 0
+  n="$(printf '%s\n' "$all" | grep -c .)"
+  [ "$n" -eq 1 ] || return 0                      # ambiguous -> refuse (see above)
+  # A sanity CEILING, not a width guard. MEASURED: bash `[` errors at NINETEEN digits and `if`
+  # consumes that error as FALSE. It also rejects MILLI/MICRO/NANOsecond epochs, which are
+  # numerically valid and render nonsense (1757000000000000 -> "55679083-07-23"). 11 digits =
+  # year 5138: past any real exp, short of every wrong unit.
+  [ "${#all}" -le 11 ] || return 0
+  printf '%s' "$all"
+}
+
 # ── kube_token_expiry <kubeconfig> — is the bearer token EXPIRED, and WHEN? Offline, free. ───────
 # A Supervisor kubeconfig from `vcf context create` carries a vCenter OIDC JWT with a hard 10h
 # lifetime (MEASURED: iat 03:24 -> exp 13:24). The `exp` claim is readable WITHOUT touching the
@@ -2179,20 +2210,8 @@ kube_token_expiry() {
   pay="${tok#*.}"; pay="${pay%%.*}"
   pay="${pay//_//}"; pay="${pay//-/+}"          # base64url -> base64, WITHOUT tr (see above)
   case $(( ${#pay} % 4 )) in 2) pay="${pay}==" ;; 3) pay="${pay}=" ;; esac
-  # ⚠️ THE COMMA SPLIT IS LOAD-BEARING — do not "simplify" it away again. The payload is ONE line,
-  # so a greedy `.*` selects the LAST `"exp":`, not the first. MEASURED on
-  # {"exp":1000000000,"aud_claims":{"exp":4102444800}} : unsplit -> 4102444800 (VALID), split ->
-  # 1000000000 (EXPIRED). That is a DEAD TOKEN REPORTED LIVE — the exact failure direction
-  # `--minify` was added to remove. `sed s/,/\n/g`, not `tr`, because photon:5.0 has no tr.
-  exp="$(printf '%s' "$pay" | base64 -d 2>/dev/null | sed 's/,/\n/g' \
-         | sed -n 's/.*"exp":[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)"
+  exp="$(jwt_exp_seconds "$tok")"
   [ -n "$exp" ] || { printf 'UNKNOWN'; return 0; }
-  # ⚠️ A SANITY CEILING, not a width guard. MEASURED: bash `[` ERRORS (rc=2) at 19 digits, not 20,
-  # and an `if` consumes that error as FALSE — a test error read as a verdict. A ceiling also
-  # rejects the MILLI/MICRO/NANO-second epochs some issuers emit, which are numerically valid and
-  # produce nonsense: 1757000000000000 rendered `VALID 55679083-07-23T03:33Z` as a stated fact.
-  # 11 digits = year 5138, comfortably past any real `exp` and short of every wrong unit.
-  [ "${#exp}" -le 11 ] || { printf 'UNKNOWN'; return 0; }
   now="$(date -u +%s)"
   if [ "$exp" -lt "$now" ]; then printf 'EXPIRED %s' "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
   else                           printf 'VALID %s'   "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
