@@ -6793,8 +6793,22 @@ strings, and the Flask app sets no session cookie — CONFIRM both before closin
 (`npm update qs` / an override) and re-run the app's tests — no `package.json` change should be
 needed, and if one is, that is a finding. Flask is a direct pin: bump the pin, and note that
 `Dockerfile.builder` bakes the dependency set, so the builder must be rebuilt or the offline build
-serves the old wheel (`io.vks.builder.inputs` stamps the manifests, so `make builder-freshness`
-should notice — verify that it does; a stamp that misses this is worth more than the bump).
+serves the old wheel.
+
+✅ **The stamp is NOT blind — MEASURED 2026-09-07, so this is no longer an open question.**
+`BUILDER_INPUT_MANIFESTS` (`lib/apps.sh:255`) covers `requirements.txt`, `package.json` AND
+`package-lock.json`, and `builder_inputs_hash` moves for both remediations:
+
+| | before | after the bump |
+|---|---|---|
+| pythonwebapp (`Flask==3.1.2` -> `3.1.3`) | `43bd01d78a5573ce` | `037eaa29539fb699` |
+| nodejswebapp (`package-lock.json` edited) | `42b2e63f3a938e82` | `970cd0cb0ef23604` |
+
+Restored byte-exact afterwards. ⚠️ My FIRST attempt at this measurement returned the SHA-256 of the
+EMPTY STRING (`e3b0c442…`) for every case and would have been written up as "the stamp is blind":
+`builder_inputs_hash` calls `app_src`, which needs `lib/os.sh` sourced first, and a `2>/dev/null` in
+the harness hid the failure. The tell was recognising `e3b0c442…` as the empty-string digest. Any
+re-measurement must source `lib/os.sh` before `lib/apps.sh` and must NOT silence stderr.
 
 **Done when:** both bumped, each app's tests green, the builder stamp re-derived, and the alerts
 closed by GitHub rather than dismissed.
