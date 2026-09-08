@@ -472,7 +472,18 @@ else
   # argocd-initial-admin-secret at 19:42:37Z). This printer passes --wait 0 by design, so "absent
   # right now" and "absent for good" are indistinguishable HERE; name the target that can tell them
   # apart rather than inventing a chore.
-  [ "$_have_sink" = 1 ] && argo_pw="<not read — run: make argocd-password (it waits)>"
+  # ...but "it waits" is a DEAD END when the Supervisor token is expired: argocd-password reads the
+  # secret from the SAME Supervisor, so it will fail the same way, and the operator learns that only
+  # after the wait. `_kube_classify` is defined LATER in this file (line ~1091) and so cannot be
+  # called here; `kube_token_expiry` comes from lib/os.sh, is offline, and answers the one question
+  # that decides which of the two sentences is true.
+  if [ "$_have_sink" = 1 ]; then
+    _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
+    case "$_ap_exp" in
+      EXPIRED*) argo_pw="<not read — Supervisor token EXPIRED ${_ap_exp#EXPIRED }; make vks-login VKS_AUTH_METHOD=vcf, then make argocd-password>" ;;
+      *)        argo_pw="<not read — run: make argocd-password (it waits)>" ;;
+    esac
+  fi
 fi
 
 # THE ArgoCD USERNAME WAS HARDCODED TO `admin`, AND THAT IS FALSE FOR A TENANT.
@@ -1055,6 +1066,25 @@ esac
 # (env_publish_all writes BOTH keys, and since B202 F4 it REFUSES to overwrite a robot$ pair).
 # test-creds-show.sh asserts this mechanically — a comment alone is not the control.
 add_row "Harbor (registry)" "$harbor_url" "$harbor_user" "$harbor_pw" "$(_reach_harbor)"
+# ── _rejected_why — say WHEN the token died, not "usually an EXPIRED token" ──────────────────────
+# kubectl reports an expired token and a revoked/rotated credential IDENTICALLY as `Unauthorized`,
+# so the classifier cannot separate them and this used to hedge. The token's own `exp` claim can,
+# offline and without spending one of the THREE vCenter SSO attempts before permanent lockout —
+# which is exactly why the hedge was the right call until kube_token_expiry existed.
+# Naming the renewal is safe ONLY on the EXPIRED branch, where the cause is a fact. Everywhere else
+# it degrades to the hedge rather than guess.
+_rejected_why() {
+  local kc _e
+  kc="$(supervisor_kubeconfig 2>/dev/null || true)"
+  _e="$(kube_token_expiry "$kc" 2>/dev/null || printf 'UNKNOWN')"
+  case "$_e" in
+    EXPIRED*)
+      printf 'the Supervisor token EXPIRED at %s. Renew it: make vks-login VKS_AUTH_METHOD=vcf — the AUTH_METHOD is required because scenario-1 Step 6 leaves .env on kubeconfig, and a bare make vks-login then renews the GUEST kubeconfig instead of this one (docs/scenario-1.md, "3. Log in to the Supervisor").' "${_e#EXPIRED }" ;;
+    *)
+      printf 'the Supervisor REJECTED this kubeconfig, and its token carries no readable expiry, so this is NOT necessarily expiry — it may be a rotated or revoked credential. Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. The renewal for the vcf method is: make vks-login VKS_AUTH_METHOD=vcf (docs/scenario-1.md, "3. Log in to the Supervisor").' ;;
+  esac
+}
+
 # ── _kube_classify <errfile> <prefix> — ONE mapping of a kube failure class to (token, sentence) ──
 # BOTH call sites in the SSH probe go through this. The first version had two: a full case at the
 # listing site and a THREE-ARM case at the read site, whose `*)` swallowed five real classes. The
@@ -1083,7 +1113,7 @@ _kube_classify() {
     # arm cannot tell "token expired, password fine" from "password rotated" (30-vks-login.sh:582-585
     # says so), so on the second it burns an attempt every time. vCenter locks out PERMANENTLY at 3.
     # The NEGATIVE below is decidable and free, and it is the half that actually unblocks the reader.
-    UNAUTHORIZED)        _kube_tok="<auth failed>";   _kube_state="${_p} — the Supervisor REJECTED this kubeconfig (usually an EXPIRED token). Note a bare 'make vks-login' renews the GUEST kubeconfig, NOT this one; docs/scenario-1.md (Supervisor token) has the renewal for your auth method." ;;
+    UNAUTHORIZED)        _kube_tok="<auth failed>";   _kube_state="${_p} — $(_rejected_why)" ;;
     STALE_CA)            _kube_tok="<stale CA>";      _kube_state="${_p} — the Supervisor answered but its CA does not verify (kubeconfig from a destroyed lab?)" ;;
     UNREACHABLE)         _kube_tok="<unreachable>";   _kube_state="${_p} — the Supervisor is unreachable from here" ;;
     PLAINTEXT)           _kube_tok="<plaintext>";     _kube_state="${_p} — the Supervisor endpoint answered PLAINTEXT where TLS was expected" ;;
@@ -1964,6 +1994,19 @@ while IFS=$'\t' read -r c1 c2 c3 c4; do
 done <<EOF
 $_lab_rows
 EOF
+
+# ── the note the SSH row's "see note" marker CITES ────────────────────────────────────────────
+# MEASURED 2026-09-08 on the live lab: the row rendered `192.168.101.63 (+2 more — see note)` and
+# NOTHING in the 55-line output explained it — a citation resolving to nothing, which line 1461
+# already calls "worse than no marker at all, because it reads as sourced". The existing emitter at
+# ~1448 scans `$rows` (the SERVICES table) and is structurally blind to this one, which lives in
+# `$_lab_rows`. Gated on the marker being PRESENT so cell and note cannot drift apart.
+if printf '%s' "${_lab_rows:-}" | grep -q -- 'more — see note'; then
+  printf '\n  note: every guest node takes the SAME user and password; the row shows the first.\n'
+  if [ -n "${_ssh_addr:-}" ]; then
+    printf '        All node addresses: %s\n' "$_ssh_addr"
+  fi
+fi
 
 # ⚠️ SCOPED TO THE vCenter ROW, AND STATED ABOUT THE DOCUMENTS — NOT THE READER (B536).
 # A whole-table condition would re-import the three-meanings problem this note exists to remove:

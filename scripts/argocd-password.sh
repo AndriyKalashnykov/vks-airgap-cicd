@@ -276,7 +276,13 @@ if command -v kubectl >/dev/null 2>&1; then
     # ⚠️ NO SSO COMMAND HERE, deliberately — creds.sh records why: the obvious remedy performs a
     # vSphere SSO bind, and vCenter locks out PERMANENTLY after 3 failures.
     if [ "$_ap_cls" = UNAUTHORIZED ]; then
-      log_warn "the cluster REJECTED this kubeconfig — see docs/scenario-1.md (Supervisor token)."
+      # The token's own exp claim separates "expired" from "rotated/revoked" — kubectl reports both
+      # as Unauthorized. Offline, so it costs none of the THREE vCenter SSO attempts before lockout.
+      _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
+      case "$_ap_exp" in
+        EXPIRED*) log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — renew it: make vks-login VKS_AUTH_METHOD=vcf (a bare 'make vks-login' renews the GUEST kubeconfig; scenario-1 Step 6 leaves .env on 'kubeconfig')." ;;
+        *)        log_warn "the cluster REJECTED this kubeconfig and its token carries no readable expiry, so this may be a ROTATED credential rather than an expired one — do not re-authenticate blind." ;;
+      esac
     fi
   fi
   if [ "$_wait" -gt 0 ] && [ -z "${ARGOCD_ADMIN_PASSWORD:-}" ] && _should_wait "$_ap_err"; then

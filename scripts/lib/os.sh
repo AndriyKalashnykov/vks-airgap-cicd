@@ -2132,6 +2132,37 @@ registry_hostport() {
 #
 # The token argument is what makes it specific: pass the resource the caller asked for, so a
 # NotFound about something ELSE in the same buffer cannot answer for it.
+# ── kube_token_expiry <kubeconfig> — is the bearer token EXPIRED, and WHEN? Offline, free. ───────
+# A Supervisor kubeconfig from `vcf context create` carries a vCenter OIDC JWT with a hard 10h
+# lifetime (MEASURED: iat 03:24 -> exp 13:24). The `exp` claim is readable WITHOUT touching the
+# network and WITHOUT spending a vCenter SSO attempt, which is what makes it usable here: every
+# other way of learning "is this token dead" costs a bind, and vCenter locks out PERMANENTLY at 3.
+#
+# It is what lets a caller say WHEN it expired instead of "usually an EXPIRED token", and it is the
+# ONLY thing that separates "expired" from "credential rotated/revoked" — kubectl reports both as
+# `Unauthorized`, so classify_kube_failure cannot tell them apart and must not be asked to.
+#
+# ⚠️ NO python3. It is absent from a bare photon:5.0 image and this runs on the air-gap box too;
+# base64/date/sed/tr are the floor 00-install-prereqs.sh already guarantees.
+# Degrades to UNKNOWN — never a guess — for a non-JWT token, a client-cert kubeconfig, an absent
+# file, or a payload with no exp claim.
+kube_token_expiry() {
+  local kc="${1:-}" tok pay exp now
+  [ -n "$kc" ] && [ -s "$kc" ] || { printf 'UNKNOWN'; return 0; }
+  tok="$(kubectl --kubeconfig "$kc" config view --raw -o jsonpath='{.users[0].user.token}' 2>/dev/null || true)"
+  case "$tok" in *.*.*) ;; *) printf 'UNKNOWN'; return 0 ;; esac
+  pay="${tok#*.}"; pay="${pay%%.*}"
+  pay="$(printf '%s' "$pay" | tr '_-' '/+')"
+  case $(( ${#pay} % 4 )) in 2) pay="${pay}==" ;; 3) pay="${pay}=" ;; esac
+  exp="$(printf '%s' "$pay" | base64 -d 2>/dev/null | tr ',' '\n' \
+         | sed -n 's/.*"exp":[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)"
+  [ -n "$exp" ] || { printf 'UNKNOWN'; return 0; }
+  now="$(date -u +%s)"
+  if [ "$exp" -lt "$now" ]; then printf 'EXPIRED %s' "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
+  else                           printf 'VALID %s'   "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
+  fi
+}
+
 kube_is_notfound() {
   local errfile="${1:-/dev/null}" token="${2:-}"
   [ -r "$errfile" ] || return 1
