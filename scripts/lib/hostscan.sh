@@ -32,7 +32,14 @@ __VKS_HOSTSCAN_SH_LOADED=1
 #     the live lab. Mirroring a Windows PowerShell image to satisfy a flag no node can execute
 #     would add hundreds of MB to an air-gap bundle for nothing.
 #     ⚠️ IF A WINDOWS NODE EVER JOINS, THIS ENTRY IS WRONG and the image must be mirrored.
-HOSTSCAN_ALLOW_DEFAULT='mcr\.microsoft\.com'
+#
+# ⚠️ THERE IS DELIBERATELY NO ENV OVERRIDE. An earlier draft had `${HOSTSCAN_ALLOW:-$DEFAULT}`, and
+# it was wrong twice: (a) it REPLACED the default rather than appending, so setting it to add one
+# host silently dropped mcr.microsoft.com; and (b) far worse, it let anyone silence this gate from
+# the environment with NO RECORDED REASON -- the "downgrade a failing contract to advisory to get
+# green" move this repo treats as the cardinal fake-green. Adding a host here must cost an edit, a
+# reason and a measurement, because that is what the entry IS.
+HOSTSCAN_ALLOW='mcr\.microsoft\.com'
 
 hostscan_unhandled() {
   local mdir="${1:?hostscan_unhandled: manifest dir required}"
@@ -50,7 +57,7 @@ hostscan_unhandled() {
     | grep -E ':[A-Za-z0-9._-]+$|@sha256:[a-f0-9]+$' \
     | sed -E 's#^([^/]+)/.*#\1|&#' \
     | grep -vE "^(${hosts_re})\|" \
-    | grep -vE "^(${HOSTSCAN_ALLOW:-$HOSTSCAN_ALLOW_DEFAULT})\|" \
+    | grep -vE "^(${HOSTSCAN_ALLOW})\|" \
     | awk -F'|' '{ n[$1]++; if (!(($1) in ex)) ex[$1]=$2 } END { for (h in n) printf "%s\t%s\t%s\n", h, n[h], ex[h] }' \
     | sort || true
   # ⚠️ THE `|| true` IS LOAD-BEARING, AND ITS ABSENCE BREAKS THE HAPPY PATH, NOT THE SAD ONE.
