@@ -359,7 +359,12 @@ _renew_how() { supervisor_renew_how "$@"; }
 
 # newline-joined -> space-joined, without `tr` (photon:5.0 has none). The consumer is the
 # "none is <cluster>-ssh-password: <LIST>" message; an empty LIST there names no options at all.
-tr_free_join() { local _l _o=""; while IFS= read -r _l || [ -n "${_l:-}" ]; do [ -n "$_l" ] || continue; _o="${_o}${_l} "; done; printf '%s' "${_o% }"; }
+# ⚠️ KEEPS THE TRAILING SPACE. The format it feeds is `...: %s— set VKS_CLUSTER_NAME...`, so the
+# old `tr '\n' ' '` supplied a trailing space that ran the last name into the em-dash without one.
+# A `sed 's/$/ /'` was tried to restore it and DOUBLED every internal separator — and made the
+# blank-line skip below dead, because a blank line became " ", which is non-empty. Emit the
+# trailing space here instead: one join, one separator, blank lines still skipped.
+tr_free_join() { local _l _o=""; while IFS= read -r _l || [ -n "${_l:-}" ]; do [ -n "$_l" ] || continue; _o="${_o}${_l} "; done; printf '%s' "$_o"; }
 
 _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per flow
   # ⚠️ "check the state overlay" IS THE FOURTH FALSE CLAIM, and the most dangerous of them: under a
@@ -1104,7 +1109,9 @@ _rejected_why() {
       # Supervisor rejected a token that has NOT expired. Sending this to the hedge below would
       # assert "carries no readable expiry" about an expiry we just read — a false sentence — and
       # would discard the one discrimination kubectl cannot make.
-      printf 'the token has NOT expired (valid until %s), so the Supervisor rejected a LIVE token — this is a ROTATED or REVOKED credential, not an expiry. Re-authenticating will NOT help, and vCenter SSO locks out PERMANENTLY after 3 failures: ask whoever owns the lab for a current credential.' "${_e#VALID }" ;;
+      # Delegates like the others: a hand-written arm is invisible to the structural control (it
+      # has no call to count) and is how "both consumers share ONE sentence" became false on 1 of 3.
+      printf 'the token has NOT expired (valid until %s), so the Supervisor rejected a LIVE token — this is a ROTATED or REVOKED credential, not an expiry. Re-authenticating will NOT help. %s' "${_e#VALID }" "$(_renew_how --no-command)" ;;
     *)
       printf 'the Supervisor REJECTED this kubeconfig, and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this is NOT necessarily expiry — it may be a rotated or revoked credential. Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. %s' "$(_renew_how --no-command)" ;;
   esac
@@ -1864,7 +1871,7 @@ else
         _ssh_tok="<ambiguous>"
         _ssh_state="$(printf '%s candidates in %s and none is %s-ssh-password: %s— set VKS_CLUSTER_NAME in .env to one of these' \
                         "$_ssh_nc" "${VKS_NAMESPACE}" "${VKS_CLUSTER_NAME:-<unset>}" \
-                        "$(printf '%s' "$_ssh_cands" | sed 's/$/ /' | tr_free_join)")"
+                        "$(printf '%s' "$_ssh_cands" | tr_free_join)")"
       fi
       # GUARD ON "WE HAVE A NAME", NOT ON THE COUNT (adversary CRITICAL, 2026-09-05).
       # It read `[ -z "$_ssh_sec" ] && [ "$_ssh_nc" -eq 0 ]`, so the AMBIGUOUS case (>=2 candidates,

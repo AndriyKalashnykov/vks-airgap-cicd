@@ -65,6 +65,19 @@ for _n in nest_a nest_b nest_c; do
   fi
 done
 
+# ── 2a. ...and the guard must be reachable WITHOUT the ceiling standing in for it ───────────────
+# MEASURED: deleting the newline `case` left the suite 22/22 GREEN, because all three fixtures above
+# use 10-digit epochs, so the JOINED value is 21 chars and the `-le 11` CEILING catches it instead —
+# the guard never fires in any test. With small epochs the ceiling cannot mask it, and its absence
+# renders `VALID ?` for a token whose exp is 1970: a DEAD token reported live, which is exactly what
+# this file's closing banner promises cannot happen.
+_kc "$_T/amb_small" 'u:{"exp":1,"a":{"exp":2}}'
+if [ "$(kube_token_expiry "$_T/amb_small")" = UNKNOWN ]; then
+  ok  "two SMALL exp claims: the ambiguity guard fires on its own, not via the ceiling"
+else
+  bad "two SMALL exp claims: got a verdict — the newline guard is gone and the ceiling cannot mask it"
+fi
+
 # ── 2b. base64url really is decoded ─────────────────────────────────────────────────────────────
 # MEASURED: deleting the ${pay//_//} / ${pay//-/+} substitutions left the suite 17/17 GREEN,
 # because no other payload's base64 contains + or /. This one does (sub is "?\\>"), so the case

@@ -1363,23 +1363,62 @@ else
     *)                         bad "SSO gate: the undecidable remedy dropped 'locks out PERMANENTLY' — the clause that is the whole reason the command is withheld" ;;
   esac
 
-  # STRUCTURAL, because the behavioural pair above cannot see a CALL SITE that forgot the flag:
-  # inside `_rejected_why`, every arm EXCEPT `EXPIRED*` must pass --no-command.
-  _rw="$(sed -n '/^_rejected_why() {/,/^}/p' "${_CREDS_REPO}/scripts/creds.sh")"
-  _bare=0
-  while IFS= read -r _l; do
-    case "$_l" in
-      *EXPIRED\*\)*) continue ;;
-      *'_renew_how)'*|*'_renew_how "'*) _bare=$((_bare + 1)) ;;
-    esac
-  done <<INNER
-$(printf '%s\n' "$_rw" | grep -n '_renew_how' | grep -v 'EXPIRED' || true)
+  # STRUCTURAL, because the behavioural pair above cannot see a CALL SITE that forgot the flag.
+  #
+  # ⚠️ BOTH CONSUMERS. The first version read `_rejected_why` in creds.sh ONLY — and the commit that
+  # wrote it had just created THREE more arms in argocd-password.sh. MEASURED: dropping
+  # --no-command there left the suite BYTE-IDENTICALLY green, i.e. the exact defect this control
+  # exists to catch, in the file that same commit changed. 4 arms must withhold the command;
+  # creds.sh holds 1 of them.
+  #
+  # ⚠️ IT TRACKS THE CASE LABEL, NOT PROSE. The first version decided which arm a line belonged to
+  # with `grep -v EXPIRED` — a substring test on the MESSAGE. It failed both ways, measured:
+  #   false GREEN: reword the `*)` arm to "...rather than an EXPIRED one" (wording already used in
+  #                argocd-password.sh) and drop the flag -> 4/4 ok, command restored to the
+  #                undecidable arm.
+  #   false RED:   wrap the correct EXPIRED arm across two lines -> "1 non-EXPIRED arm(s)", naming
+  #                the WRONG arm, and its cheapest remedy (add --no-command to EXPIRED) silently
+  #                re-opens the defect lib/os.sh records as closed.
+  _bare=0; _blocks=0
+  for _spec in "creds.sh:/^_rejected_why() {/,/^}/" "argocd-password.sh:/case \"\$_ap_exp\" in/,/esac/"; do
+    _f="${_spec%%:*}"; _range="${_spec#*:}"
+    _blk="$(sed -n "${_range}p" "${_CREDS_REPO}/scripts/${_f}" 2>/dev/null || true)"
+    # VACUITY GUARD, per block. Without it, renaming the function makes this control silently
+    # measure NOTHING and report ok — and note the asymmetry: the B548 follower's empty extract
+    # fires a false RED (safe), this one's fires a false GREEN (not).
+    if [ -z "$_blk" ]; then
+      bad "SSO gate: the arm block for ${_f} came back EMPTY — this control is measuring NOTHING"
+      continue
+    fi
+    _blocks=$((_blocks + 1))
+    _arm=""
+    while IFS= read -r _l; do
+      _t="${_l#"${_l%%[![:space:]]*}"}"        # strip leading whitespace
+      case "$_t" in
+        EXPIRED\*\)*) _arm=EXPIRED ;;
+        VALID\*\)*)   _arm=VALID ;;
+        \*\)*)        _arm=OTHER ;;
+      esac
+      case "$_l" in
+        *renew_how*)
+          case "$_l" in
+            *--no-command*) ;;
+            *"renew_how() {"*|*"renew_how()"*) ;;   # a DEFINITION, not a call
+            *) [ "$_arm" = EXPIRED ] || _bare=$((_bare + 1)) ;;
+          esac ;;
+      esac
+    done <<INNER
+$_blk
 INNER
-  if [ "$_bare" -eq 0 ]; then
-    ok "SSO gate: no non-EXPIRED arm of _rejected_why calls the remedy without --no-command"
+  done
+  if [ "$_blocks" -ne 2 ]; then
+    bad "SSO gate: read $_blocks of 2 arm blocks — a consumer moved and this control cannot see it"
+  elif [ "$_bare" -eq 0 ]; then
+    ok "SSO gate: across BOTH consumers, no non-EXPIRED arm names the remedy without --no-command"
   else
-    bad "SSO gate: $_bare non-EXPIRED arm(s) call _renew_how WITHOUT --no-command"
+    bad "SSO gate: $_bare non-EXPIRED arm(s) call the remedy WITHOUT --no-command — that prescribes an SSO bind for a cause the report cannot decide"
   fi
+
 fi
 
 if [ "$fail" != 0 ]; then
