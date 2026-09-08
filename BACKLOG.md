@@ -6774,3 +6774,27 @@ name. Proven live both ways — same cert, same digest, address the only variabl
 lab; IPv6 endpoints are unparsed by `${hostport%%:*}` and untested (pre-existing); and
 `make env-validate` has **zero** ArgoCD anchor coverage (`grep -c ARGOCD_CA_FILE scripts/02-env.sh`
 -> 0) where Harbor has a graded arm — filed as its own row.
+
+## B554 — 🟡 three Dependabot alerts on `main`, in the demo apps, surfaced by a push
+
+Reported by GitHub on push 2026-09-07, read via `gh api .../dependabot/alerts`:
+
+| sev | package | shape | where |
+|---|---|---|---|
+| medium | `npm/qs` | DoS via attacker-controlled `isBuffer` | TRANSITIVE — absent from `package.json`, present in `apps/nodejs/nodejswebapp/package-lock.json` |
+| medium | `npm/qs` | array-limit bypass via bracket-key comma parsing | same |
+| low | `pip/flask` | session omits `Vary: Cookie` | DIRECT pin — `apps/python/pythonwebapp/requirements.txt:4` `Flask==3.1.2` |
+
+**Not urgent, and say why rather than implying it.** These are demo apps behind an ingress on a lab
+network; neither alert describes a path this repo exercises (nothing parses attacker-controlled query
+strings, and the Flask app sets no session cookie — CONFIRM both before closing, do not assume).
+
+**Two different remediations, so do not batch them.** `qs` is transitive: bump via the lockfile
+(`npm update qs` / an override) and re-run the app's tests — no `package.json` change should be
+needed, and if one is, that is a finding. Flask is a direct pin: bump the pin, and note that
+`Dockerfile.builder` bakes the dependency set, so the builder must be rebuilt or the offline build
+serves the old wheel (`io.vks.builder.inputs` stamps the manifests, so `make builder-freshness`
+should notice — verify that it does; a stamp that misses this is worth more than the bump).
+
+**Done when:** both bumped, each app's tests green, the builder stamp re-derived, and the alerts
+closed by GitHub rather than dismissed.
