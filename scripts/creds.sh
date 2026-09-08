@@ -351,20 +351,19 @@ if [ "$_have_sink" = 1 ] && [ "${_VKS_STATE_SOURCED-1}" = "0" ]; then _sink_refu
 # overlay. Telling a KinD operator to go and set a password is inventing a chore for them, and it is the
 # same defect as the old ArgoCD note. Only a REAL LAB must supply one (there, Harbor/ArgoCD are given to
 # you, not created by us).
-# ── _renew_how — the remedy, SCOPED TO THE AUTH METHOD. There is not one answer. ────────────────
-# `vcf`/`vsphere`: WE mint the Supervisor kubeconfig, so there is a command.
-# `kubeconfig`   : the file was HANDED to us (scenario-2.md:410 puts the DEFAULT tenant here), so
-#                  there is nothing to run — the honest answer is "ask for a fresh one". Printing
-#                  the vcf command to that reader is a dead end dressed as an answer (RULE ZERO-B).
-# Spelling matches docs/scenario-1.md:622 (`VKS_AUTH_METHOD=vcf make vks-login`) so a reader who
-# greps the docs for what we printed finds it. Both forms were MEASURED to reach the recipe env.
+# ── _renew_how — the remedy. NAMES BOTH PATHS; it must never WITHHOLD the command. ──────────────
+# ⚠️ AN EARLIER VERSION BRANCHED ON `VKS_AUTH_METHOD` AND INVERTED THE ANSWER. scenario-1 Step 6
+# writes `kubeconfig` (docs/scenario-1.md:614), so the scenario-1 operator — who DOES have the
+# command, eight lines later at :622 — was told "no command here renews it" and pointed at
+# scenario-2. That withheld the very fix this whole change exists to deliver, and it keyed on the
+# ONE variable already proven not to indicate WHICH kubeconfig is being renewed (that is why the
+# `VKS_AUTH_METHOD=vcf` override is needed at all).
+#
+# So: no discriminator. Both sentences are TRUE for every reader, and the reader knows which one is
+# theirs — they know whether they minted this or were handed it. A wrong guess costs the command;
+# naming both costs one line. (RULE ZERO-B: the tenant must not be sent to a dead end either.)
 _renew_how() {
-  case "${VKS_AUTH_METHOD:-}" in
-    vcf|vsphere)
-      printf 'Renew it: VKS_AUTH_METHOD=vcf make vks-login — the AUTH_METHOD is required because scenario-1 Step 6 leaves .env on kubeconfig, and a bare make vks-login then renews the GUEST kubeconfig instead of this one (docs/scenario-1.md, "3. Log in to the Supervisor").' ;;
-    *)
-      printf 'This box authenticates with VKS_AUTH_METHOD=%s, i.e. the Supervisor kubeconfig was HANDED to you rather than minted here — so no command here renews it. Ask whoever owns the lab for a current one (docs/scenario-2.md).' "${VKS_AUTH_METHOD:-kubeconfig}" ;;
-  esac
+  printf 'If you minted this kubeconfig here (scenario-1): VKS_AUTH_METHOD=vcf make vks-login — the AUTH_METHOD is required because Step 6 leaves .env on kubeconfig, so a bare make vks-login renews the GUEST kubeconfig instead (docs/scenario-1.md, "3. Log in to the Supervisor"). If it was HANDED to you (scenario-2 tenant): nothing here renews it — ask whoever owns the lab.'
 }
 
 _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per flow
@@ -1003,7 +1002,10 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
     # clamps it. The exp is NOT a secret; only the token is, and that stays masked above.
     _hl_p="${_hl_t#*.}"; _hl_p="${_hl_p%%.*}"
     case $(( ${#_hl_p} % 4 )) in 2) _hl_p="${_hl_p}==" ;; 3) _hl_p="${_hl_p}=" ;; esac
-    _hl_exp="$(printf '%s' "$_hl_p" | tr '_-' '/+' | base64 -d 2>/dev/null \
+    # base64url without `tr` — same reason as lib/os.sh's kube_token_expiry: photon:5.0 has none.
+    # (MEASURED equivalent to `tr '_-' '/+'` on 11/11 payloads incl. leading - and _.)
+    _hl_p="${_hl_p//_//}"; _hl_p="${_hl_p//-/+}"
+    _hl_exp="$(printf '%s' "$_hl_p" | base64 -d 2>/dev/null \
                  | sed -n 's/.*"exp":\([0-9]*\).*/\1/p' | head -1)"
     # ⚠️ WARN WHEN THE COOKIE WILL OUTLIVE THE TOKEN DURATION. `-session-ttl` is a DEPLOY-TIME
     # flag: it cannot track a token minted here. So `make creds HEADLAMP_TOKEN_DURATION=8h` against
@@ -2032,7 +2034,7 @@ EOF
 # branches on (verified in scope: plain if/fi, no subshell), so cell and note cannot drift — and
 # this form also covers the `NOT cluster-scoped` arm, which carries no marker and so could never
 # have matched a text key at all.
-if [ "${_ssh_n:-0}" -gt 1 ]; then
+if [ "${_ssh_vrc:-1}" -eq 0 ] && [ "${_ssh_n:-0}" -gt 1 ]; then
   # ⚠️ THE CLAIM IS SCOPED. The password comes from ONE per-cluster secret, so "same for every
   # node" holds only where the addresses were filtered to THIS cluster. In the un-scoped arm the
   # list can span clusters, and those nodes take a DIFFERENT secret — asserting one password for

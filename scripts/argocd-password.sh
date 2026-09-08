@@ -281,12 +281,9 @@ if command -v kubectl >/dev/null 2>&1; then
       _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
       case "$_ap_exp" in
         EXPIRED*)
-          case "${VKS_AUTH_METHOD:-}" in
-            vcf|vsphere) log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — renew it: VKS_AUTH_METHOD=vcf make vks-login (a bare 'make vks-login' renews the GUEST kubeconfig; scenario-1 Step 6 leaves .env on 'kubeconfig')." ;;
-            # VKS_AUTH_METHOD=kubeconfig is the DEFAULT TENANT (scenario-2.md:410): the file was
-            # handed to them, so no command here renews it. Naming one is a dead end (RULE ZERO-B).
-            *)           log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — this box authenticates with VKS_AUTH_METHOD=${VKS_AUTH_METHOD:-kubeconfig}, so the kubeconfig was handed to you and no command here renews it. Ask whoever owns the lab for a current one." ;;
-          esac ;;
+          # NAMES BOTH PATHS — see creds.sh `_renew_how`. Branching on VKS_AUTH_METHOD inverted the
+          # answer for the scenario-1 operator, who is the one that HAS the command.
+          log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — if you minted it here: VKS_AUTH_METHOD=vcf make vks-login (a bare 'make vks-login' renews the GUEST kubeconfig; scenario-1 Step 6 leaves .env on 'kubeconfig'). If it was handed to you, ask whoever owns the lab." ;;
         VALID*)
           # Rejected while still VALID => rotated/revoked. Re-authenticating cannot help, and
           # guessing costs one of the THREE vCenter SSO attempts before permanent lockout.

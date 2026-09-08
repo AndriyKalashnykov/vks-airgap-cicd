@@ -2179,12 +2179,20 @@ kube_token_expiry() {
   pay="${tok#*.}"; pay="${pay%%.*}"
   pay="${pay//_//}"; pay="${pay//-/+}"          # base64url -> base64, WITHOUT tr (see above)
   case $(( ${#pay} % 4 )) in 2) pay="${pay}==" ;; 3) pay="${pay}=" ;; esac
-  exp="$(printf '%s' "$pay" | base64 -d 2>/dev/null \
+  # ⚠️ THE COMMA SPLIT IS LOAD-BEARING — do not "simplify" it away again. The payload is ONE line,
+  # so a greedy `.*` selects the LAST `"exp":`, not the first. MEASURED on
+  # {"exp":1000000000,"aud_claims":{"exp":4102444800}} : unsplit -> 4102444800 (VALID), split ->
+  # 1000000000 (EXPIRED). That is a DEAD TOKEN REPORTED LIVE — the exact failure direction
+  # `--minify` was added to remove. `sed s/,/\n/g`, not `tr`, because photon:5.0 has no tr.
+  exp="$(printf '%s' "$pay" | base64 -d 2>/dev/null | sed 's/,/\n/g' \
          | sed -n 's/.*"exp":[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)"
   [ -n "$exp" ] || { printf 'UNKNOWN'; return 0; }
-  # An `exp` wider than the shell's integer makes `[` ERROR (rc=2), and an `if` consumes that as
-  # FALSE — i.e. a test error silently read as a verdict. Refuse to judge instead of guessing.
-  case "$exp" in ????????????????????*) printf 'UNKNOWN'; return 0 ;; esac
+  # ⚠️ A SANITY CEILING, not a width guard. MEASURED: bash `[` ERRORS (rc=2) at 19 digits, not 20,
+  # and an `if` consumes that error as FALSE — a test error read as a verdict. A ceiling also
+  # rejects the MILLI/MICRO/NANO-second epochs some issuers emit, which are numerically valid and
+  # produce nonsense: 1757000000000000 rendered `VALID 55679083-07-23T03:33Z` as a stated fact.
+  # 11 digits = year 5138, comfortably past any real `exp` and short of every wrong unit.
+  [ "${#exp}" -le 11 ] || { printf 'UNKNOWN'; return 0; }
   now="$(date -u +%s)"
   if [ "$exp" -lt "$now" ]; then printf 'EXPIRED %s' "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
   else                           printf 'VALID %s'   "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
