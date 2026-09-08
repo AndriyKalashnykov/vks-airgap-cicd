@@ -29,6 +29,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # got 5) and by its `curl-ran` marker, not by reading the diff.
 # shellcheck source=scripts/lib/argocd.sh
 . "${SCRIPT_DIR}/lib/argocd.sh"
+# ca_addr_kind: ONE address classifier. lib/tls.sh has an idempotent source guard and no side
+# effects at source time; a hand-typed copy here disagreed with it on host:port -- measured (B552).
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 load_env
 require_cmd kubectl
 
@@ -256,8 +260,14 @@ ip="$st"
 # There is NO state_get() in lib/state.sh -- the sink is SOURCED by load_env, so the marker is
 # already an environment variable by the time we get here. Calling a non-existent helper would have
 # returned empty under `|| true` and silently pinned this guard shut, which is the bug it is fixing.
-if ! is_placeholder "${ARGOCD_SERVER:-}" && [ "${ARGOCD_SERVER}" != "$ip" ] \
-   && [ "${ARGOCD_SERVER_SOURCE:-}" != discovered ]; then
+# ⚠️ ONE PREDICATE, CALLED ONCE. `argocd_effective_addr` (lib/argocd.sh) IS this decision -- not a
+# second copy of it -- and the branch below keys on its RESULT because `eff == ip` is biconditional
+# with "we write" -- 50 states over the SHIPPED is_placeholder (lib/os.sh), 0 violations, and true
+# by construction since the leave arm requires `server != ip`, so its result can never equal ip. An adversary round REFUTED the obvious alternative of keeping this `if` and
+# adding the function beside it: deleting one clause from the inline copy left .env holding the
+# stale value while the report claimed the new one, and the function-based test stayed GREEN.
+_eff="$(argocd_effective_addr "${ARGOCD_SERVER:-}" "${ARGOCD_SERVER_SOURCE:-}" "$ip")"
+if [ "$_eff" != "$ip" ]; then
   log_warn "ARGOCD_SERVER is already set to '${ARGOCD_SERVER}' - NOT overwriting it with the discovered ${ip}."
   log_warn "  Nothing here wrote that value, so it is treated as one you were GRANTED and is left alone."
   log_warn "  If ${ip} is the one you want, change it in .env yourself."
@@ -279,9 +289,54 @@ else
 fi
 
 echo
-echo "  ArgoCD:   https://${ARGOCD_SERVER:-$ip}"
+echo "  ArgoCD:   https://${_eff}"
 echo "  Log in:   argocd login \"\$ARGOCD_SERVER\" --username admin --insecure"
 echo "  Password: make argocd-password"
+# SAY WHY THE LOGIN LINE CARRIES --insecure. This script has just written an IP, and the operator --
+# who is the one typing --insecure -- had no way to know that from the output. The reason lived only
+# in a code comment above. (B552)
+#
+# ⚠️ CLASSIFY THE EFFECTIVE ADDRESS -- NOT $ip, AND NOT ${ARGOCD_SERVER:-$ip}. Both are wrong, in
+# opposite directions, and both shipped:
+#   ${ARGOCD_SERVER:-$ip} -- `set_env_var` writes the FILE and does not export, so ARGOCD_SERVER in
+#     this process is the PRE-EXISTING value. With .env.example's placeholder uncommented it
+#     contains letters, so the classifier read "name" and stayed SILENT in the one state where an IP
+#     had just been written.
+#   $ip -- fires unconditionally. MEASURED across all reachable states: on the LEAVE-ALONE branch,
+#     where the operator holds a GRANTED NAME, it printed "That address is an IP" about a name --
+#     and that is the state the remedy's own step 3 produces, so following the advice re-triggered
+#     it. The deictic "That address" binds to the line above, which prints the effective address.
+# $_eff is what the operator will actually use, which is what both lines are about.
+#
+# ⚠️ ONE CLASSIFIER, from lib/tls.sh. Its header records that two hand-typed copies of this same
+# predicate once disagreed, "and the consequence of disagreement is a FALSE REFUSE". A third copy
+# here (`*[a-zA-Z]*`) disagreed with it on `10.0.0.1:8443` and `10-0-0-1` -- measured.
+if [ "$(ca_addr_kind "$_eff")" = ip ]; then
+  echo "  ⚠️  That address is an IP. An IP can only be verified if the certificate carries an IP SAN,"
+  echo "      and argocd-server's DEFAULT self-signed certificate carries DNS SANs only — which is why"
+  echo "      the login line above says --insecure. If your platform team issued a cert WITH an IP SAN,"
+  echo "      this does not apply to you; 'make fetch-argocd-ca' will tell you either way."
+  echo "      To verify instead of bypassing, in THIS order:"
+  echo "        1. choose the name the certificate carries (your platform team's, or argocd-server)"
+  echo "        2. set ARGOCD_HOST to it, then: make show-dns-records   # it prints that name's A record"
+  echo "           (with an IP it prints 'NO A record applies' — the name has to come first)"
+  echo "        3. publish the record, set ARGOCD_SERVER to the same name in .env, and REMOVE"
+  echo "           ARGOCD_SERVER_SOURCE=discovered from $(state_file) — otherwise the next run of this"
+  echo "           script treats the name as ours to correct and overwrites it back to ${ip}"
+  echo "        4. make fetch-argocd-ca    # dials ARGOCD_SERVER, so it needs step 3 done first"
+else
+  # ⚠️ DO NOT SHIP SILENCE AS "FIXED". Keying the block on IP-ness is right; leaving the NAME case
+  # with NO explanation is not, because the login line above says --insecure UNCONDITIONALLY. An
+  # adversary round caught the first version doing exactly that: the false sentence was gone and the
+  # operator was left with an unexplained --insecure, which is better than a lie and is not the job.
+  # Every clause here is checkable: the cert is self-signed (lab-verified, docs/vks-services/argocd.md);
+  # a SAN match is necessary but not sufficient for verification; and fetch-ca.sh:270 selects `DNS:`
+  # for a name exactly as it selects `IP Address:` for an IP, so it genuinely answers for this case.
+  echo "  ⚠️  That address is a NAME, so --insecure above is about the ISSUER, not the address:"
+  echo "      argocd-server's certificate is self-signed, and a matching SAN is necessary but not"
+  echo "      sufficient — this machine must also trust the CA that issued it."
+  echo "        make fetch-argocd-ca    # fetches it and says whether it verifies for this address"
+fi
 echo
 # ⚠️ DO NOT tell the reader to override this with an env PREFIX. .env.example:345 records the
 # measured trap: once this value is in .env, `ARGOCD_SERVER=1.2.3.4 make <target>` is IGNORED,

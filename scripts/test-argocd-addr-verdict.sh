@@ -215,5 +215,122 @@ else
   bad "the bare-IPv6 arm is GONE — 'fd00::1' parses to host=fd00:, port=1"
 fi
 
+# B552: the --insecure disclosure in 09-argocd-address.sh.
+# It prints WHY the login line above it says --insecure. Three things about it are load-bearing and
+# each was wrong in the first version, caught by an adversary round:
+#   1. it must classify $ip -- what was RESOLVED and WRITTEN -- not ${ARGOCD_SERVER:-$ip}.
+#      set_env_var writes the FILE and does not export, so ARGOCD_SERVER in-process is the
+#      PRE-EXISTING value. With .env.example's placeholder uncommented that value contains letters,
+#      so classifying it read "name" and stayed SILENT in exactly the state where an IP was written.
+#   2. it must use ca_addr_kind (lib/tls.sh), whose own header records that two hand-typed copies of
+#      this predicate once disagreed. A third copy here disagreed on host:port -- measured below.
+#   3. lib/tls.sh must actually be SOURCED, or the call is an unbound command at runtime.
+# STRUCTURAL + UNIT, NOT A RENDER: driving 09 far enough to emit the block needs a live Supervisor.
+# These pin the decision and its inputs, not the printed text.
+# ${SCRIPT_DIR}, not a relative path: run from any other cwd the relative form yields an EMPTY
+# _body and both greps below fail for the wrong reason.
+_body="$(sed '/^[[:space:]]*#/d' "${SCRIPT_DIR}/09-argocd-address.sh")"
+
+# ── BEHAVIOURAL, over the SHIPPED function ──────────────────────────────────────────────────────
+# This replaced a `grep -q 'ca_addr_kind "$ip"'`, which an adversary measured as satisfiable by a
+# TRAILING comment: `sed '/^[[:space:]]*#/d'` strips FULL-LINE comments only, so
+# `echo hi   # ca_addr_kind "$ip" ... lib/tls.sh` satisfied BOTH structural greps. That polarity is
+# what makes it dangerous here and harmless elsewhere in this repo: a hit produces `ok`, so a
+# comment yields a FALSE GREEN. (Where a hit produces `bad` -- a forbidden pattern -- the same
+# blindness is a false RED, which fails closed.)
+# shellcheck source=scripts/lib/argocd.sh
+. "${SCRIPT_DIR}/lib/argocd.sh" 2>/dev/null
+if command -v argocd_effective_addr >/dev/null 2>&1; then
+  ok "argocd_effective_addr is reachable from lib/argocd.sh alone"
+else
+  bad "argocd_effective_addr is not defined -- 09's guard has nothing to call"
+fi
+# ⚠️ POSITIVE CONTROL for the SILENT-INVERSION class. is_placeholder lives ONLY in lib/os.sh, and
+# lib/argocd.sh used to source nothing. With it undefined the shell prints NOTHING and returns 0,
+# and the function answers LEAVE for the unset and placeholder states -- backwards -- while the
+# granted-NAME state accidentally agrees, so a test exercising only that row goes green over it.
+# check-lib-sourcing.sh globs scripts/*.sh (:165) and cannot see a lib->lib dependency.
+# ⚠️ A FRESH `bash -c`, NOT A SUBSHELL. The first version of this case used ( . lib/argocd.sh; ... )
+# and was VACUOUS: a subshell INHERITS the parent's functions, and this file has already pulled in
+# lib/os.sh, so is_placeholder was defined no matter what argocd.sh does. Measured -- deleting the
+# source line from lib/argocd.sh left standalone is_placeholder MISSING and this case still said ok.
+# That is the positive control failing to control, in the very case written for a SILENT inversion.
+# Shell functions are not exported without `export -f`, so a fresh bash sees only what it sources.
+if bash -c '. "$1/lib/argocd.sh" 2>/dev/null; command -v is_placeholder >/dev/null 2>&1' _ "${SCRIPT_DIR}"; then
+  ok "...and it carries is_placeholder with it (lib/os.sh is sourced from lib/argocd.sh)"
+else
+  bad "lib/argocd.sh does not bring is_placeholder -- argocd_effective_addr then INVERTS its answer
+      for the unset and placeholder states, silently, with rc=0"
+fi
+# THE FIVE REACHABLE STATES. Row 5 (a NAME already marked discovered) is the one the disclosure's
+# own remedy produces when the operator does steps 1-2 and skips step 3: the deliberate name is
+# CLOBBERED by the IP. It was missing from the first table and an adversary round supplied it.
+_ip=192.168.101.131; _bad=0
+while IFS='|' read -r _srv _src _want _label; do
+  [ -n "${_label:-}" ] || continue
+  _got="$(argocd_effective_addr "$_srv" "$_src" "$_ip")"
+  [ "$_got" = "$_want" ] || { _bad=1; printf '        %-22s [%s]/[%s] -> %s, want %s\n' "$_label" "$_srv" "$_src" "$_got" "$_want"; }
+done <<EOF
+||${_ip}|unset -> the resolved ip
+<SET-a-name-the-cert-carries>||${_ip}|placeholder -> the ip
+argocd-server||argocd-server|granted NAME -> left alone
+192.168.101.99|discovered|${_ip}|stale ours -> corrected
+argocd-server|discovered|${_ip}|NAME marked ours -> clobbered
+EOF
+if [ "$_bad" -eq 0 ]; then
+  ok "argocd_effective_addr answers all five reachable states"
+else
+  bad "argocd_effective_addr disagrees with the guard on the states above"
+fi
+
+# ── STRUCTURAL, anchored on the STATEMENT ───────────────────────────────────────────────────────
+# Anchored (^[[:space:]]*) so a trailing comment cannot satisfy it -- see the note above.
+if grep -qE '^[[:space:]]*_eff="\$\(argocd_effective_addr ' <<< "$_body"; then
+  ok "09 derives the effective address from the single-sourced function"
+else
+  bad "09 no longer calls argocd_effective_addr -- the printed address and the guard's branch can
+      then disagree, which is the defect this section exists for"
+fi
+# ⚠️ ONE PREDICATE, NOT TWO. An adversary REFUTED the first design -- function PLUS the inline `if`
+# -- by measurement: deleting one clause from the inline copy left .env holding the stale value
+# while the report claimed the new one, and the function-based test stayed GREEN. 09 must branch on
+# the function's RESULT, which is safe because `eff == ip` is biconditional with "the guard writes"
+# (50 states over the SHIPPED is_placeholder, 0 violations).
+# shellcheck disable=SC2016  # the literal $_eff/$ip are the POINT: this greps SOURCE text
+if grep -qE '^[[:space:]]*if \[ "\$_eff" != "\$ip" \]; then' <<< "$_body"; then
+  ok "...and branches on its RESULT, so there is no second copy of the predicate to drift"
+else
+  bad "09 does not branch on \$_eff -- a second copy of the guard predicate can drift from the
+      function, and the function-based cases above would stay green while it does"
+fi
+# shellcheck disable=SC2016  # the literal $_eff is the POINT: this greps SOURCE text
+if grep -qE '^[[:space:]]*if \[ "\$\(ca_addr_kind "\$_eff"\)" = ip \]; then' <<< "$_body"; then
+  ok "the disclosure classifies the EFFECTIVE address, via the single-sourced ca_addr_kind"
+else
+  bad "the disclosure no longer classifies \$_eff -- keying on \$ip fires on a granted NAME (the
+      state the remedy itself produces), and keying on ARGOCD_SERVER reads the PRE-EXISTING value
+      and goes SILENT in the one state where an IP was just written"
+fi
+if grep -qE '^[[:space:]]*\.[[:space:]]+"\$\{SCRIPT_DIR\}/lib/tls\.sh"' <<< "$_body"; then
+  ok "...and lib/tls.sh is sourced, so that call is not an unbound command"
+else
+  bad "ca_addr_kind is called but lib/tls.sh is not sourced -- an unbound command at runtime, on a
+      path that only runs against a real cluster"
+fi
+
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh" 2>/dev/null
+_bad=0
+for _c in '192.168.101.140|ip' 'argocd-server|name' '10.0.0.1:8443|name' 'fd00::1|name'; do
+  _want="${_c##*|}"; _addr="${_c%|*}"
+  [ "$(ca_addr_kind "$_addr")" = "$_want" ] || { _bad=1; printf '        %s -> %s, want %s\n' "$_addr" "$(ca_addr_kind "$_addr")" "$_want"; }
+done
+if [ "$_bad" -eq 0 ]; then
+  ok "ca_addr_kind agrees on ip / name / host:port / IPv6"
+else
+  bad "ca_addr_kind disagrees with the expectations above -- two consumers must agree, and its own
+      header records that the consequence of disagreement is a FALSE REFUSE"
+fi
+
 printf '\n%s: %s passed, %s failed\n' "${0##*/}" "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

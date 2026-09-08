@@ -7051,7 +7051,23 @@ trust material, not a secret"*.
 **The discipline, labelled as discipline:** after changing operator state, RE-RUN THE DIAGNOSTIC THAT
 COVERS IT. `make argocd-auth-check` would have told me in 30 seconds. No gate can enforce that.
 
-## B552 — 🟡 scenario-1 NEVER tells you to fetch the ArgoCD CA, and `scenario-2:469` is false
+## ✅ B552 — SHIPPED 2026-09-08. Both claims verified false before fixing, and the fix went where the knowledge already was
+
+**Verified, not assumed.** `ARGOCD_CA_FILE` has **zero writers** — the only hits are test fixtures
+and a `walk-doc.sh` comment — so *"writes `ARGOCD_CA_FILE`"* was false. And `scenario-2:301` says
+`ARGOCD_SERVER` must be *"a name the argocd-server certificate carries — not the bare LB IP"*, while
+the same paragraph pointed the reader at discovery, which yields an IP. Two false claims in one
+sentence, contradicting the table 168 lines above it.
+
+**Fixed at the source of the second one too.** `09-argocd-address.sh` had the whole explanation in a
+CODE COMMENT since the line was written — *"the lab-verified SAN list carries NO IP SAN, so this IP
+works only because every consumer runs --insecure"* — while printing
+`argocd login … --insecure` to an operator who never saw it. It now says so, and only when the
+resolved address is actually an IP (a NAME prints nothing; verified both ways). That covers
+scenario-1's gap without adding a step to a document that deliberately keeps the ArgoCD CA optional.
+
+**Residual:** publishing a NAME instead of an IP is still B486 — it needs the A record to become a
+documented step. This makes the cost of the IP visible; it does not remove it.
 
 **Q: how did `ARGOCD_CA_FILE` come to be set with no file? A: it was never fetched.** Measured:
 `fetch-argocd-ca` appears **1x** in `docs/scenario-1.md` (`:464`) and only as an ASIDE explaining why
