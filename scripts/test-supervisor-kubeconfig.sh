@@ -82,6 +82,21 @@ else bad "label: a missing file reads 'absent'" "not labelled absent"; fi
 # box with no Supervisor file, so no downstream emptiness test could tell. Two consumers of this
 # resolver CREATE and DESTROY clusters.
 printf 'apiVersion: v1\n' > "$T/guest-kc"
+# ⚠️ POSITIVE CONTROL FIRST, IN THE SAME INVOCATION SHAPE. Both cases below assert an ABSENCE, so
+# without this they pass when the function does not exist at all -- MEASURED by a round: renaming
+# supervisor_kubeconfig left BOTH reporting ok, because command-not-found with stderr suppressed
+# yields empty and the hint prints nothing. The other cases in this file use a different invocation
+# path (`run`), so they do not vouch for this one.
+_reached=$(env -u SUPERVISOR_KUBECONFIG -u ARGOCD_KUBECONFIG -u KUBECONFIG \
+  VKS_SUPERVISOR_KUBECONFIG="$T/guest-kc" VKS_LAB_STATE_DIR="$T/nolab" REPO_ROOT=/nonexistent SKIP_DOTENV=1 \
+  bash -c '. scripts/lib/os.sh 2>/dev/null; supervisor_kubeconfig || true' 2>/dev/null)
+if [ "$_reached" = "$T/guest-kc" ]; then
+  ok "control: this harness reaches supervisor_kubeconfig (it returns an explicit candidate)"
+else
+  bad "control: the harness does NOT reach supervisor_kubeconfig -- it returned [$_reached] for an
+      explicit VKS_SUPERVISOR_KUBECONFIG. The two absence assertions below would pass even if the
+      function did not exist, so they must not be trusted until this is fixed."
+fi
 _promoted=$(env -u VKS_SUPERVISOR_KUBECONFIG -u SUPERVISOR_KUBECONFIG -u ARGOCD_KUBECONFIG \
   KUBECONFIG="$T/guest-kc" VKS_LAB_STATE_DIR="$T/nolab" REPO_ROOT=/nonexistent SKIP_DOTENV=1 \
   bash -c '. scripts/lib/os.sh 2>/dev/null; supervisor_kubeconfig || true' 2>/dev/null)

@@ -1000,9 +1000,16 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
   # the token merely expired. MEASURED on the same lab: --duration=24h is HONOURED, not capped
   # (86400s), so the server's --service-account-max-token-expiration is at least 24h here.
   # A shorter cap elsewhere silently clamps this, which is fine: the request is a ceiling.
+  # ⚠️ CAPTURE THE rc. This is the SAME shape B544 fixed elsewhere -- outer budget EQUAL to
+  # --request-timeout -- and it was missed: our own expiry produced an EMPTY token, which fell to
+  # the else arm below and told the operator to INSTALL SOFTWARE THAT IS ALREADY THERE. MEASURED
+  # with only latency varied: fast kubectl -> a real token; slow kubectl -> "is headlamp installed?
+  # make install-headlamp". A false claim about the lab plus an actionable-but-wrong remedy, in the
+  # same report B544 made honest everywhere else.
+  # `&& rc=0 || rc=$?` is an AND-OR list, so it keeps the non-fatality the old `|| true` provided.
   _hl_t="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s \
              -n "$_hl_ns" create token "$_hl_sa" --duration="${HEADLAMP_TOKEN_DURATION:-24h}" \
-             </dev/null 2>/dev/null || true)"
+             </dev/null 2>/dev/null)" && _hl_rc=0 || _hl_rc=$?
   # _mask, NOT _lab_secret: that wrapper is defined ~380 lines BELOW this line, so calling it
   # here dies `_lab_secret: command not found`. It only ever fired once headlamp was installed AND
   # a token minted — a path that did not exist until 2026-09-05, which is why it shipped green.
@@ -1068,6 +1075,12 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
     if [ -n "${_hl_exp:-}" ]; then
       headlamp_tok="${headlamp_tok} (valid until $(date -u -d "@${_hl_exp}" '+%Y-%m-%dT%H:%MZ' 2>/dev/null || printf 'epoch %s' "$_hl_exp"))"
     fi
+  elif [ "${_hl_rc:-0}" = 124 ]; then
+    # OUR budget, not the lab's. Saying "is headlamp installed?" here is a claim about the world
+    # made on the strength of us not waiting -- and its remedy reinstalls a working component.
+    headlamp_tok="<could not ask — my own ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s budget expired>"
+  elif [ "${_hl_rc:-0}" = 137 ]; then
+    headlamp_tok="<could not ask — the probe was KILLED (rc=137)>"
   else                     headlamp_tok="<not read — is headlamp installed? make install-headlamp>"; fi
 else
   headlamp_tok="<not read — no KUBECONFIG>"
@@ -1167,9 +1180,14 @@ _kube_classify() {
   case "$_rc" in
     124|137)
       _kube_tok="<could not ask>"
-      _kube_state="${_p} — MY OWN timeout expired before the server answered (rc=${_rc}). This says
-      NOTHING about the lab: give it longer with CREDS_KUBE_TIMEOUT_SECONDS (or CREDS_K8S_TIMEOUT
-      for the Supervisor reads) and re-run."
+      case "$_rc" in
+        124) _kube_state="${_p} — MY OWN timeout expired before the server answered (rc=124). This says NOTHING about the lab: give it longer with CREDS_KUBE_TIMEOUT_SECONDS (or CREDS_K8S_TIMEOUT for the Supervisor reads) and re-run." ;;
+        # ⚠️ 137 IS NOT OUR BUDGET. GNU timeout emits 124 on expiry and 137 only with -k/-s KILL --
+        # measured, this repo uses NEITHER anywhere. So 137 here is an EXTERNAL SIGKILL (the OOM
+        # killer, or the process-group kill this repo's own rules prescribe), and naming our budget
+        # would be a wrong cause with a no-op remedy.
+        *)   _kube_state="${_p} — the probe was KILLED (rc=${_rc}), NOT by our own budget: suspect the OOM killer or an external kill. This still says nothing about the lab." ;;
+      esac
       return 0 ;;
   esac
   case "$(classify_kube_failure "$_e")" in
@@ -1284,7 +1302,7 @@ if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
           --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-5s}" -n "$_h_ns" get secret harbor-core-ver-1 \
           -o jsonpath='{.data.HARBOR_ADMIN_PASSWORD}' 2>"$_h_err")" && _h_rc2=0 || _h_rc2=$?
       if [ "$_h_rc2" -ne 0 ]; then
-        _kube_classify "$_h_err" "could not read harbor-core-ver-1 in ${_h_ns}" "${_h_rc2:-${_h_rc:-}}"
+        _kube_classify "$_h_err" "could not read harbor-core-ver-1 in ${_h_ns}" "$_h_rc2"
         _h_admin_pw="$_kube_tok"; _h_admin_why="$_kube_state"
       elif [ -z "$_h_enc" ]; then
         # rc=0 and nothing back: the SECRET is there, the KEY is not. Do not say kubectl failed.
