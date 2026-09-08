@@ -6826,6 +6826,25 @@ re-measurement must source `lib/os.sh` before `lib/apps.sh` and must NOT silence
 **Done when:** both bumped, each app's tests green, the builder stamp re-derived, and the alerts
 closed by GitHub rather than dismissed.
 
+⚠️ **THE BUMP ALONE DOES NOT REMEDIATE — measured 2026-09-08.** Both affected apps ship a
+`Dockerfile.builder` that BAKES their dependencies for the offline build, and
+`lib/apps.sh:255`'s `BUILDER_INPUT_MANIFESTS` hashes exactly `package-lock.json` and
+`requirements.txt`. So editing the manifest makes the builder **stale** (which
+`make builder-freshness` now correctly reports) and `build-apps` keeps using the OLD builder with
+the OLD dependency — the CVE stays live in the produced image while the source reads as fixed.
+
+**Current alerts (measured via the API, not the push banner):**
+
+| severity | package | fix | manifest |
+|---|---|---|---|
+| medium x2 | `qs` 6.15.3 (transitive, via express) | 6.16.0 | `apps/nodejs/nodejswebapp/package-lock.json` |
+| low | `Flask==3.1.2` | 3.1.3 | `apps/python/pythonwebapp/requirements.txt` |
+
+**Done when:** the manifests are bumped AND the two builders are rebuilt and pushed
+(`make builder-build` + `make builder-push`, or `make builder-image` dual-homed) AND
+`make builder-freshness` is clean AND the alerts close. Doing only the first step is the half-fix
+this note exists to prevent.
+
 ## B555 — 🟡 three `fetch-ca.sh` refusal arms are reachable only via a MID-FETCH endpoint change, so nothing pins them
 
 Round 4 (B553) cleared the fix and found that four of that commit's changes were pinned by nothing —
