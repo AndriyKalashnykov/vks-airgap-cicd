@@ -523,6 +523,33 @@ predates 2026-07-13 without a migrate; if nobody, this closes as documentation.
 cluster stamp, and must cover `.env.kind`. Hardening `.env.state` alone is worse than nothing here:
 it advertises the class as closed.
 
+## 🔴 B573 — the WEEKLY `schedule` run has been RED for three weeks, and it is the ONLY place `lint`/`test-scripts`/`sec` runs in CI 🔴 open
+
+Found by B571's round; I verified the conclusions independently.
+
+    34092747025  failure  2026-09-07
+    33365867786  failure  2026-08-31
+    32697613130  failure  2026-08-24
+
+MEASURED on the 2026-09-07 run: `static-check: failure`, every other job green, and `ci-pass`
+correctly refusing on it. **The failing job is the dispatch-gated one** — which per [[B571]] is the
+only place shellcheck and the offline unit suite execute in CI at all.
+
+**So the "weekly catches it" leg of every B571 option is currently FICTION**, and this row should be
+cleared BEFORE that one: an argument about which gate to add is moot while the existing one is red
+and unattended.
+
+⚠️ **The cause is NOT measured.** `gh run view --log` returns **zero lines** for that run from here
+(logs age out), so only the conclusion is available. Do not guess it — a fresh
+`gh workflow run ci.yml --ref main` reproduces the same job on demand, and that is how to get the
+step. One was dispatched 2026-09-08 (run 34284426866) for exactly this.
+
+**Done when:** the cause is named from a step log, fixed, and the weekly is green — plus a decision
+on whether a three-week-red scheduled gate should be *noticed* by anything. Nothing alerts on it
+today, which is why it ran red for three weeks with an operator and an agent both active in the repo
+daily. That second half is its own design question and needs an idea round: a notification is a new
+control, and the repo's own history says a partial control that reads as "handled" is worse than none.
+
 ## 🔴 B571 — `static-check-pr` is invoked by NOTHING, while four comments say a PR runs it 🔴 open
 
 Found by B568's round. MEASURED: `grep static-check-pr .github/workflows/*.yml` returns **only
@@ -536,6 +563,93 @@ why standing rule G.4 (`docs/matrix-standing-rules.md:375`) requires `env -u GOR
 locally before every merge — and it is why a green check on a PR is not evidence for the change in
 it. Twice today a merge on CI-green alone reddened `main` (3× SC2016; then a 21/21 → 12/9 test
 regression), both because G.4 was skipped.
+
+### ⛔ IDEA ROUND DONE 2026-09-08 — ALL FIVE options REFUTED; the recommended design is none of them
+
+**The question I most wanted answered: option (c) — lint only — catches ONE of the two breakages.**
+
+| breakage | caught by `lint`? | |
+|---|---|---|
+| #1157, 3× SC2016 | **YES** | MEASURED: `shellcheck -x` on the file **as committed at `e3fa173`** → rc=1, all three findings |
+| #1165, 21/21 → 12/9 | **NO** | that file is `# ci-tier: fast`, so only `test-scripts-fast` runs it; `lint` never does |
+
+**And (c) is not cheap.** MEASURED at 4 cores (a runner's count): `lint` = **111.6 s / 115.4 s**
+(3.4% spread — stable). `ci.yml:183` claims *"lint alone measures 25.6s at 4 cores"* — **4.4× low**,
+because that was measured over **126** scripts and the corpus is now **334**. A live PR run's whole
+critical path is **51 s**; (c) would take it to ~2m30s, landing on the 2m44s that got the job
+disabled in the first place.
+
+**⛔ Option (e)'s rationale is DEAD, and it is two commit timestamps, not a judgement.** I verified
+both myself:
+
+    4d15c09  2026-08-23 11:33  ci: static-check runs on schedule/dispatch only
+             its stated reason: this job is "the ONLY thing on a PR that installs the SIX APP
+             TOOLCHAINS via mise and restores/saves the maven + go caches"
+    f8c38dc  2026-08-23 15:55  refactor(toolchains): ... java, go, python, rust, dotnet REMOVED
+
+**4h22m later a different PR deleted the premise and nobody re-opened the decision.** MEASURED:
+`grep -cE '^(java|go|python|rust|dotnet) *=' .mise.toml` → **0**, and on the live schedule run the
+mise step took **4 seconds**. The trivy cold-DB half of the rationale still holds — but `sec` is
+already excluded from `static-check-pr`, so it is not an argument about `lint` or the tests.
+
+**⛔ And (e)'s safety net is red** — see [[B573]], filed ahead of this row.
+
+### 🔴 THE RECOMMENDED DESIGN — scope the lint to the DIFF (not yet built)
+
+MEASURED on the real breakage commit `e3fa173`: it changed **6** `.sh` files; `shellcheck -x` over
+exactly those six at 4 cores = **5.34 s** vs **111.6 s** for the corpus — **21× cheaper** — and
+RED-proven at rc=1 on the pre-fix content. Over the last 150 merges: 35% touch no `.sh` (job skips,
+0 s), 45% touch `.sh` outside `lib/` (~5 s), 21% touch `scripts/lib/` and need the full-corpus
+fallback (~112 s). Expected ≈ **26 s**, p79 ≈ 5 s.
+
+The `lib/` fallback is required because `shellcheck -x` resolves `# shellcheck source=` from the
+filesystem, so a change to `lib/os.sh` can newly flag consumers the diff does not name. **If the
+changed-file list cannot be derived, lint EVERYTHING** — fail toward the expensive answer, never the
+empty one.
+
+⚠️ **This does NOT cover breakage #2's class.** Say so rather than letting "the lint job landed" read
+as "the hole is closed". A reverse-dependency test selection would (measured: selecting fast tests
+that name a changed non-test script picks 9 of 141 for `#1165`, and the right one is among them) —
+but its runtime is deliberately UNMEASURED, because quoting one draw is the error [[B565]] exists to
+prevent. Separate row, own round, N-draw measurement.
+
+### 🔴 F1 — the guard against mis-wiring a NEW job does not run on the PR that adds one
+
+Adding any job means touching four places (`ci.yml`, `ci-pass.needs`, and both lists in
+`ci-pass-verdict.sh`). The guard is `test-ci-pass-verdict.sh`, whose header says it fails *"at PR
+time, loudly"*. MEASURED: it has **no `ci-tier` marker**, so it lands in `TEST_FAST` — the set that
+does not run on a PR. And `ci-pass-verdict.sh:116` **NOTES, does not JUDGE** a job absent from its
+lists, while `ci-pass` is the **sole** required check. So the fix for B571 is unguarded by the exact
+mechanism written to guard it, and the omission ships green. **Whatever job lands, run
+`bash scripts/test-ci-pass-verdict.sh` locally in the same commit and say so in the PR body.**
+Discipline, labelled as discipline — it is circular and CI cannot close it.
+
+### 🔴 F2 — the false-comment class is NINE instances, not four
+
+`ci.yml:145` (claims per-PR `static-check-pr`), `:176` (claims `app-test` is in it — it is not),
+`:180-184` (43.9 s / 42 tests / lint 25.6 s — all stale), `:362` (claims an expression that does not
+exist), `docs/ci-cd.md:10`, `lint.sh:18` (126 scripts → **334**), `Makefile:1447` (51/48 → **154/149**),
+`:1461` (6 slow → **8**), and `test-ci-pass-verdict.sh:12` (see F1).
+
+⚠️ **`ci.yml:145` is inside a block explicitly headed "CURRENT STATE, hoisted 2026-08-17 because the
+history below is append-only and its stale headline is what a skimmer reads."** It went stale six
+days later and sits 54 lines above the `if:` that contradicts it. **The device built to defeat
+staleness is now its worst instance.** Correcting all nine is mandatory and is not optional
+bookkeeping: two people acted on comment #1 today.
+
+### ⚠️ F3 — B565's "36 network-dependent tests" is an IDIOM COUNT, not a network count
+
+MEASURED: 34 match the idiom; **23** target loopback or a variable; **11** name an off-box literal;
+**1** actually dials the internet (`test-gwapi-alignment.sh`). The other ten use deliberately
+unroutable fixtures (`h.example`, `stub.invalid`, `10.0.0.1`), and `test-require-internet.sh` STUBS
+curl and says so in its own header. The one real fetch is **already on the PR path**
+(`check-gwapi-istio-alignment` in `static-check-fast`, with `GWAPI_REQUIRE_FETCH: '1'` making it
+fail-closed). B565's *conclusion* stands — the runtime is unstable — but its *mechanism* was derived
+from a grep that cannot tell a loopback responder from an internet fetch. Do not cite the 36 as a
+flake surface without splitting it.
+
+**Keep `static-check-pr` in the Makefile.** It is the correct local pre-merge target and the correct
+future PR target; the defect is the comments claiming CI invokes it.
 
 **Done when — NEEDS AN IDEA ROUND.** Either wire `static-check-pr` into the PR path (it exists and
 is unreferenced), or delete it and correct the four comments that claim it runs. Do not line-edit:
