@@ -67,9 +67,12 @@ WAIT="${DNS_RECORDS_WAIT_SECONDS:-0}"
 INTERVAL="${DNS_RECORDS_WAIT_INTERVAL_SECONDS:-15}"
 _end=$((SECONDS + WAIT))     # read-only use of SECONDS; never assign it (lib/progress.sh reads it)
 
-_collect() {                 # prints the rows, returns the count via the global `n`
+_collect() {                 # prints the rows; `n` = services FOUND, `nrec` = records to CREATE
   local ns nm ip host hns
-  n=0
+  # `n` drives the retry loop below, so it must count every service that HAS an address --
+  # including one addressed by IP, which needs no record. Counting only records would spin.
+  # All three reset here because _collect is called repeatedly by that loop.
+  n=0; nrec=0; IPROWS=""
   hns="$(kubectl --kubeconfig "$KC" get svc -A -o json 2>/dev/null \
         | jq -r '.items[]?|select(.spec.type=="LoadBalancer")|select(.metadata.name|test("harbor-nginx|argocd-server"))|"\(.metadata.namespace)\t\(.metadata.name)\t\(.status.loadBalancer.ingress[0].ip // "")"' 2>/dev/null || true)"
   while IFS=$'\t' read -r ns nm ip; do
@@ -79,13 +82,25 @@ _collect() {                 # prints the rows, returns the count via the global
       argocd-server) host="${ARGOCD_HOST:-${ARGOCD_SERVER:-<your argocd FQDN, if you use one>}}" ;;
       *) continue ;;
     esac
-    printf '  %-34s %-16s %s\n' "$host" "$ip" "${ns}/${nm}"
     n=$((n + 1))
+    host="${host#*://}"; host="${host%%/*}"        # tolerate a scheme/path if *_URL carries one
+    # Is the configured address a NAME or an IP LITERAL? 06-install-harbor.sh:304 does
+    # `state_set HARBOR_URL "$LB_IP"`, so the IP case is routine, not exotic.
+    case "${host%%:*}" in
+      *[!0-9.]*) ;;                                 # any non-[0-9.] char -> it is a NAME
+      *.*.*.*)  IPROWS="${IPROWS}  ${host} (${ns}/${nm})"$'\n'; continue ;;
+    esac
+    [ "$nrec" -gt 0 ] || printf '  %-34s %-16s %s\n' HOSTNAME IP SOURCE
+    printf '  %-34s %-16s %s\n' "$host" "$ip" "${ns}/${nm}"
+    nrec=$((nrec + 1))
   done <<< "$hns"
 }
 
-printf '  %-34s %-16s %s\n' HOSTNAME IP SOURCE
-n=0
+# Declared here so `set -u` is satisfied WITHOUT an env-default expansion on either accumulator:
+# check-env-coverage correctly reads that shape as an operator-settable variable, and these are
+# internal. (Do not spell the shape out in this comment either -- the gate scans comments too, and
+# that is how this comment's first draft kept the gate RED.) _collect re-sets all three per call.
+n=0; nrec=0; IPROWS=""
 _collect
 while [ "$n" -eq 0 ] && [ "$SECONDS" -lt "$_end" ]; do
   log_info "no LoadBalancer address yet — ${SECONDS}s of ${WAIT}s elapsed, retrying in ${INTERVAL}s"
@@ -99,6 +114,7 @@ done
   If it never appears, check that KUBECONFIG is the SUPERVISOR's and that the service installed:
       make list-supervisor-services"
 
+if [ "$nrec" -gt 0 ]; then
 cat <<'NOTE'
 
   Create these as A records in the DNS your GUEST CLUSTER NODES resolve.
@@ -108,3 +124,14 @@ cat <<'NOTE'
     virsh -c qemu:///system net-update <net> add dns-host \
       "<host ip='<IP>'><hostname><HOSTNAME></hostname></host>" --live --config
 NOTE
+fi
+
+if [ -n "$IPROWS" ]; then
+  printf '\n  addressed by IP, so NO A record applies (DNS maps a NAME to an address):\n%s' "$IPROWS"
+  cat <<'IPNOTE'
+  It is not free, though: a cert presenting only DNS SANs cannot verify at an IP, so setting the
+  matching *_CA_FILE makes the client fail CLOSED rather than fall back. `make fetch-harbor-ca` and
+  `make fetch-argocd-ca` check exactly that now, and print the SANs the cert really does present.
+  To use a name instead, point HARBOR_URL / ARGOCD_HOST at it and re-run this.
+IPNOTE
+fi

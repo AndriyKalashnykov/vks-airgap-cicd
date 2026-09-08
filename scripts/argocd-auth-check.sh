@@ -64,9 +64,11 @@ say "ARGOCD_SERVER" "$srv"
 # An IP can NEVER verify against argocd-server's default certificate: LAB-MEASURED 2026-08-17, its
 # SANs are DNS-only (localhost, argocd-server, argocd-server.<ns>[.svc[.cluster.local]]) with NO IP
 # SAN. Report it as a fact about the ADDRESS rather than letting it surface later as a CA mystery.
+_srv_is_ip=no
 case "$srv" in
   *[a-zA-Z]*) : ;;
-  *) say "  ⚠️ address shape" "this looks like a bare IP — argocd-server's default cert has NO IP SAN, so a VERIFYING path cannot succeed with it" ;;
+  *) _srv_is_ip=yes
+     say "  ⚠️ address shape" "this looks like a bare IP — argocd-server's default cert has NO IP SAN, so a VERIFYING path cannot succeed with it" ;;
 esac
 
 # ---- 2. the ANCHOR ------------------------------------------------------------------------------
@@ -75,7 +77,16 @@ if [ "$ARGOCD_TLS_MODE" = verified ]; then
   say "TLS" "VERIFYING against ${ARGOCD_CA_FILE}"
 else
   say "TLS" "NOT VERIFIED (-k) — no ARGOCD_CA_FILE"
-  say "  what this costs" "a pass below proves the CREDENTIAL only, NOTHING about trust. Run 'make fetch-argocd-ca' and re-run to cover the path that fails on a real lab."
+  # ⚠️ THE REMEDY DEPENDS ON THE ADDRESS, and printing the address-independent one here created a
+  # NON-TERMINATING instruction cycle as of B553: fetch-ca.sh now REFUSES to write an anchor that
+  # cannot verify the address it was fetched from, so on a bare IP "run make fetch-argocd-ca" sends
+  # the operator to a tool that says "do NOT set ARGOCD_CA_FILE" and back here unchanged. This
+  # script already knows the shape ten lines up; use it.
+  if [ "$_srv_is_ip" = yes ]; then
+    say "  what this costs" "a pass below proves the CREDENTIAL only, NOTHING about trust — and you cannot close that gap from here: 'make fetch-argocd-ca' REFUSES an address the certificate does not present — and argocd-server's DEFAULT cert carries DNS SANs only, no IP SAN. Fix the ADDRESS first (point ARGOCD_SERVER at a name the cert presents, /etc/hosts if it does not resolve), THEN fetch and set ARGOCD_CA_FILE."
+  else
+    say "  what this costs" "a pass below proves the CREDENTIAL only, NOTHING about trust. Run 'make fetch-argocd-ca' and re-run to cover the path that fails on a real lab."
+  fi
 fi
 
 # ---- 3. the CREDENTIAL --------------------------------------------------------------------------

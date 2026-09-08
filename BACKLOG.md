@@ -803,6 +803,50 @@ forbid".
 documented step of scenario-1 §5 exactly as §4 does it for Harbor; the LB IP is published separately
 as `ARGOCD_LB_IP` in `.env.state`. Then `-k` stops being load-bearing and TLS can be *verified*.
 
+**⚠️ RE-SCOPED 2026-09-07 — THE DONE-WHEN AS WRITTEN IS UNSATISFIABLE, MEASURED.** It asks for
+"`ARGOCD_SERVER` carries a name the certificate actually presents, with the A record a documented
+step of scenario-1 §5 exactly as §4 does it for Harbor". Read off the live cert
+(`openssl s_client -connect 192.168.101.131:443`), the SANs are:
+
+    DNS:localhost, DNS:argocd-server, DNS:argocd-server.cicd,
+    DNS:argocd-server.cicd.svc, DNS:argocd-server.cicd.svc.cluster.local
+
+**Zero of those are externally routable.** `localhost` is reserved; the rest are cluster-internal.
+So there is no name to point an A record AT, and the Harbor analogy does not carry: Harbor's cert
+is issued for a real FQDN, ArgoCD's is self-generated. This is not a gap in the work — the clause
+describes something that cannot exist while the cert is the default one.
+
+**Upstream confirms it is unreachable by configuration alone.** `util/settings/settings.go` (v3.0.19)
+hardcodes that SAN list and populates `IPAddresses` only when the configured host parses as an IP,
+and `spec.url` does not re-mint (the gate is `Certificate == nil`). So you cannot get a routable SAN
+by setting a URL.
+
+**THE ACTUAL MECHANISM, measured on the live CR.** `argocds.argocd-service.vsphere.vmware.com`
+exposes `spec.server.tlsCert` with `ca` / `cert` / `key` (base64), documented as: *"If not specified,
+ArgoCD will generate a self-signed certificate."* On `cicd/argocd-1` (`3.0.19+vmware.1-vks.1`) it is
+**not set** — which is exactly why we get the cluster-internal cert. Supplying a cert there, with
+either a routable DNS SAN or an IP SAN for the VIP, is the sanctioned path and the only one that
+makes `ARGOCD_CA_FILE` verifiable.
+
+**Revised Done-when, in dependency order:**
+
+1. **(shipped, B553)** the tooling must stop PRESCRIBING a CA that cannot verify. `fetch-ca.sh` now
+   checks the anchor against the address it was fetched from and emits `set it in .env` only when it
+   verifies chain AND name. This is the clause the original Done-when was missing, and it is what
+   turns the incident from "silently breaks the lab" into "tells you why".
+2. **(open, but NOT yet — and NOT zero-risk-and-useful, which is what I first wrote)** publish the
+   LB IP separately as `ARGOCD_LB_IP`. Measured: `07-install-argocd.sh:156` publishes it on **KinD**;
+   `09-argocd-address.sh` publishes `ARGOCD_SERVER` on the **lab** and never `ARGOCD_LB_IP`, and
+   `Makefile:733` picks whichever exists (`ARGOCD_SERVER` first — B168, because a discovered LB IP
+   once outranked an operator's explicit `ARGOCD_SERVER` and fetched the KinD CA on a box running
+   both). **Today `ARGOCD_SERVER` on the lab IS that IP**, so publishing `ARGOCD_LB_IP` beside it
+   would store the same value twice and create a drift candidate for no gain. This clause only
+   becomes meaningful AFTER (3) makes `ARGOCD_SERVER` a name; do it then, not before.
+3. **(open, needs a CR write)** decide whether we own the cert. If yes, mint one carrying the VIP as
+   an IP SAN (or a routable name), set `spec.server.tlsCert`, and only THEN does clause (i) of the
+   original Done-when become meaningful. `kubectl auth can-i patch argocds -n cicd` says yes.
+4. **(refuted, do not build)** "an A record exactly as §4 does for Harbor" — see above.
+
 **Also open, from the same review:**
 
 - **F6 SETTLED 2026-08-26, MEASURED: the CR DOES carry a status stanza, and this repo has ZERO
@@ -6437,6 +6481,73 @@ which I added — is effectively **unreachable**, so its carefully-worded tenant
 and on a tenant box `creds` probes the guest (or a foreign lab) for Harbor while labelling it the
 Supervisor. Same shape at `:1739-1740`. An emptiness test standing in for an identity test.
 
+⚠️ **RE-SCOPED 2026-09-07 by an idea round — the row's own premise is PARTLY FALSE and the
+prescribed shape below is REFUTED. Do not build it.**
+
+**The premise is narrower than stated.** The resolver tests `[ -s "$c" ]`, so `load_env` setting
+`KUBECONFIG` does NOT make the file exist: with `KUBECONFIG` pointing at the (absent) default path
+the resolver returns **rc=1, EMPTY** and `creds.sh:1116` IS reachable. Mode 1 needs `KUBECONFIG` to
+point at a **real** guest file. Real, but not "essentially never returns empty".
+
+**The identity test is refuted — it discriminates 0 of the 2 modes.**
+
+- *Mode 1:* `SUPERVISOR_HOST` is required only for `VKS_AUTH_METHOD=vcf|vsphere` (`02-env.sh:238-245`),
+  and `scenario-2.md:409` puts the DEFAULT tenant on `kubeconfig` — the exact persona mode 1 describes.
+  So the identity half is unavailable precisely where it was wanted, and the TYPE test alone already
+  covers mode 1.
+- *Mode 2:* MEASURED, both paths on this box — `secrets/supervisor.kubeconfig` and
+  `~/.local/state/nested-lab/kubeconfig` both resolve to **`https://192.168.101.128:443`**. The one
+  observed "FOREIGN lab" is a different PATH TO THE SAME ESTATE, so identity returns MATCH and
+  changes nothing. This row called mode 2 "the dangerous one, because it is PLAUSIBLE" — the
+  plausibility is inferred; the measurement says same-estate.
+- The comparison is also unspecified and the naive form never matches: `argocd_api_server` returns
+  `https://host:443` while `SUPERVISOR_HOST` is a bare host by contract (`.env.example:142`), so
+  `[ "$srv" = "$SUPERVISOR_HOST" ]` is a 100% false-abstain gate.
+
+**Two further defects in the prescribed shape:**
+
+- **It regresses B548, which shipped hours earlier.** `kc=""` is DECIDABLE ("absent"), and B548's
+  adjudicated rule is that absent gets the tenant sentence and NO remedy — because the remedy encodes
+  a guess and `make vks-login` spends one of three vCenter SSO attempts before PERMANENT lockout.
+  Collapsing *absent* into `rc==2` "cannot tell" destroys that wording. `[ -z "$kc" ]` must be a
+  separate FIRST arm, before any probe.
+- **It violates the `CREDS_NO_PROBE` contract.** The current order puts a free `stat` before the
+  no-probe guard, so a probe at that position runs even under `CREDS_NO_PROBE=1`. Measured against a
+  blackholed endpoint: **20.035s** per site (42ms healthy), × 2 sites. `creds.sh:179-181` already
+  records a measured HIGH for this exact class. Invisible on a healthy box; fires exactly when the
+  operator most needs the report.
+
+**And Q5 is answered NO:** the destroy path is already guarded — `98-uninstall-all.sh:53-56` requires
+`CONFIRM=$VKS_CLUSTER_NAME`, a typed value, not y/n. "Silently" was the wrong word. The residual is
+that the confirmation proves the operator knows the NAME, not the ESTATE — which a resolver-level
+check cannot close either; it belongs at the destructive caller, printing the resolved endpoint.
+
+**BUILD THIS INSTEAD:**
+
+1. **Drop `"${KUBECONFIG:-}"` from the candidate list** — one line, kills mode 1, and makes
+   `Makefile:263-267` ("`KUBECONFIG=` does not work for Supervisor-scoped targets") TRUE rather than
+   approximately true. No test asserts KUBECONFIG-as-winner (`test-supervisor-kubeconfig.sh` uses
+   `env -u KUBECONFIG` and `KUBECONFIG=/does/not/exist`).
+2. At the two `creds.sh` sites: `[ -z "$kc" ]` FIRST (preserving B548 verbatim) -> then the
+   no-probe guard -> only then `kubeconfig_is_supervisor`, branching on `rc==1` ONLY.
+3. **Do not build the identity test.** For mode-2 coverage, print the resolved PATH and ENDPOINT as a
+   diagnostic — honest, and needs no `SUPERVISOR_HOST`.
+4. Mode 2 belongs at the destructive callers as endpoint-confirmation, not in the resolver.
+
+**Prior art to copy (F8):** `argocd-password.sh:113-125` hit this exact ambiguity, says in as many
+words "NOT `supervisor_kubeconfig` ALONE, WHICH WOULD INVERT THE SAME BUG", and resolves it by trying
+both candidates and taking the first that ANSWERS, then naming which one did — *evidence, not
+ranking*. That needs no `SUPERVISOR_HOST` at all.
+
+⚠️ **OPEN BEFORE (1) SHIPS — measure, do not reason.** Five NON-test callers take the resolver with
+no fallback (`09-argocd-address.sh:86`, `creds.sh:1580`, `creds.sh:1690`, `24-vks-k8s-version.sh:27`,
+`43-install-istio-package.sh:115`). Today on a KinD box they silently receive `$KUBECONFIG`; after
+(1) they receive empty. Measured so far: none is reachable from `make e2e-kind` (the first two are
+standalone Makefile targets, the last is unreferenced by Makefile/e2e/kind-up). Confirm that before
+merging, and give each an explicit die rather than an empty `--kubeconfig`.
+
+**The REFUTED shape follows, kept so it is not rebuilt.**
+
 **Prescribed shape (type AND identity, abstain when unknown):**
 
     kc="$(supervisor_kubeconfig)" || kc=""
@@ -6630,3 +6741,103 @@ down the path the document elsewhere forbids.
 **Done when:** scenario-1 gains the fetch step (or `09-argocd-address.sh` says, where it prints the
 `--insecure` login line, that this address cannot be verified and why — it already knows, it just
 wrote an IP), and `:469` is replaced by a pointer to the Step at `:310-350`.
+
+## B553 — ✅ `fetch-ca.sh` proved the CHAIN and prescribed the anchor anyway ✅ closed
+
+**The incident.** `openssl verify -CAfile X X` is `verify(X,X)` for a self-signed leaf — true for
+ANY self-signed cert, as `fetch-ca.sh:141-143` already conceded in a comment. The script proved
+that, printed `AUTHENTICATED`, and closed with `set it in .env, e.g. ARGOCD_CA_FILE=…`. Following
+that on this lab (IP endpoint, DNS-only cert) flipped `lib/argocd.sh:385` into its verified branch,
+which cannot succeed there: `make argocd-auth-check` went `PASS (credential only)` -> `NO token
+(curl rc=60)`. The tool whose help text says "and VERIFY it" is the tool that broke the lab, and its
+last line was the instruction that armed it.
+
+**Fixed** (PR pending): the anchor is checked against the address it was fetched from, on the
+CANDIDATE, before anything is written; `set it in .env` is emitted only when it verifies chain AND
+name. Proven live both ways — same cert, same digest, address the only variable.
+
+**What two adversary rounds then found in that fix, all measured, all fixed:**
+
+| | |
+|---|---|
+| the refusal ran AFTER `install` | it destroyed the operator's anchor while saying "do NOT set this" about a file it had already replaced; `secrets/` is gitignored ⇒ unrecoverable. Re-entered the class `fetch-ca.sh:125-131` records from 2026-08-05. 3 of the 4 CA producers already checked before writing |
+| a CN-only cert passed | openssl's `-verify_hostname` falls back to the CN; every Go client refuses it, and crane/Kaniko/podman/containerd/argocd are all Go ⇒ rc=0 was a false green of the same shape as the incident |
+| three siblings still said "run fetch-argocd-ca" | post-fix that tool refuses on a bare IP ⇒ a non-terminating instruction cycle, on the DEFAULT path |
+| SANs were read from the CA | a real CA has no SAN, so on a chain the remedy printed an empty list and said "point the address at a name above" |
+| the refusal went to stdout, rc=0 | `make fetch-argocd-ca > log` swallowed it — the lesson `:229` already paid for on 2026-08-05 |
+| it said "VERIFIES" | directly under "⚠️ NOT AUTHENTICATED", for a property a MITM forges by choosing its own SANs |
+
+**Test:** `test-fetch-ca-name.sh`, 9 assertions, auto-discovered into `TEST_FAST` by the
+`test-*.sh` glob. RED-proven against the pre-fix tree: **3 passed / 6 failed**.
+
+**Residual, named not hidden:** every measurement is a local `openssl s_server` oracle plus one live
+lab; IPv6 endpoints are unparsed by `${hostport%%:*}` and untested (pre-existing); and
+`make env-validate` has **zero** ArgoCD anchor coverage (`grep -c ARGOCD_CA_FILE scripts/02-env.sh`
+-> 0) where Harbor has a graded arm — filed as its own row.
+
+## B554 — 🟡 three Dependabot alerts on `main`, in the demo apps, surfaced by a push
+
+Reported by GitHub on push 2026-09-07, read via `gh api .../dependabot/alerts`:
+
+| sev | package | shape | where |
+|---|---|---|---|
+| medium | `npm/qs` | DoS via attacker-controlled `isBuffer` | TRANSITIVE — absent from `package.json`, present in `apps/nodejs/nodejswebapp/package-lock.json` |
+| medium | `npm/qs` | array-limit bypass via bracket-key comma parsing | same |
+| low | `pip/flask` | session omits `Vary: Cookie` | DIRECT pin — `apps/python/pythonwebapp/requirements.txt:4` `Flask==3.1.2` |
+
+**Not urgent, and say why rather than implying it.** These are demo apps behind an ingress on a lab
+network; neither alert describes a path this repo exercises (nothing parses attacker-controlled query
+strings, and the Flask app sets no session cookie — CONFIRM both before closing, do not assume).
+
+**Two different remediations, so do not batch them.** `qs` is transitive: bump via the lockfile
+(`npm update qs` / an override) and re-run the app's tests — no `package.json` change should be
+needed, and if one is, that is a finding. Flask is a direct pin: bump the pin, and note that
+`Dockerfile.builder` bakes the dependency set, so the builder must be rebuilt or the offline build
+serves the old wheel.
+
+✅ **The stamp is NOT blind — MEASURED 2026-09-07, so this is no longer an open question.**
+`BUILDER_INPUT_MANIFESTS` (`lib/apps.sh:255`) covers `requirements.txt`, `package.json` AND
+`package-lock.json`, and `builder_inputs_hash` moves for both remediations:
+
+| | before | after the bump |
+|---|---|---|
+| pythonwebapp (`Flask==3.1.2` -> `3.1.3`) | `43bd01d78a5573ce` | `037eaa29539fb699` |
+| nodejswebapp (`package-lock.json` edited) | `42b2e63f3a938e82` | `970cd0cb0ef23604` |
+
+Restored byte-exact afterwards. ⚠️ My FIRST attempt at this measurement returned the SHA-256 of the
+EMPTY STRING (`e3b0c442…`) for every case and would have been written up as "the stamp is blind":
+`builder_inputs_hash` calls `app_src`, which needs `lib/os.sh` sourced first, and a `2>/dev/null` in
+the harness hid the failure. The tell was recognising `e3b0c442…` as the empty-string digest. Any
+re-measurement must source `lib/os.sh` before `lib/apps.sh` and must NOT silence stderr.
+
+**Done when:** both bumped, each app's tests green, the builder stamp re-derived, and the alerts
+closed by GitHub rather than dismissed.
+
+## B555 — 🟡 three `fetch-ca.sh` refusal arms are reachable only via a MID-FETCH endpoint change, so nothing pins them
+
+Round 4 (B553) cleared the fix and found that four of that commit's changes were pinned by nothing —
+the same defect round 3 had found one commit earlier, recurring inside its own fix. Two were pinned
+afterwards (`ca_addr_kind`, and the remedy scoping verified by driving the block). Three are NOT:
+
+| arm | why it is unreachable from a normal test |
+|---|---|
+| `rc=1` -> `exit 7` remap | the chain verifies on dial 1 and fails on dial 2 |
+| `rc=4` ("served NO TLS certificate") | the endpoint must present a cert on dial 1 and speak plaintext on dial 2 |
+| `rc=5` | `ca_fingerprint` already died at `:168`; effectively unreachable |
+
+**The rc=1->7 remap is the consequential one:** it is a caller-visible contract change, asserted by a
+comment, with ZERO coverage — so a future edit restoring `exit "$_ep_rc"` re-collides the chain arm
+with `die()` = `exit 1` and nothing reddens.
+
+⚠️ **TWO CANDIDATE TESTS WERE WRITTEN AND BOTH WERE VACUOUS** — each passed against the commit that
+HAD the defect. A plaintext listener gives `rc=2` (accept-then-close), which does not refuse at all;
+a banner-sending listener reaches `ca_verifies_endpoint` rc=4 but fetch-ca.sh dies at extraction with
+rc=1 long before its own rc=4 arm, because a plaintext endpoint presents no certificate to extract.
+They were removed rather than shipped: a vacuous assertion is worse than an absent one.
+
+**The recipe that does work** (round 4 reached rc=7 with it in ~30 lines): a TCP shim that serves
+cert A to the first dial and cert B to the second, so the chain verifies at fetch time and fails on
+the re-check. Assert `rc=7`, not 1.
+
+**Done when:** the shim exists as a helper in `test-fetch-ca-name.sh`, `rc=7` is asserted, and
+reverting the remap to `exit "$_ep_rc"` turns that case RED.
