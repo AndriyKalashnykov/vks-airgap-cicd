@@ -1292,9 +1292,20 @@ $(sed -n '/^_rejected_why() {/,/^}/p' "${_CREDS_REPO}/scripts/creds.sh")"
 # control that must be hand-updated on every refactor is a control that will be wrong next refactor.
 # shellcheck disable=SC2016  # the single quotes are the POINT: `$(` is a LITERAL to match in the
 # extracted source, not an expansion. Double-quoting it would make the shell substitute it here.
-for _h in $(printf '%s' "$_ua" | grep -oE '\$\(_[a-z_]+\)' | tr -d '$()' | sort -u); do
+# ⚠️ SEARCH BOTH FILES. The helper was HOISTED into lib/os.sh (so argocd-password.sh could share
+# ONE sentence instead of a hand-duplicated copy that drifted), and a follower that looks only in
+# creds.sh then finds an empty body and fires RED on a correct tree. MEASURED: that is exactly what
+# happened on the hoist commit. A delegation-follower must follow the delegation ACROSS FILES too.
+for _h in $(printf '%s' "$_ua" | grep -oE '\$\(_?[a-z_]+\)' | tr -d '$()' | sort -u); do
+  for _src in "${_CREDS_REPO}/scripts/creds.sh" "${_CREDS_REPO}/scripts/lib/os.sh"; do
+    _ua="${_ua}
+$(sed -n "/^${_h}() {/,/^}/p" "$_src")"
+  done
+done
+# ...and one hop further: `_renew_how` is now a thin alias, so the SENTENCE is one more level down.
+for _h in $(printf '%s' "$_ua" | grep -oE 'supervisor_renew_how' | sort -u); do
   _ua="${_ua}
-$(sed -n "/^${_h}() {/,/^}/p" "${_CREDS_REPO}/scripts/creds.sh")"
+$(sed -n "/^${_h}() {/,/^}/p" "${_CREDS_REPO}/scripts/lib/os.sh")"
 done
 if printf '%s' "$_ua" | grep -q 'REJECTED this kubeconfig'; then
   ok "B548: the DECIDABLE arm (UNAUTHORIZED) still says what happened"
@@ -1318,6 +1329,57 @@ if printf '%s' "$_ua" | grep -qE 'Re-run: make vks-login'; then
       Supervisor — it is a no-op for the very failure it is printed for."
 else
   ok "B548: ...and has not regressed to the no-op remedy"
+fi
+
+# ── 🔴 THE SSO-LOCKOUT SAFETY PROPERTY. It regressed TWICE and the suite did not notice. ─────────
+# `make vks-login` performs a vSphere SSO BIND, and vCenter locks out PERMANENTLY after THREE
+# failures. So it may be named ONLY where the cause is a FACT (the token's own `exp` says EXPIRED)
+# and NEVER on a state this report cannot decide.
+#
+# ⚠️ WHY THIS IS A SEPARATE, BEHAVIOURAL CONTROL. The B548 delegation-follower above pulls the
+# helper's WHOLE body, and that body names the command in one of its two branches -- so it is
+# GREEN either way and is structurally incapable of seeing this. MEASURED: re-applying the exact
+# regression (dropping `--no-command`) left the suite at 77 ok / 0 FAIL, byte-identical. Prose has
+# now closed this property three times and been reverted twice; this is the first thing that fails.
+_rh="$(sed -n '/^supervisor_renew_how() {/,/^}/p' "${_CREDS_REPO}/scripts/lib/os.sh")"
+if [ -z "$_rh" ]; then
+  bad "SSO gate: supervisor_renew_how not found in lib/os.sh — this control is measuring NOTHING"
+else
+  # It must be RUNNABLE, not merely present: source the lib and render both states.
+  _sso_cmd="$(bash -c ". '${_CREDS_REPO}/scripts/lib/os.sh' 2>/dev/null; supervisor_renew_how" 2>/dev/null || true)"
+  _sso_non="$(bash -c ". '${_CREDS_REPO}/scripts/lib/os.sh' 2>/dev/null; supervisor_renew_how --no-command" 2>/dev/null || true)"
+
+  case "$_sso_cmd" in
+    *"make vks-login"*) ok "SSO gate: the DECIDABLE remedy names the command" ;;
+    *)                  bad "SSO gate: the decidable remedy no longer names the command — the fix is withheld from the reader who HAS it" ;;
+  esac
+  case "$_sso_non" in
+    *"make vks-login"*) bad "SSO gate: the UNDECIDABLE remedy NAMES make vks-login. That spends one of THREE vCenter SSO attempts before PERMANENT lockout, for a cause this report cannot decide. Regressed twice already." ;;
+    "")                 bad "SSO gate: the undecidable remedy rendered EMPTY — cannot tell 'no command' from 'no output'" ;;
+    *)                  ok "SSO gate: the UNDECIDABLE remedy names NO SSO command" ;;
+  esac
+  case "$_sso_non" in
+    *"locks out PERMANENTLY"*) ok "SSO gate: the undecidable remedy still states WHY there is no command" ;;
+    *)                         bad "SSO gate: the undecidable remedy dropped 'locks out PERMANENTLY' — the clause that is the whole reason the command is withheld" ;;
+  esac
+
+  # STRUCTURAL, because the behavioural pair above cannot see a CALL SITE that forgot the flag:
+  # inside `_rejected_why`, every arm EXCEPT `EXPIRED*` must pass --no-command.
+  _rw="$(sed -n '/^_rejected_why() {/,/^}/p' "${_CREDS_REPO}/scripts/creds.sh")"
+  _bare=0
+  while IFS= read -r _l; do
+    case "$_l" in
+      *EXPIRED\*\)*) continue ;;
+      *'_renew_how)'*|*'_renew_how "'*) _bare=$((_bare + 1)) ;;
+    esac
+  done <<INNER
+$(printf '%s\n' "$_rw" | grep -n '_renew_how' | grep -v 'EXPIRED' || true)
+INNER
+  if [ "$_bare" -eq 0 ]; then
+    ok "SSO gate: no non-EXPIRED arm of _rejected_why calls the remedy without --no-command"
+  else
+    bad "SSO gate: $_bare non-EXPIRED arm(s) call _renew_how WITHOUT --no-command"
+  fi
 fi
 
 if [ "$fail" != 0 ]; then

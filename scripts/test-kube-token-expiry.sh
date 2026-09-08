@@ -96,6 +96,41 @@ for _u in 1757000000000 1757000000000000 1757000000000000000; do
   fi
 done
 
+# ── 4b. THE PADDING ARMS — and they are UNPROVABLE on GNU base64 ────────────────────────────────
+# MEASURED: deleting padding arm 2 OR arm 3 left this suite 20/20 GREEN, because GNU `base64 -d`
+# RECOVERS the full payload from unpadded input (rc=1, discarded). So on a GNU box the padding
+# block looks like dead code and a future session will "simplify" it away.
+#
+# It is not dead. On BUSYBOX base64 — the class the air-gap box has, which is the whole reason for
+# the no-`tr` rule — unpadded input is TRUNCATED. MEASURED on busybox:latest:
+#     {"a":"x","exp":1000000000}  unpadded (len 35, mod4=3)  ->  {"a":"x","exp":100000000
+# The last digit is LOST, the regex still matches, and 2001-09-09 renders as 1973-03-03 AS FACT.
+# So this case runs the decode under a busybox `base64`, and when none is available it says so
+# LOUDLY rather than printing a silent ok — an unprovable case must not look proven.
+if command -v busybox >/dev/null 2>&1; then
+  _bb="$_T/bbbin"; mkdir -p "$_bb"
+  printf '#!/bin/sh\nexec busybox base64 "$@"\n' > "$_bb/base64"; chmod +x "$_bb/base64"
+  for _pair in '2:{"a":"xxx","exp":1000000000}' '3:{"a":"x","exp":1000000000}'; do
+    _mod="${_pair%%:*}"; _pl="${_pair#*:}"
+    _kc "$_T/pad$_mod" "u:$_pl"
+    # PATH puts the truncating base64 first; everything else resolves normally.
+    _got="$(PATH="$_bb:$PATH" bash -c ". '$PWD/scripts/lib/os.sh' 2>/dev/null; kube_token_expiry '$_T/pad$_mod'" 2>/dev/null || true)"
+    case "$_got" in
+      EXPIRED\ 2001-09-09*) ok  "padding arm $_mod: correct under a TRUNCATING base64 ($_got)" ;;
+      *)                    bad "padding arm $_mod: got '$_got', want EXPIRED 2001-09-09 — unpadded input was truncated, so a digit was silently dropped from exp" ;;
+    esac
+    # ⚠️ HONESTY, because an unprovable case must not look proven. Only arm 3 PINS its padding.
+    # MEASURED on busybox: mod4=3 loses TWO bytes and eats a DIGIT
+    #   {"a":"x","exp":1000000000}  ->  EXPIRED 1973-03-03  (deleting arm 3 reproduces this)
+    # while mod4=2 loses ONE byte, and valid JSON's last byte is always `}` — never a digit — so
+    # the exp survives and deleting arm 2 changes NOTHING observable here. Arm 2 stays in the code
+    # because it is correct; this case is a VERDICT regression guard for it, not a proof of it.
+  done
+else
+  printf 'NOTE  padding arms NOT proven on this box: no busybox base64 available, and GNU base64\n'
+  printf '      RECOVERS unpadded input, so a padding mutation is UNDETECTABLE here.\n'
+fi
+
 # ── 5. the ordinary verdicts ────────────────────────────────────────────────────────────────────
 _kc "$_T/exp" "u:{\"exp\":$_past}";   case "$(kube_token_expiry "$_T/exp")" in EXPIRED*) ok "past exp -> EXPIRED" ;; *) bad "past exp did not report EXPIRED" ;; esac
 _kc "$_T/val" "u:{\"exp\":$_future}"; case "$(kube_token_expiry "$_T/val")" in VALID*)   ok "future exp -> VALID"  ;; *) bad "future exp did not report VALID"  ;; esac

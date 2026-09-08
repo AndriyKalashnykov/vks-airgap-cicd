@@ -2146,6 +2146,28 @@ kube_is_notfound() {
   grep -qF -- "$token" <<< "$(grep -F 'Error from server (NotFound)' "$errfile" 2>/dev/null)"
 }
 
+# ── supervisor_renew_how [--no-command] — the remedy. ONE sentence, shared by BOTH consumers. ──
+# ⚠️ AN EARLIER VERSION BRANCHED ON `VKS_AUTH_METHOD` AND INVERTED THE ANSWER. scenario-1 Step 6
+# writes `kubeconfig` (docs/scenario-1.md:614), so the scenario-1 operator — who DOES have the
+# command, at :622 — was told "no command here renews it". That withheld the very fix this change
+# exists to deliver, and it keyed on the ONE variable already proven not to indicate WHICH
+# kubeconfig is being renewed. So: no discriminator. Both sentences are true for every reader, and
+# the reader knows which is theirs — they know whether they minted this or were handed it.
+#
+# 🔴 `--no-command` IS A SAFETY GATE, NOT A STYLE FLAG. On the UNDECIDABLE arm the cause is NOT
+# known to be expiry, and `make vks-login` spends one of the THREE vCenter SSO attempts before
+# PERMANENT lockout. Commit 251df27 closed exactly this ("stop prescribing make vks-login for a
+# state that is undecidable"); removing the VKS_AUTH_METHOD gate re-opened it for every reader
+# until this flag was added. A round measured the rendered footnote putting "Do not re-authenticate
+# blind" and the command FOUR WORDS APART. EXPIRED (a fact) names the command; nothing else does.
+supervisor_renew_how() {
+  if [ "${1:-}" = --no-command ]; then
+    printf 'Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. Ask whoever owns the lab for a current credential — this report cannot tell you which fix applies, and guessing costs one of those three attempts.'
+    return 0
+  fi
+  printf 'If you minted this kubeconfig here (scenario-1): VKS_AUTH_METHOD=vcf make vks-login — the AUTH_METHOD is required because Step 6 leaves .env on kubeconfig, so a bare make vks-login renews the GUEST kubeconfig instead (docs/scenario-1.md, "3. Log in to the Supervisor"). If it was HANDED to you (scenario-2 tenant): nothing here renews it — ask whoever owns the lab.'
+}
+
 # ── jwt_exp_seconds <jwt> — the `exp` claim in SECONDS, or EMPTY. Never guesses. ─────────────────
 # ONE parser, because there were TWO and they diverged: the headlamp decoder in creds.sh kept a
 # greedy `.*` (last match wins), a `[0-9]*` (zero-or-more), and no ceiling, while this one was
@@ -2159,7 +2181,7 @@ kube_is_notfound() {
 #
 # NO `tr` (photon:5.0 has none) and NO python3. `sed s/,/\n/g` is measured working on toybox sed.
 jwt_exp_seconds() {
-  local tok="${1:-}" pay all n
+  local tok="${1:-}" pay all
   case "$tok" in *.*.*) ;; *) return 0 ;; esac
   pay="${tok#*.}"; pay="${pay%%.*}"
   pay="${pay//_//}"; pay="${pay//-/+}"            # base64url -> base64, without tr
@@ -2167,8 +2189,14 @@ jwt_exp_seconds() {
   all="$(printf '%s' "$pay" | base64 -d 2>/dev/null | sed 's/,/\n/g' \
          | sed -n 's/.*"exp":[[:space:]]*\([0-9]\{1,\}\).*/\1/p')"
   [ -n "$all" ] || return 0
-  n="$(printf '%s\n' "$all" | grep -c .)"
-  [ "$n" -eq 1 ] || return 0                      # ambiguous -> refuse (see above)
+  # A newline in $all means sed emitted MORE THAN ONE match -> ambiguous -> refuse. `case` rather
+  # than `grep -c`, because this function's header enumerates its floor as base64/date/sed/head/cut
+  # and grep is not in it — a control should not quietly widen the dependency set it advertises.
+  # ⚠️ A LITERAL newline in the pattern. `_NL="$(printf '\n')"` is EMPTY — command substitution
+  # strips trailing newlines — and `*""*` matches EVERYTHING, so the function refused on every
+  # token. Measured: 6 cases failed instantly.
+  case "$all" in *"
+"*) return 0 ;; esac                             # >1 match -> ambiguous -> refuse (see above)
   # A sanity CEILING, not a width guard. MEASURED: bash `[` errors at NINETEEN digits and `if`
   # consumes that error as FALSE. It also rejects MILLI/MICRO/NANOsecond epochs, which are
   # numerically valid and render nonsense (1757000000000000 -> "55679083-07-23"). 11 digits =
@@ -2203,13 +2231,13 @@ jwt_exp_seconds() {
 # Degrades to UNKNOWN — never a guess — for a non-JWT token, a client-cert kubeconfig, an absent
 # file, or a payload with no exp claim.
 kube_token_expiry() {
-  local kc="${1:-}" tok pay exp now
+  local kc="${1:-}" tok exp now
   [ -n "$kc" ] && [ -s "$kc" ] || { printf 'UNKNOWN'; return 0; }
   tok="$(kubectl --kubeconfig "$kc" config view --raw --minify -o jsonpath='{.users[0].user.token}' 2>/dev/null || true)"
   case "$tok" in *.*.*) ;; *) printf 'UNKNOWN'; return 0 ;; esac
-  pay="${tok#*.}"; pay="${pay%%.*}"
-  pay="${pay//_//}"; pay="${pay//-/+}"          # base64url -> base64, WITHOUT tr (see above)
-  case $(( ${#pay} % 4 )) in 2) pay="${pay}==" ;; 3) pay="${pay}=" ;; esac
+  # NOTE: no decoding here. `jwt_exp_seconds` derives everything from $tok. An earlier version
+  # recomputed the payload, the base64url substitutions and the padding right here and then never
+  # read the result — dead code, in the function whose header is about not duplicating work.
   exp="$(jwt_exp_seconds "$tok")"
   [ -n "$exp" ] || { printf 'UNKNOWN'; return 0; }
   now="$(date -u +%s)"

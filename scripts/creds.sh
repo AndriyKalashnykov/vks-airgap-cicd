@@ -351,27 +351,15 @@ if [ "$_have_sink" = 1 ] && [ "${_VKS_STATE_SOURCED-1}" = "0" ]; then _sink_refu
 # overlay. Telling a KinD operator to go and set a password is inventing a chore for them, and it is the
 # same defect as the old ArgoCD note. Only a REAL LAB must supply one (there, Harbor/ArgoCD are given to
 # you, not created by us).
-# ── _renew_how [--no-command] — the remedy. NAMES BOTH PATHS; never WITHHOLDS by guessing. ──────
-# ⚠️ AN EARLIER VERSION BRANCHED ON `VKS_AUTH_METHOD` AND INVERTED THE ANSWER. scenario-1 Step 6
-# writes `kubeconfig` (docs/scenario-1.md:614), so the scenario-1 operator — who DOES have the
-# command, at :622 — was told "no command here renews it". That withheld the very fix this change
-# exists to deliver, and it keyed on the ONE variable already proven not to indicate WHICH
-# kubeconfig is being renewed. So: no discriminator. Both sentences are true for every reader, and
-# the reader knows which is theirs — they know whether they minted this or were handed it.
-#
-# 🔴 `--no-command` IS A SAFETY GATE, NOT A STYLE FLAG. On the UNDECIDABLE arm the cause is NOT
-# known to be expiry, and `make vks-login` spends one of the THREE vCenter SSO attempts before
-# PERMANENT lockout. Commit 251df27 closed exactly this ("stop prescribing make vks-login for a
-# state that is undecidable"); removing the VKS_AUTH_METHOD gate re-opened it for every reader
-# until this flag was added. A round measured the rendered footnote putting "Do not re-authenticate
-# blind" and the command FOUR WORDS APART. EXPIRED (a fact) names the command; nothing else does.
-_renew_how() {
-  if [ "${1:-}" = --no-command ]; then
-    printf 'Ask whoever owns the lab for a current credential — this report cannot tell you which fix applies, and guessing costs an SSO attempt.'
-    return 0
-  fi
-  printf 'If you minted this kubeconfig here (scenario-1): VKS_AUTH_METHOD=vcf make vks-login — the AUTH_METHOD is required because Step 6 leaves .env on kubeconfig, so a bare make vks-login renews the GUEST kubeconfig instead (docs/scenario-1.md, "3. Log in to the Supervisor"). If it was HANDED to you (scenario-2 tenant): nothing here renews it — ask whoever owns the lab.'
-}
+
+# `_renew_how` now lives in lib/os.sh as `supervisor_renew_how` — argocd-password.sh needs the
+# SAME sentence and cannot source creds.sh, so a hand-duplicated copy drifted (a round measured the
+# two DISAGREEING on the undecidable arm, and the "locks out PERMANENTLY" clause missing from one).
+_renew_how() { supervisor_renew_how "$@"; }
+
+# newline-joined -> space-joined, without `tr` (photon:5.0 has none). The consumer is the
+# "none is <cluster>-ssh-password: <LIST>" message; an empty LIST there names no options at all.
+tr_free_join() { local _l _o=""; while IFS= read -r _l || [ -n "${_l:-}" ]; do [ -n "$_l" ] || continue; _o="${_o}${_l} "; done; printf '%s' "${_o% }"; }
 
 _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per flow
   # ⚠️ "check the state overlay" IS THE FOURTH FALSE CLAIM, and the most dangerous of them: under a
@@ -621,7 +609,10 @@ fi
 # ⚠️ `|| true` IS REQUIRED. An UNSTAMPED overlay is the COMMON case and the one this tri-state
 # exists for — grep then exits 1, the assignment returns 1, and `set -e` kills the report before it
 # prints anything. Measured: `make creds` died with "Error 1" and no output at all.
-_stamp="$(grep -m1 '^VKS_STATE_SERVER=' "$_sink" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
+# sed, not tr: on a tr-less box this would be EMPTY, and an empty stamp falls through to the
+# "may be from a lab that no longer exists" banner over a correctly-stamped overlay — the exact
+# false alarm the comment below says was fixed.
+_stamp="$(grep -m1 '^VKS_STATE_SERVER=' "$_sink" 2>/dev/null | cut -d= -f2- | sed 's/"//g' || true)"
 # ⚠️ Read the live server through THE SAME FUNCTION THAT WROTE THE STAMP (state.sh's
 # state_kubeconfig_server), not a hand-rolled jsonpath. The stamp is minified and this read was NOT,
 # so on any multi-cluster kubeconfig they compared DIFFERENT servers and could never be equal —
@@ -1142,7 +1133,8 @@ _kube_classify() {
     # [ -s ] test on the GUEST kubeconfig plus `kubectl cluster-info`; it never touches the
     # Supervisor. docs/scenario-1.md:616-626 already said so and this file had not heard.
     # 🔴 IT NAMES THE SSO COMMAND ON EXACTLY ONE ARM: EXPIRED, where the cause is a FACT read from
-    # the token's own `exp`. Every other arm calls `_renew_how --no-command`. The obvious remedy —
+    # the token's own `exp`. Every other arm names NO command at all; the one arm that must EXPLAIN
+    # the absence calls `_renew_how --no-command` (exactly one call site). The obvious remedy —
     # VKS_AUTH_METHOD=vcf make vks-login — performs a vSphere SSO BIND (30-vks-login.sh:397), and
     # vCenter locks out PERMANENTLY after 3 failures, so it must never be prescribed for a state
     # this report cannot decide. (This comment said "DELIBERATELY NAMES NO SSO COMMAND" and was
@@ -1805,7 +1797,8 @@ _ssh_pick() {
   fi
   if [ -n "$_hit" ]; then printf '%s' "$_hit"; return 0; fi
   _n="$(printf '%s' "$_list" | grep -c . || true)"
-  if [ "${_n:-0}" -eq 1 ]; then printf '%s' "$(printf '%s' "$_list" | tr -d '\n')"; fi
+  # sed, not tr — this is the sole-candidate secret NAME; empty silently disables the path.
+  if [ "${_n:-0}" -eq 1 ]; then printf '%s' "$(printf '%s' "$_list" | sed '/^$/d' | head -1)"; fi
   return 0
 }
 
@@ -1871,7 +1864,7 @@ else
         _ssh_tok="<ambiguous>"
         _ssh_state="$(printf '%s candidates in %s and none is %s-ssh-password: %s— set VKS_CLUSTER_NAME in .env to one of these' \
                         "$_ssh_nc" "${VKS_NAMESPACE}" "${VKS_CLUSTER_NAME:-<unset>}" \
-                        "$(printf '%s' "$_ssh_cands" | tr '\n' ' ')")"
+                        "$(printf '%s' "$_ssh_cands" | sed 's/$/ /' | tr_free_join)")"
       fi
       # GUARD ON "WE HAVE A NAME", NOT ON THE COUNT (adversary CRITICAL, 2026-09-05).
       # It read `[ -z "$_ssh_sec" ] && [ "$_ssh_nc" -eq 0 ]`, so the AMBIGUOUS case (>=2 candidates,

@@ -283,15 +283,12 @@ if command -v kubectl >/dev/null 2>&1; then
       # as Unauthorized. Offline, so it costs none of the THREE vCenter SSO attempts before lockout.
       _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
       case "$_ap_exp" in
-        EXPIRED*)
-          # NAMES BOTH PATHS — see creds.sh `_renew_how`. Branching on VKS_AUTH_METHOD inverted the
-          # answer for the scenario-1 operator, who is the one that HAS the command.
-          log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — if you minted it here: VKS_AUTH_METHOD=vcf make vks-login (a bare 'make vks-login' renews the GUEST kubeconfig; scenario-1 Step 6 leaves .env on 'kubeconfig'). If it was handed to you, ask whoever owns the lab." ;;
-        VALID*)
-          # Rejected while still VALID => rotated/revoked. Re-authenticating cannot help, and
-          # guessing costs one of the THREE vCenter SSO attempts before permanent lockout.
-          log_warn "the cluster REJECTED this kubeconfig although its token has NOT expired (valid until ${_ap_exp#VALID }) — that is a ROTATED or REVOKED credential, not an expiry. Ask whoever owns the lab; do not re-authenticate blind." ;;
-        *)        log_warn "the cluster REJECTED this kubeconfig and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this may be a ROTATED credential rather than an expired one — do not re-authenticate blind; ask whoever owns the lab." ;;
+        # ONE sentence, from lib/os.sh — NOT a hand-written copy. A round measured the two copies
+        # DISAGREEING on the undecidable arm, and "locks out PERMANENTLY" missing from this file's
+        # arms entirely: the clause that is the whole REASON the command is withheld.
+        EXPIRED*) log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — $(supervisor_renew_how)" ;;
+        VALID*)   log_warn "the cluster REJECTED this kubeconfig although its token has NOT expired (valid until ${_ap_exp#VALID }) — that is a ROTATED or REVOKED credential, not an expiry. $(supervisor_renew_how --no-command)" ;;
+        *)        log_warn "the cluster REJECTED this kubeconfig and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this may be a ROTATED credential rather than an expired one. $(supervisor_renew_how --no-command)" ;;
       esac
     fi
   fi
