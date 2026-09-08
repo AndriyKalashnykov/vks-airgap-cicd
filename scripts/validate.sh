@@ -12,7 +12,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 rc=0
 KUBERNETES_VERSION="${KUBERNETES_VERSION:-1.31.0}"
-RENDERED=/tmp/vks-deploy-rendered.yaml
+# ⚠️ PER-RUN, NOT A FIXED PATH. This was `/tmp/vks-deploy-rendered.yaml`, so two concurrent
+# `make static-check` runs -- in ANY two checkouts, since a git worktree isolates the TREE and not
+# /tmp -- rendered into the same file and read each other's. MEASURED 2026-09-08: it surfaced as
+# `kubeconform: examined ZERO resources and reported no errors`, i.e. the vacuity guard firing
+# correctly on corrupted input, and it destroyed two gate runs before the cause was found. The
+# failure names the file, which sends you to inspect a path that is already overwritten.
+#
+# KEPT ON FAILURE, deliberately: the whole point of naming it in the error is that an operator can
+# open it, so deleting it unconditionally would trade one debugging problem for another. Cleaned up
+# only when validate SUCCEEDS -- a leftover then means "the last run failed, here is what it read".
+RENDERED="$(mktemp -t vks-deploy-rendered.XXXXXX.yaml)"
 # Cache downloaded JSON schemas so the multiple kubeconform runs below share them
 # and re-runs don't re-fetch (githubusercontent rate-limits under heavy use).
 KC_CACHE="${KUBECONFORM_CACHE:-${HOME}/.cache/kubeconform}"
@@ -401,5 +411,11 @@ else
   log_warn "kubeconform not installed — k8s/ manifests unchecked"
 fi
 
-if [ "$rc" -eq 0 ]; then log_info "validate: OK"; else log_error "validate: findings above"; fi
+if [ "$rc" -eq 0 ]; then
+  log_info "validate: OK"
+  rm -f "$RENDERED"          # success -> nothing to inspect; a leftover means the LAST run failed
+else
+  log_error "validate: findings above"
+  log_error "  the rendered manifests it read are kept at: ${RENDERED}"
+fi
 exit "$rc"
