@@ -1286,6 +1286,14 @@ fi
 _ua="$(sed -n '/UNAUTHORIZED)/,/;;/p' "${_CREDS_REPO}/scripts/creds.sh")"
 _ua="${_ua}
 $(sed -n '/^_rejected_why() {/,/^}/p' "${_CREDS_REPO}/scripts/creds.sh")"
+# ...and one level FURTHER: `_rejected_why` itself delegates the remedy to a helper. Chasing that by
+# hand broke this control TWICE in one session (2026-09-08), each time firing RED on a FIX -- so
+# follow the delegation MECHANICALLY: pull the body of every `$(_helper)` the extract calls. A
+# control that must be hand-updated on every refactor is a control that will be wrong next refactor.
+for _h in $(printf '%s' "$_ua" | grep -oE '\$\(_[a-z_]+\)' | tr -d '$()' | sort -u); do
+  _ua="${_ua}
+$(sed -n "/^${_h}() {/,/^}/p" "${_CREDS_REPO}/scripts/creds.sh")"
+done
 if printf '%s' "$_ua" | grep -q 'REJECTED this kubeconfig'; then
   ok "B548: the DECIDABLE arm (UNAUTHORIZED) still says what happened"
 else

@@ -351,6 +351,22 @@ if [ "$_have_sink" = 1 ] && [ "${_VKS_STATE_SOURCED-1}" = "0" ]; then _sink_refu
 # overlay. Telling a KinD operator to go and set a password is inventing a chore for them, and it is the
 # same defect as the old ArgoCD note. Only a REAL LAB must supply one (there, Harbor/ArgoCD are given to
 # you, not created by us).
+# ── _renew_how — the remedy, SCOPED TO THE AUTH METHOD. There is not one answer. ────────────────
+# `vcf`/`vsphere`: WE mint the Supervisor kubeconfig, so there is a command.
+# `kubeconfig`   : the file was HANDED to us (scenario-2.md:410 puts the DEFAULT tenant here), so
+#                  there is nothing to run — the honest answer is "ask for a fresh one". Printing
+#                  the vcf command to that reader is a dead end dressed as an answer (RULE ZERO-B).
+# Spelling matches docs/scenario-1.md:622 (`VKS_AUTH_METHOD=vcf make vks-login`) so a reader who
+# greps the docs for what we printed finds it. Both forms were MEASURED to reach the recipe env.
+_renew_how() {
+  case "${VKS_AUTH_METHOD:-}" in
+    vcf|vsphere)
+      printf 'Renew it: VKS_AUTH_METHOD=vcf make vks-login — the AUTH_METHOD is required because scenario-1 Step 6 leaves .env on kubeconfig, and a bare make vks-login then renews the GUEST kubeconfig instead of this one (docs/scenario-1.md, "3. Log in to the Supervisor").' ;;
+    *)
+      printf 'This box authenticates with VKS_AUTH_METHOD=%s, i.e. the Supervisor kubeconfig was HANDED to you rather than minted here — so no command here renews it. Ask whoever owns the lab for a current one (docs/scenario-2.md).' "${VKS_AUTH_METHOD:-kubeconfig}" ;;
+  esac
+}
+
 _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per flow
   # ⚠️ "check the state overlay" IS THE FOURTH FALSE CLAIM, and the most dangerous of them: under a
   # REFUSAL the password WAS published -- for another cluster -- so this sent the operator to read a
@@ -480,7 +496,10 @@ else
   if [ "$_have_sink" = 1 ]; then
     _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
     case "$_ap_exp" in
-      EXPIRED*) argo_pw="<not read — Supervisor token EXPIRED ${_ap_exp#EXPIRED }; make vks-login VKS_AUTH_METHOD=vcf, then make argocd-password>" ;;
+      EXPIRED*) argo_pw="<not read — Supervisor token EXPIRED ${_ap_exp#EXPIRED }; renew that credential first, then: make argocd-password>" ;;
+      # A LIVE token that the Supervisor rejects is rotated/revoked, not expired — and waiting
+      # cannot fix that, so do not send the reader into `argocd-password`'s wait.
+      VALID*)   argo_pw="<not read — the Supervisor token is still valid (${_ap_exp#VALID }); if it is being REJECTED the credential was rotated — ask whoever owns the lab>" ;;
       *)        argo_pw="<not read — run: make argocd-password (it waits)>" ;;
     esac
   fi
@@ -1079,9 +1098,15 @@ _rejected_why() {
   _e="$(kube_token_expiry "$kc" 2>/dev/null || printf 'UNKNOWN')"
   case "$_e" in
     EXPIRED*)
-      printf 'the Supervisor token EXPIRED at %s. Renew it: make vks-login VKS_AUTH_METHOD=vcf — the AUTH_METHOD is required because scenario-1 Step 6 leaves .env on kubeconfig, and a bare make vks-login then renews the GUEST kubeconfig instead of this one (docs/scenario-1.md, "3. Log in to the Supervisor").' "${_e#EXPIRED }" ;;
+      printf 'the Supervisor token EXPIRED at %s. %s' "${_e#EXPIRED }" "$(_renew_how)" ;;
+    VALID*)
+      # The DEFINITIVE rotated/revoked signal, and the whole reason to read `exp` at all: the
+      # Supervisor rejected a token that has NOT expired. Sending this to the hedge below would
+      # assert "carries no readable expiry" about an expiry we just read — a false sentence — and
+      # would discard the one discrimination kubectl cannot make.
+      printf 'the token has NOT expired (valid until %s), so the Supervisor rejected a LIVE token — this is a ROTATED or REVOKED credential, not an expiry. Re-authenticating will NOT help, and vCenter SSO locks out PERMANENTLY after 3 failures: ask whoever owns the lab for a current credential.' "${_e#VALID }" ;;
     *)
-      printf 'the Supervisor REJECTED this kubeconfig, and its token carries no readable expiry, so this is NOT necessarily expiry — it may be a rotated or revoked credential. Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. The renewal for the vcf method is: make vks-login VKS_AUTH_METHOD=vcf (docs/scenario-1.md, "3. Log in to the Supervisor").' ;;
+      printf 'the Supervisor REJECTED this kubeconfig, and its token carries no readable expiry (a client-cert kubeconfig has none), so this is NOT necessarily expiry — it may be a rotated or revoked credential. Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. %s' "$(_renew_how)" ;;
   esac
 }
 
@@ -2001,8 +2026,23 @@ EOF
 # already calls "worse than no marker at all, because it reads as sourced". The existing emitter at
 # ~1448 scans `$rows` (the SERVICES table) and is structurally blind to this one, which lives in
 # `$_lab_rows`. Gated on the marker being PRESENT so cell and note cannot drift apart.
-if printf '%s' "${_lab_rows:-}" | grep -q -- 'more — see note'; then
-  printf '\n  note: every guest node takes the SAME user and password; the row shows the first.\n'
+# ⚠️ KEYED ON THE FLAGS, NOT ON THE RENDERED STRING. creds.sh:1503-1507 records the measured
+# incident: rewording a marker silently stopped matching it and the cell cited a note that no
+# longer printed. Display text is not a control channel. `_ssh_n` is the same variable the cell
+# branches on (verified in scope: plain if/fi, no subshell), so cell and note cannot drift — and
+# this form also covers the `NOT cluster-scoped` arm, which carries no marker and so could never
+# have matched a text key at all.
+if [ "${_ssh_n:-0}" -gt 1 ]; then
+  # ⚠️ THE CLAIM IS SCOPED. The password comes from ONE per-cluster secret, so "same for every
+  # node" holds only where the addresses were filtered to THIS cluster. In the un-scoped arm the
+  # list can span clusters, and those nodes take a DIFFERENT secret — asserting one password for
+  # them would be a false sentence about someone else's cluster (RULE ZERO-V).
+  if [ "${_ssh_scoped:-1}" = 1 ]; then
+    printf '\n  note: every node of this cluster takes the SAME user and password; the row shows the first.\n'
+  else
+    printf '\n  note: these addresses are NOT filtered to this cluster, so some may belong to another\n'
+    printf '        one — and a node of another cluster takes that cluster'"'"'s password, not this row'"'"'s.\n'
+  fi
   if [ -n "${_ssh_addr:-}" ]; then
     printf '        All node addresses: %s\n' "$_ssh_addr"
   fi

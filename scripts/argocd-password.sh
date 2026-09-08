@@ -280,8 +280,18 @@ if command -v kubectl >/dev/null 2>&1; then
       # as Unauthorized. Offline, so it costs none of the THREE vCenter SSO attempts before lockout.
       _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
       case "$_ap_exp" in
-        EXPIRED*) log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — renew it: make vks-login VKS_AUTH_METHOD=vcf (a bare 'make vks-login' renews the GUEST kubeconfig; scenario-1 Step 6 leaves .env on 'kubeconfig')." ;;
-        *)        log_warn "the cluster REJECTED this kubeconfig and its token carries no readable expiry, so this may be a ROTATED credential rather than an expired one — do not re-authenticate blind." ;;
+        EXPIRED*)
+          case "${VKS_AUTH_METHOD:-}" in
+            vcf|vsphere) log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — renew it: VKS_AUTH_METHOD=vcf make vks-login (a bare 'make vks-login' renews the GUEST kubeconfig; scenario-1 Step 6 leaves .env on 'kubeconfig')." ;;
+            # VKS_AUTH_METHOD=kubeconfig is the DEFAULT TENANT (scenario-2.md:410): the file was
+            # handed to them, so no command here renews it. Naming one is a dead end (RULE ZERO-B).
+            *)           log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — this box authenticates with VKS_AUTH_METHOD=${VKS_AUTH_METHOD:-kubeconfig}, so the kubeconfig was handed to you and no command here renews it. Ask whoever owns the lab for a current one." ;;
+          esac ;;
+        VALID*)
+          # Rejected while still VALID => rotated/revoked. Re-authenticating cannot help, and
+          # guessing costs one of the THREE vCenter SSO attempts before permanent lockout.
+          log_warn "the cluster REJECTED this kubeconfig although its token has NOT expired (valid until ${_ap_exp#VALID }) — that is a ROTATED or REVOKED credential, not an expiry. Ask whoever owns the lab; do not re-authenticate blind." ;;
+        *)        log_warn "the cluster REJECTED this kubeconfig and its token carries no readable expiry (a client-cert kubeconfig has none), so this may be a ROTATED credential rather than an expired one — do not re-authenticate blind." ;;
       esac
     fi
   fi

@@ -2132,37 +2132,6 @@ registry_hostport() {
 #
 # The token argument is what makes it specific: pass the resource the caller asked for, so a
 # NotFound about something ELSE in the same buffer cannot answer for it.
-# ── kube_token_expiry <kubeconfig> — is the bearer token EXPIRED, and WHEN? Offline, free. ───────
-# A Supervisor kubeconfig from `vcf context create` carries a vCenter OIDC JWT with a hard 10h
-# lifetime (MEASURED: iat 03:24 -> exp 13:24). The `exp` claim is readable WITHOUT touching the
-# network and WITHOUT spending a vCenter SSO attempt, which is what makes it usable here: every
-# other way of learning "is this token dead" costs a bind, and vCenter locks out PERMANENTLY at 3.
-#
-# It is what lets a caller say WHEN it expired instead of "usually an EXPIRED token", and it is the
-# ONLY thing that separates "expired" from "credential rotated/revoked" — kubectl reports both as
-# `Unauthorized`, so classify_kube_failure cannot tell them apart and must not be asked to.
-#
-# ⚠️ NO python3. It is absent from a bare photon:5.0 image and this runs on the air-gap box too;
-# base64/date/sed/tr are the floor 00-install-prereqs.sh already guarantees.
-# Degrades to UNKNOWN — never a guess — for a non-JWT token, a client-cert kubeconfig, an absent
-# file, or a payload with no exp claim.
-kube_token_expiry() {
-  local kc="${1:-}" tok pay exp now
-  [ -n "$kc" ] && [ -s "$kc" ] || { printf 'UNKNOWN'; return 0; }
-  tok="$(kubectl --kubeconfig "$kc" config view --raw -o jsonpath='{.users[0].user.token}' 2>/dev/null || true)"
-  case "$tok" in *.*.*) ;; *) printf 'UNKNOWN'; return 0 ;; esac
-  pay="${tok#*.}"; pay="${pay%%.*}"
-  pay="$(printf '%s' "$pay" | tr '_-' '/+')"
-  case $(( ${#pay} % 4 )) in 2) pay="${pay}==" ;; 3) pay="${pay}=" ;; esac
-  exp="$(printf '%s' "$pay" | base64 -d 2>/dev/null | tr ',' '\n' \
-         | sed -n 's/.*"exp":[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)"
-  [ -n "$exp" ] || { printf 'UNKNOWN'; return 0; }
-  now="$(date -u +%s)"
-  if [ "$exp" -lt "$now" ]; then printf 'EXPIRED %s' "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
-  else                           printf 'VALID %s'   "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
-  fi
-}
-
 kube_is_notfound() {
   local errfile="${1:-/dev/null}" token="${2:-}"
   [ -r "$errfile" ] || return 1
@@ -2176,6 +2145,52 @@ kube_is_notfound() {
   # temp file, so there is nothing to SIGPIPE. (check-grep-q-pipe caught this exact line.)
   grep -qF -- "$token" <<< "$(grep -F 'Error from server (NotFound)' "$errfile" 2>/dev/null)"
 }
+
+# ── kube_token_expiry <kubeconfig> — is the bearer token EXPIRED, and WHEN? Offline, free. ───────
+# A Supervisor kubeconfig from `vcf context create` carries a vCenter OIDC JWT with a hard 10h
+# lifetime (MEASURED: iat 03:24 -> exp 13:24). The `exp` claim is readable WITHOUT touching the
+# network and WITHOUT spending a vCenter SSO attempt, which is what makes it usable here: every
+# other way of learning "is this token dead" costs a bind, and vCenter locks out PERMANENTLY at 3.
+#
+# It is what lets a caller say WHEN it expired instead of "usually an EXPIRED token", and it is the
+# ONLY thing that separates "expired" from "credential rotated/revoked" — kubectl reports both as
+# `Unauthorized`, so classify_kube_failure cannot tell them apart and must not be asked to.
+#
+# ⚠️ `--minify` IS LOAD-BEARING. Without it `{.users[0]...}` reads the FIRST user in the file, not
+# the CURRENT CONTEXT's — and 30-vks-login.sh:566-571 records (MEASURED 2026-08-08) that a real VKS
+# kubeconfig always holds SEVERAL (Supervisor + guest). The failure direction is the dangerous one:
+# a live guest token makes a DEAD Supervisor token report VALID. Every other [0]-index kubeconfig
+# read in scripts/ minifies — 11 of 11 — and `test-argocd-kubeconfig-stale.sh` exists for this bug.
+#
+# ⚠️ NO python3 (absent from a bare photon:5.0) and NO `tr` — 00-install-prereqs.sh:31-32 says
+# verbatim that photon:5.0 ships no coreutils so `tr` cannot be assumed, AND that script is
+# INTERNET-side only, so the air-gap box never runs it. MEASURED on bare photon:5.0: base64, date,
+# sed, head, cut present; `tr` MISSING. base64url is un-mangled with bash parameter expansion, and
+# sed alone parses the payload (the `tr ,` split was unnecessary). An earlier version of this
+# comment claimed tr was "the floor 00-install-prereqs.sh already guarantees" — false, and
+# contradicted verbatim by the file it cited; the function was INERT on the air-gap box.
+# Degrades to UNKNOWN — never a guess — for a non-JWT token, a client-cert kubeconfig, an absent
+# file, or a payload with no exp claim.
+kube_token_expiry() {
+  local kc="${1:-}" tok pay exp now
+  [ -n "$kc" ] && [ -s "$kc" ] || { printf 'UNKNOWN'; return 0; }
+  tok="$(kubectl --kubeconfig "$kc" config view --raw --minify -o jsonpath='{.users[0].user.token}' 2>/dev/null || true)"
+  case "$tok" in *.*.*) ;; *) printf 'UNKNOWN'; return 0 ;; esac
+  pay="${tok#*.}"; pay="${pay%%.*}"
+  pay="${pay//_//}"; pay="${pay//-/+}"          # base64url -> base64, WITHOUT tr (see above)
+  case $(( ${#pay} % 4 )) in 2) pay="${pay}==" ;; 3) pay="${pay}=" ;; esac
+  exp="$(printf '%s' "$pay" | base64 -d 2>/dev/null \
+         | sed -n 's/.*"exp":[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)"
+  [ -n "$exp" ] || { printf 'UNKNOWN'; return 0; }
+  # An `exp` wider than the shell's integer makes `[` ERROR (rc=2), and an `if` consumes that as
+  # FALSE — i.e. a test error silently read as a verdict. Refuse to judge instead of guessing.
+  case "$exp" in ????????????????????*) printf 'UNKNOWN'; return 0 ;; esac
+  now="$(date -u +%s)"
+  if [ "$exp" -lt "$now" ]; then printf 'EXPIRED %s' "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
+  else                           printf 'VALID %s'   "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
+  fi
+}
+
 
 classify_kube_failure() {
   local errfile="${1:-/dev/null}" e=""
