@@ -277,7 +277,14 @@ else
   bad "lib/argocd.sh does not bring is_placeholder -- argocd_effective_addr then INVERTS its answer
       for the unset and placeholder states, silently, with rc=0"
 fi
-# THE FIVE REACHABLE STATES. Row 5 (a NAME already marked discovered) is the one the disclosure's
+# THE SIX REACHABLE STATES.
+# ⚠️ THE GRANTED-IP ROW WAS MISSING, AND IT IS THE ONE THE MOTIVATING DEFECT LIVES IN. An
+# implementation round measured this table 28/28 GREEN over a function that clobbers EVERY granted
+# IP -- the exact confusion between "the address classifies as an IP" and "the guard writes" that
+# this section exists to prevent, and the state #1167's own commit message names first
+# ("ARGOCD_SERVER=10.9.9.9, a GRANTED IP -- routine for a tenant"). Reproduced independently before
+# fixing. It was invisible because FOUR of the five rows expected the same output ($_ip), so the
+# leave-alone branch rested entirely on one row that exercises it only for a NAME. Row 5 (a NAME already marked discovered) is the one the disclosure's
 # own remedy produces when the operator does steps 1-2 and skips step 3: the deliberate name is
 # CLOBBERED by the IP. It was missing from the first table and an adversary round supplied it.
 _ip=192.168.101.131; _bad=0
@@ -291,9 +298,10 @@ done <<EOF
 argocd-server||argocd-server|granted NAME -> left alone
 192.168.101.99|discovered|${_ip}|stale ours -> corrected
 argocd-server|discovered|${_ip}|NAME marked ours -> clobbered
+10.9.9.9||10.9.9.9|granted IP, no marker -> left alone
 EOF
 if [ "$_bad" -eq 0 ]; then
-  ok "argocd_effective_addr answers all five reachable states"
+  ok "argocd_effective_addr answers all six reachable states"
 else
   bad "argocd_effective_addr disagrees with the guard on the states above"
 fi
