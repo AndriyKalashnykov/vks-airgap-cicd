@@ -1077,6 +1077,18 @@ is the whole point of it.
 make install-ingress                                     # NO Istio detected — install it
 ```
 
+This branch — and **only** this branch — is the one that installs Istio from your Harbor, so it is
+the one where image provenance is checkable. Assert it:
+
+```bash
+make verify-gateway-image     # every RUNNING Istio image must have come from YOUR Harbor
+```
+
+**Expect:** `gateway image provenance: OK` — a silently-ignored `--set global.hub` is accepted by
+helm with rc=0, so a dual-homed box would pull from the public registry and `verify-ingress` would
+still return 200. On the **attach** branch above this gate correctly SKIPS: that mesh is the
+platform's, and asserting our registry against it would RED a correct install.
+
 Then **check the routes actually work**, before you rely on those hostnames:
 
 ```bash
