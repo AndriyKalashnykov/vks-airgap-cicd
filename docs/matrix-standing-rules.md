@@ -372,8 +372,17 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
     conclusions adversary rounds had refuted hours later. Committing it unread would have published
     refuted findings under a "validated batch" label — and that label is exactly what stops the next
     reader from checking.
-4. Run `env -u GOROOT make static-check` locally before every merge — and it is the ONLY thing that
-    runs `lint` or the unit tests at all before a merge.
+4. Run **`env -u GOROOT KUBECONFORM_REQUIRE_SCHEMAS=1 make static-check`** locally before every
+    merge — and it is the ONLY thing that runs `lint` or the unit tests at all before a merge.
+
+    ⚠️ **`KUBECONFORM_REQUIRE_SCHEMAS=1` IS NOT OPTIONAL, and leaving it off is how a red CI went
+    unnoticed for THREE WEEKS.** CI sets it (`ci.yml:375`); a local run without it does not mirror
+    CI. MEASURED 2026-09-08 on the same tree: `make validate` reported **0 errors**, while
+    `KUBECONFORM_REQUIRE_SCHEMAS=1 make validate` reproduced the exact failure that had been
+    reddening the weekly `schedule` run since 2026-08-24 (see [[B573]] — a VKS data-values file was
+    being fed to kubeconform). Without the variable, the local gate is green over the very thing CI
+    is failing on, and G.4's whole purpose — not merging on CI alone — is defeated in the one
+    direction it cannot detect.
 
     ⚠️ **This rule used to say "A PR runs only `static-check-pr`". That is FALSE, and it misinforms
     the reader it exists to protect.** MEASURED 2026-09-08: **nothing invokes `static-check-pr`.**
