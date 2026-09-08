@@ -1290,6 +1290,8 @@ $(sed -n '/^_rejected_why() {/,/^}/p' "${_CREDS_REPO}/scripts/creds.sh")"
 # hand broke this control TWICE in one session (2026-09-08), each time firing RED on a FIX -- so
 # follow the delegation MECHANICALLY: pull the body of every `$(_helper)` the extract calls. A
 # control that must be hand-updated on every refactor is a control that will be wrong next refactor.
+# shellcheck disable=SC2016  # the single quotes are the POINT: `$(` is a LITERAL to match in the
+# extracted source, not an expansion. Double-quoting it would make the shell substitute it here.
 for _h in $(printf '%s' "$_ua" | grep -oE '\$\(_[a-z_]+\)' | tr -d '$()' | sort -u); do
   _ua="${_ua}
 $(sed -n "/^${_h}() {/,/^}/p" "${_CREDS_REPO}/scripts/creds.sh")"
