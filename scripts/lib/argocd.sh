@@ -17,6 +17,18 @@
 [ -n "${__VKS_ARGOCD_SH_LOADED:-}" ] && return 0
 __VKS_ARGOCD_SH_LOADED=1
 
+# ⚠️ THIS LIBRARY USES is_placeholder, WHICH IS DEFINED ONLY IN lib/os.sh, AND THE FAILURE OF NOT
+# HAVING IT IS SILENT AND INVERTING. Measured by an adversary round: with is_placeholder undefined
+# the shell prints nothing, returns 0, and argocd_effective_addr below answers LEAVE for the unset
+# and placeholder states -- i.e. exactly backwards -- while the granted-NAME state ACCIDENTALLY
+# agrees, so a test exercising only that row goes green over it. check-lib-sourcing.sh globs
+# scripts/*.sh (:165) and is structurally blind to a lib->lib dependency, so nothing else catches it.
+# os.sh carries its own __VKS_OS_SH_LOADED guard, and all three callers already source it FIRST
+# (70-configure-argocd.sh:25, 91-e2e-tenant-mechanism.sh:29, 09-argocd-address.sh:24), so in
+# production this is a no-op; what it buys is that this library is safe to source STANDALONE.
+# shellcheck source=scripts/lib/os.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/os.sh"
+
 # The in-cluster destination — "the cluster ArgoCD itself runs in". Correct ONLY when ArgoCD and the
 # workload share a cluster. When they do not, this means the SUPERVISOR.
 # shellcheck disable=SC2034  # consumed by the scripts that source this library (70-configure-argocd.sh)
@@ -1035,4 +1047,28 @@ which MISDIAGNOSES an update-RBAC denial.
     fi
   fi
   printf '%s' "$_create"
+}
+
+# argocd_effective_addr <argocd_server> <argocd_server_source> <resolved_ip>
+#   -> the address that is ACTUALLY in effect after 09-argocd-address.sh's write guard: the GRANTED
+#      value when the guard leaves it alone, the RESOLVED ip when it writes.
+#
+# ⚠️ IT IS THE DECISION, NOT A SECOND COPY OF IT. 09 calls this ONCE and branches on
+# `[ "$eff" = "$ip" ]`, because `eff == ip` is BICONDITIONAL with "the guard writes" -- verified
+# over 72 states (12 server values x 6 source values), 0 violations, and true by construction: the
+# LEAVE arm requires `server != ip`, so its result can never equal ip; the WRITE arm returns ip.
+# An earlier design kept the inline `if` AND added this function. An adversary round refuted it by
+# measurement: deleting `&& [ "$SRC" != discovered ]` from the inline guard alone made .env keep the
+# stale value while the report claimed the new one, and the function-based test stayed GREEN. Two
+# copies of one predicate is the defect lib/tls.sh's own header records for ca_addr_kind, where
+# "the consequence of disagreement is a FALSE REFUSE".
+#
+# is_placeholder is lib/os.sh's, sourced at the top of this file -- see the warning there.
+argocd_effective_addr() {
+  local server="${1:-}" source="${2:-}" ip="${3:?argocd_effective_addr: resolved ip required}"
+  if ! is_placeholder "$server" && [ "$server" != "$ip" ] && [ "$source" != discovered ]; then
+    printf '%s' "$server"
+  else
+    printf '%s' "$ip"
+  fi
 }
