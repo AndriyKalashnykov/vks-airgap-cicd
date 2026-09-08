@@ -31,6 +31,25 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 _CREDS_REPO="$(pwd)"
 export REPO_ROOT="$PWD"
 
+# ⚠️ PIN THE SIBLING LAB SLOT FOR EVERY FIXTURE, not just the two that override REPO_ROOT.
+# `supervisor_kubeconfig_candidates()`'s last slot is `${VKS_LAB_STATE_DIR:-$HOME/.local/state/
+# nested-lab}` -- the nested-vsphere-lab repo's state dir. RULE ZERO-B: no operator has it, so any
+# fixture it can reach is measuring THIS MACHINE. An implementation round measured that a per-fixture
+# pin covered 2 of the 5 fixtures that execute creds.sh; `render()` (which deliberately uses the real
+# REPO_ROOT) was the largest exposure and was untouched. One export closes the axis everywhere.
+#
+# MEASURED SAFE, with the positive control the round prescribed -- varying the LAB slot alone proves
+# nothing while `secrets/supervisor.kubeconfig` (an EARLIER candidate) still resolves:
+#     lab slot pinned                          -> suite output BYTE-IDENTICAL, rc=0
+#     lab slot pinned AND repo secrets/ moved  -> suite output BYTE-IDENTICAL, rc=0
+# so no assertion depends on either candidate today. That is LATENT, not safe forever: the moment a
+# case asserts on a Supervisor-derived cell it would break CI-only, the #1191 shape exactly.
+#
+# ⚠️ NOT CLOSED: `render()` can still reach the repo's own `secrets/supervisor.kubeconfig`, because
+# it uses the real REPO_ROOT on purpose. Measured harmless today (above). Closing it means giving
+# render() a throwaway root, which changes what ~100 cases read -- a separate change, not a comment.
+export VKS_LAB_STATE_DIR="${TMPDIR:-/tmp}/creds-show-no-lab-$$"
+
 fail=0
 _ran=0
 ok()  { _ran=$((_ran + 1)); printf 'ok    %s\n' "$1"; }
@@ -1176,7 +1195,25 @@ _h_render() {  # _h_render <kubectl-body> <headlamp-token-readable:0|1> -> the r
   # vacuous. That is the trap `check-doc-robot-quoting` exists for, and this fixture fell into it on
   # its first run: three assertions failed for a reason that had nothing to do with the code.
   printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME='robot\$probe'\nHARBOR_PASSWORD=x\n" > "$t/.env"
-  : > "$t/kc"; : > "$t/sup"
+  # ⚠️ `$t/sup` MUST BE NON-EMPTY, and `: >` meant this fixture never exercised what it claimed.
+  # `supervisor_kubeconfig()` requires `[ -s "$c" ]`, so an EMPTY file is correctly REJECTED and the
+  # resolver falls through to `supervisor_kubeconfig_candidates()`, whose last slot is
+  # `${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}` -- the SIBLING lab repo's state dir.
+  # MEASURED: on this box that resolved to a REAL lab kubeconfig, so the STATE-14 cases passed by
+  # exercising MY MACHINE'S LAB STATE; in CI nothing resolved, `_h_sup` was empty, the report took
+  # the "no Supervisor kubeconfig here" branch, and the case failed.
+  #
+  # ⚠️ THE PRODUCT IS NOT AT FAULT -- I filed it as a product bug first and that was WRONG. Both
+  # branches are correct: with no Supervisor it says so and does NOT name `make vks-login` (a round
+  # refuted that), and with one it asks and classifies. The fixture never set up the state its
+  # assertions describe. `VKS_LAB_STATE_DIR` is pinned too, so a sibling repo can never decide this
+  # FIXTURE's outcome again. (The suite-wide pin at the top is what covers the other fixtures --
+  # this per-fixture one is belt-and-braces, and the claim is deliberately narrow: an earlier
+  # round refuted the wider "this test's outcome" wording, because 3 of 5 fixtures were unpinned.)
+  : > "$t/kc"
+  # CONTENT IS NEVER PARSED -- kubectl is fully stubbed in this fixture. Only `[ -s ]` matters, so
+  # this is a non-empty MARKER, not a kubeconfig. Do not "improve" it into a realistic one.
+  printf 'apiVersion: v1\nkind: Config\n' > "$t/sup"
   { printf '#!/bin/sh\n'
     printf 'case "$*" in\n'
     printf '  *current-context*) echo stub-ctx; exit 0 ;;\n'
@@ -1189,6 +1226,7 @@ _h_render() {  # _h_render <kubectl-body> <headlamp-token-readable:0|1> -> the r
   chmod +x "$t/bin/kubectl" "$t/bin/curl" "$t/bin/getent"
   ( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
       KUBECONFIG="$t/kc" VKS_SUPERVISOR_KUBECONFIG="$t/sup" CREDS_TOKEN=1 \
+      VKS_LAB_STATE_DIR="$t/no-lab" \
       "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )
   rm -rf "$t"
 }
@@ -1486,6 +1524,7 @@ _sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-content-or-
   chmod +x "$t/bin/kubectl" "$t/bin/curl" "$t/bin/getent"
   ( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
       KUBECONFIG="$t/kc" VKS_SUPERVISOR_KUBECONFIG="$t/sup" CREDS_TOKEN=1 \
+      VKS_LAB_STATE_DIR="$t/no-lab" \
       "${_CREDS_REPO}/scripts/${which}.sh" 2>&1 )
   rm -rf "$t"
 }
