@@ -113,8 +113,12 @@ fi
 # ⚠️ MATCH THE BINARY AT A COMMAND POSITION, NOT THE WORD. `\bgit\b` also matches the `.git` in
 #    every path this function reads, so the first version of this case FALSE-RED over correct code —
 #    a grep that finds the string but the wrong KIND of thing.
-if sed -n '/^_registry_common_dir() {/,/^}/p' scripts/lib/os.sh \
-     | grep -qE '(^|[;&|`]|\$\()[[:space:]]*(sudo[[:space:]]+)?git[[:space:]]'; then
+# ⚠️ HERESTRING, NOT A PIPE. `producer | grep -q PAT` under `pipefail` reports a FOUND pattern as
+#    ABSENT when grep exits early and the producer takes SIGPIPE — and in a scan gate that direction
+#    is a FALSE CLEAN, i.e. this case would go `ok` over a body that DOES call git. The repo's
+#    check-grep-q-pipe gate caught exactly this line.
+if grep -qE '(^|[;&|`]|\$\()[[:space:]]*(sudo[[:space:]]+)?git[[:space:]]' \
+     <<< "$(sed -n '/^_registry_common_dir() {/,/^}/p' scripts/lib/os.sh)"; then
   bad "_registry_common_dir invokes git — but git is NOT in the air-gap box's stated toolchain, and
       three of this lock's four callers run there."
 else
