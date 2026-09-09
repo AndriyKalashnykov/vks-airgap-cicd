@@ -197,7 +197,10 @@ ensure_project() {
 # should run as) is fully authenticated and still does not get 200.
 # ⚠️ CORRECTED 2026-09-09: this comment said the robot code is 403. MEASURED on the live lab, it is
 # **412** ("get current user not available for security context: robot"); 403 was never observed
-# here and no test exercises 412 (two tests pin 403). The 403 arm is KEPT — in Harbor 403 never
+# here (two tests pin 403).
+# ⚠️ An earlier version of this line also said "no test exercises 412". That was FALSE the moment it
+# was written — the 412 arms and the tests that assert their VERDICT STRING landed in the SAME
+# commit. `test-harbor-auth-report.sh` exercises 412, including the ensure-arm chain. The 403 arm is KEPT — in Harbor 403 never
 # means "wrong password" — but 412 is the code this repo's own robots actually return. Treating "any non-200" as failure would
 # turn the least-privilege path into a hard stop -- a false RED introduced by a gate meant to help.
 # Only 401 means the credential is wrong; Harbor returns 403 for a permissions problem.
