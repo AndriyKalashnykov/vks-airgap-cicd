@@ -465,6 +465,10 @@ check-vks-login-requires: ## Gate: creds.sh's hand-typed vks-login requirement m
 check-classifier-consumers: ## Gate: every case-form consumer of classify_kube_failure handles every class it can emit
 	@./scripts/check-classifier-consumers.sh
 
+.PHONY: check-count-fallback
+check-count-fallback: ## Gate: a counting command (grep -c / wc -l) must not have a VALUE-EMITTING || fallback
+	@$(SCRIPTS)/check-count-fallback.sh
+
 .PHONY: check-env-clobber
 check-env-clobber: ## Gate: an UNCOMMENTED .env.example value must not shadow a dynamic fallback or a per-run override
 	@$(SCRIPTS)/check-env-clobber.sh
@@ -1886,7 +1890,7 @@ check-tekton-scripts: ## Every Tekton `script:` block: shebang is /bin/sh AND th
 
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-install-chain check-notfound-discriminator check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-bare-exec-redirect check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-gitignore check-vcenter-scenario-split check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-sigterm check-app-icons check-how-provenance check-vks-provenance check-image-alignment check-kind-kubeconfig check-deploy-manifests check-cluster-template-vars check-dockerfile-no-install check-selfbuilt test-ci-pass-verdict ## The CHEAP half of static-check — 40 alignment/doc/env gates + the ci-pass guard, no mise toolchain (time it; every literal here has rotted)
+static-check-fast: check-install-chain check-notfound-discriminator check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-bare-exec-redirect check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-gitignore check-vcenter-scenario-split check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-sigterm check-app-icons check-how-provenance check-vks-provenance check-image-alignment check-kind-kubeconfig check-deploy-manifests check-cluster-template-vars check-dockerfile-no-install check-selfbuilt check-count-fallback test-ci-pass-verdict ## The CHEAP half of static-check — 40 alignment/doc/env gates + the ci-pass guard, no mise toolchain (time it; every literal here has rotted)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps

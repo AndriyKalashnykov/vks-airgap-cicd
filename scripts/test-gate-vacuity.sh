@@ -207,15 +207,17 @@ sandbox_forensics() {
   echo "    ---- SANDBOX FORENSICS (this is the harness reporting on ITSELF) ----"
   echo "      cwd=$(pwd)  REPO_ROOT=${REPO_ROOT:-<unset>}  SB=${SB}"
   echo "      git HEAD here: $(git rev-parse --short HEAD 2>/dev/null || echo '<none>')"
-  echo "      sandbox tracked files: $( (cd "$SB/repo" && git ls-files | grep -c .) 2>/dev/null || echo '?')"
-  echo "      sandbox scripts/*.sh:  $( (cd "$SB/repo" && git ls-files 'scripts/*.sh' | grep -c .) 2>/dev/null || echo '?')"
+  # `wc -l`, not `grep -c . || echo '?'`: grep -c exits 1 on an EMPTY listing, so the fallback fired
+  # too and these printed "0" then "?" -- in the one diagnostic whose job is explaining a blind gate.
+  echo "      sandbox tracked files: $( (cd "$SB/repo" && git ls-files | wc -l) 2>/dev/null )"
+  echo "      sandbox scripts/*.sh:  $( (cd "$SB/repo" && git ls-files 'scripts/*.sh' | wc -l) 2>/dev/null )"
   local f
   for f in scripts/lib/os.sh scripts/lib/istio.sh scripts/49-psa-check.sh scripts/lib/apps.sh apps/registry.tsv .env.example; do
     printf '      %-28s sandbox=%-8s real=%s\n' "$f" \
       "$(wc -c <"$SB/repo/$f" 2>/dev/null || echo MISSING)" \
       "$(wc -c <"${REPO_ROOT}/$f" 2>/dev/null || echo MISSING)"
   done
-  echo "      ensure_namespace call sites in the sandbox's lib/istio.sh: $(grep -c 'ensure_namespace' "$SB/repo/scripts/lib/istio.sh" 2>/dev/null || echo '?')"
+  echo "      ensure_namespace call sites in the sandbox's lib/istio.sh: $(grep -c 'ensure_namespace' "$SB/repo/scripts/lib/istio.sh" 2>/dev/null || true)"
   echo "    ---- end forensics ----"
 } 2>/dev/null
 
