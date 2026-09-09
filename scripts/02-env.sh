@@ -515,7 +515,13 @@ env_validate() {
           local cfg; cfg="$(mktemp)"; chmod 600 "$cfg"
           printf 'user = "%s:%s"\n' "$(esc_curlk "${HARBOR_USERNAME:-admin}")" "$(esc_curlk "${HARBOR_PASSWORD}")" > "$cfg"
           local acode
-          acode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${CURL_MAX_TIME_SECONDS:-10}" "${cafg[@]}" -K "$cfg" "$scheme://$HARBOR_URL/api/v2.0/users/current" 2>/dev/null || echo 000)"
+          # ⚠️ NO `|| echo 000`. curl's `-w '%{http_code}'` ALREADY prints 000 on a connection
+          # failure AND exits non-zero, so the fallback APPENDS a second one: measured, this line
+          # produced `000000`, which then reads as "Harbor auth probe inconclusive (HTTP 000000)".
+          # `_harbor_auth_code` in lib/harbor.sh documents the same trap as fixed; this hand-rolled
+          # copy still had it. Capture the code, absorb the rc separately.
+          acode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${CURL_MAX_TIME_SECONDS:-10}" "${cafg[@]}" -K "$cfg" "$scheme://$HARBOR_URL/api/v2.0/users/current" 2>/dev/null)" || true
+          case "${acode:-}" in ''|*[!0-9]*) acode=000 ;; esac
           rm -f "$cfg"
           case "$acode" in
             # ⚠️ THIS IS A HAND-ROLLED COPY of lib/harbor.sh's probe and it drifted: 412 fell to the

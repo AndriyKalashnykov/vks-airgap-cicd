@@ -97,7 +97,21 @@ harbor_last_code() { cat "${HARBOR_CODE_FILE}" 2>/dev/null || printf '?'; }
 harbor_is_sysadmin() {
   local body
   body="$(harbor_api_body GET "users/current")"
-  [ "$(harbor_last_code)" = "200" ] || return 1
+  # ⚠️ 412 -> NOT a sysadmin, DELIBERATELY, and do NOT "unify" this with harbor_auth_verdict's 412
+  # arm. There, 412 means AUTHENTICATED (a robot on a system-scoped endpoint) and maps to `accepted`.
+  # HERE the question is "are you a system administrator", and a robot is not one — so the SAME
+  # status must answer NO. Adding `412) return 0` by analogy would make a robot take
+  # 22-harbor-robot.sh's "Harbor says you ARE a system administrator" branch and build a
+  # system-level payload. The 200-only test below already yields the right answer; this arm makes it
+  # deliberate rather than accidental.
+  case "$(harbor_last_code)" in
+    412) return 1 ;;
+    200) ;;
+    # NAMED RESIDUAL: 401 (wrong credential) and 000 (the probe never ran) also collapse to
+    # "not a sysadmin" here. That conflation is the one this file condemns elsewhere
+    # (grep -n 'IS NOT A PERMISSIONS PROBLEM'); separating them is its own round.
+    *)   return 1 ;;
+  esac
   [ "$(printf '%s' "$body" | jq -r '.sysadmin_flag // false')" = "true" ]
 }
 
