@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # test-ci-pass-verdict.sh — the offline gate for ci-pass-verdict.sh.
 #
+# ⚠️ THIS FILE IS REACHABLE TWO WAYS, AND A `# ci-tier:` MARKER CANNOT EXPRESS THAT. Since
+# #1198 it is a NAMED PREREQ of `static-check-fast` (Makefile), which is the only CI job with
+# no `if:` and no `needs:` — i.e. the only one that runs on every PR. It is ALSO in TEST_OFFLINE
+# by the wildcard, so `make static-check` runs it TWICE on the weekly (measured: 2 occurrences
+# in `make -n static-check`; cost 0.06s each, over 3 draws).
+# So adding `# ci-tier: slow` here would read "not on the PR path" while the file STILL runs on
+# every PR — a marker that lies. If you want it off the PR path, remove the Makefile prereq;
+# the marker alone will not do it.
+#
 # WHY THIS FILE EXISTS. ci-pass is the SOLE required status check on this repo, so a defect in the
 # verdict script has exactly two blast radii and both are total: it lets a red run merge, or it
 # refuses every run. The second is not hypothetical — an implementation round MEASURED that the

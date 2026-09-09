@@ -694,6 +694,46 @@ write 188, 207 or 337 into the comment. Derive it, or drop it.
 
 #### 🔴 F2b — the false-belief class is ≥24 sites, and it has SHAPED CODE, not just prose
 
+##### ⛔ ITS ROUND RAN 2026-09-08 — `cleared-with-changes`, and it REFUTED HALF THIS ROW'S OWN EVIDENCE
+
+| this row claimed | measured |
+|---|---|
+| `check-bare-exec-redirect.sh:18` and `test-manifest-assert.sh:25` **omitted a marker BECAUSE** of the belief | **REFUTED for both.** `:18` is a severity argument *about a different file*; `:25` justifies a **SKIP message**. Neither is a marker decision |
+| — | **the REAL instance is `test-env-timing-overrides.sh:4-7`**: *"NO ci-tier MARKER, **deliberately** … PRs run `static-check-pr` → `test-scripts-fast`"* — an explicit marker decision naming the exact dead chain. **FIXED here** |
+| "11 scripts, 10 unmarked" | my grep was **case-sensitive** and missed `EVERY PR`; boundary-safe and case-insensitive it is **15**. A widened attempt hit 20 because `per-PR` prefix-matches `per-project` |
+
+**And the design I brought it — "a guard whose subject is CI wiring belongs on the PR job" — was
+refuted as a PRINCIPLE:** the only mechanical proxy ("reads a workflow file") is **3 wrong of 5**, and
+a name-based rule grabs `check-classifier-consumers`, whose "classifier" is `classify_kube_failure`
+(a *kubectl error* classifier). Ship such a change as **"these three, because ⟨reason⟩"** — a
+three-item list is cheap rot; a principle invites litigation over `test-classify-changes`.
+
+##### 🔴 F2b-i — `test-scripts-fast` is 217 s and FULLY SERIAL, so "just wire the whole fast tier" is DEAD
+
+Measured: **142 tests, 217 s wall, 62 s user + 62 s sys = 57% of ONE core** — sleep-bound, so it will
+**not** shrink on a runner and **will not parallelise**. Against the **164 s** that got `static-check`
+disabled on 2026-08-11. The Makefile's *"19 s for 42 tests"* is **11× stale**.
+
+And the tier has rotted exactly as the severed feedback loop predicts — **19 tests ≥3 s sit in
+"fast", 168 s of the 217 s** (median 0 s, p90 4 s, max 26 s: `test-argocd-await-revision` 26 s,
+`test-vks-cluster-delete` 17 s, `test-creds-show` 17 s). The tier is fine; its **outliers** are
+unmarked because **nothing ever billed them**.
+
+##### 🔴 F2b-ii — `# ci-tier: fast` is INERT on 28 files; the Makefile never greps for it
+
+Measured: `TEST_MANUAL`/`TEST_SLOW` grep only `manual`/`slow`; `TEST_FAST` is derived by
+**subtraction**. So 28 `fast` markers are documentary. Anyone believing a `fast` marker puts a test on
+the PR path holds this row's belief in a different costume. (`test-creds-reach-ingress.sh:223` is the
+**one** site that gets it right — it cites B571 explicitly.)
+
+##### 🔴 F2b-iii — `ci.yml` has ZERO `timeout-minutes` on ANY job
+
+Measured: `grep -c timeout-minutes .github/workflows/ci.yml` → **0**, so every job runs at GitHub's
+**360-minute** default — including `static-check-fast`, the only unconditional gate. Its one network
+call is bounded (`--max-time ${GWAPI_FETCH_TIMEOUT_SECONDS:-15}`), so this is **latent, not active**;
+a 6-hour hang would block every PR and land as `cancelled`, which the verdict *does* refuse. Fails
+closed, slowly. A sibling workflow already sets one.
+
 Nine files assert *"TEST_FAST runs on every PR"*; **all nine lack a `ci-tier` marker**, so none runs
 on any PR. Two of them (`check-bare-exec-redirect.sh:18`, written **2026-09-08** and
 MEASURED-labelled; `test-manifest-assert.sh:25`) chose **not** to add a marker *because* they

@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # test-env-timing-overrides.sh — a timing knob must be reachable FROM THE COMMAND LINE.
 #
-# NO ci-tier MARKER, deliberately: Makefile:1079 builds TEST_ALL from a wildcard and tiers from
+# NO ci-tier MARKER, deliberately: the Makefile's `TEST_ALL` builds from a wildcard and tiers from
+# ⚠️ (this used to cite `Makefile:1079`, which is now an `@echo` about Harbor — `TEST_ALL` is at
+#  1475 today. Naming the SYMBOL instead of the line is the fix; a line number survives nothing.)
 # this marker, so an unmarked file lands in TEST_FAST and runs on every code PR — which is where
-# this belongs. PRs run `static-check-pr` -> `test-scripts-fast`, NOT `test-scripts`, so a
-# `slow` marker would demote it to the weekly run. Measured cost: ~10ms per probe.
+# this belongs. ⚠️ THAT LAST CLAUSE IS FALSE TODAY AND THE REASONING ABOVE RESTS ON IT: nothing in
+# CI invokes `static-check-pr` (B571, measured — `grep static-check-pr .github/workflows/*.yml`
+# returns only comments), so TEST_FAST runs on NO PR and this file is weekly-only, marker or
+# not. The deliberate omission is still right — it is where the file BELONGS — but it buys
+# nothing until the PR path exists. Measured cost: ~10ms per probe.
 #
 # WHAT IT GUARDS (B122). `load_env` sources .env.example with `set -a` AFTER the caller's
 # environment, so an UNCOMMENTED value there is exported and BEATS the code's ${VAR:-default}.
