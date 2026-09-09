@@ -97,8 +97,11 @@ ck "  ...and its arm is ACCEPTED"                 "$(arm "$code")" "accepted"
 #      USAGE SHAPE (the rc test that forces 000), never on a variable name, because a name also
 #      appears in this file's own prose.
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/02-env.sh"
-ck "02-env.sh preserves the transport status" \
-   "$(grep -cE '\[ "\$arc" -eq 0 \] \|\| acode=000' "$SRC")" "1"
+# `$arc` here is a LITERAL being searched for in another file's source, not a variable to expand --
+# single quotes are required. shellcheck cannot know that, hence the scoped disable.
+# shellcheck disable=SC2016
+_drift="$(grep -cE '\[ "\$arc" -eq 0 \] \|\| acode=000' "$SRC")"
+ck "02-env.sh preserves the transport status" "$_drift" "1"
 ck "02-env.sh no longer appends a second 000" \
    "$(grep -c "users/current\" 2>/dev/null || echo 000)" "$SRC")" "0"
 
