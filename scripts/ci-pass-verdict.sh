@@ -137,7 +137,17 @@ while IFS=$'\t' read -r name concl nsteps extra || [ -n "${name:-}" ]; do
       printf 'FAIL  %-20s SKIPPED but ran %s step(s) of ours — not a paths-filter decision\n' "$name" "$nsteps"
       bad=$((bad+1)); rc=1; continue
     fi
-    printf 'skip  %-20s (paths-filter — legitimate, ran none of our steps)\n' "$name"
+    # ⚠️ THIS USED TO SAY "(paths-filter — legitimate…)" AND IT WAS FALSE ON EVERY PR: `static-check`
+    # is gated on `github.event_name`, so no paths-filter decides anything about it — it simply
+    # cannot run on a PR. A false sentence from the MERGE GATE is the worst place for one.
+    # It now states the OBSERVATION (skipped, ran nothing of ours) and the RULE that permits it
+    # (membership in CONDITIONAL), never a cause this script cannot see — it reads a TSV, not ci.yml.
+    # Legitimacy of that membership is enforced elsewhere, by test-ci-pass-verdict.sh's
+    # "CONDITIONAL == exactly the jobs carrying a job-level if:" assertion.
+    # ⚠️ THAT ENFORCEMENT IS CIRCULAR, and the honest place to say so is here: the guard is a prereq
+    # of `static-check-fast`, so a rot that takes THAT job off the PR path also stops the guard
+    # running on PRs. The PR_FLOOR assertion in the guard is what closes that loop.
+    printf 'skip  %-20s (skipped, ran none of our steps — allowed because it is in CONDITIONAL)\n' "$name"
     skipped=$((skipped+1)); continue
   fi
 
