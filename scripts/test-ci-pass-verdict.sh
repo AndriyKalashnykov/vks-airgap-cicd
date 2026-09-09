@@ -81,6 +81,46 @@ _same "CONDITIONAL == exactly the jobs carrying a job-level if:" \
   "$S_COND" \
   "$(printf '%s\n' "$Y_IF" | grep -vx "$S_SELF" | sort -u)"
 
+# ── THE PR FLOOR — the assertion that survives the rot the one above PRESCRIBES ─────────────────
+# MEASURED 2026-09-08, two arms, both reproducible with VERDICT=/CI_YML= above:
+#   event-gate static-check-fast, lists untouched          -> 24/1  CAUGHT (by the assertion above)
+#   event-gate it AND move UNCONDITIONAL -> CONDITIONAL     -> 25/0  BLIND
+# The second is what a person actually does, because the FIRST arm's message says "ci.yml changed
+# and this list did not" -- so they dutifully update the list. THE GUARD'S OWN ERROR TEXT IS THE
+# INSTRUCTION THAT BLINDS IT. Under that rot the merge gate printed, on a PR shape where 2 of 6 jobs
+# ran: `2 ok, 4 legitimately skipped, 0 bad` -> `ci-pass: OK`.
+#
+# WHY THIS SHAPE, AND NOT THE TWO THAT WERE REFUTED. An adversary round built 12 rot arms + 3
+# states this repo ACTUALLY SHIPPED and scored three candidates:
+#   (A) "an event-gated job belongs in NEITHER list"        -> a FAIL-OPEN. `ci-pass-verdict.sh`
+#       notes-but-does-not-judge an unlisted job, so a FAILED static-check went `note ... OK`,
+#       reproducing that script's founding incident BY DESIGN.                          4/11
+#   (C) "the set of event-gated jobs in ci.yml == {static-check}"  -> quantified over the `if:`
+#       TEXT, i.e. over a proxy. Blind to the SAME rot spelled with a DIFF gate (the repo's own
+#       documented restoration spelling), blind to a folded `if: >-`, and RED on 2 of the 3 guard
+#       forms static-check has genuinely shipped.                                       5/11
+#   (F) this one -- quantified over the POLICY, not over any YAML text.                11/11, 0 false-RED
+#
+# Every blind arm was the SAME single edit: a job moved OUT of UNCONDITIONAL. So assert the move.
+# Growing this list is a POLICY DELETION ("this gate no longer runs on every PR"), not bookkeeping.
+PR_FLOOR="changes static-check-fast secrets"   # changes:           classifies the diff every other gate reads
+                                               # static-check-fast: the ONLY per-PR alignment/doc/env gate
+                                               # secrets:           gitleaks + the prose-secret scan
+_floor_missing=""
+for _j in $PR_FLOOR; do
+  printf '%s\n' "$S_UNCOND" | grep -qx "$_j" || _floor_missing="$_floor_missing $_j"
+done
+if [ -z "$_floor_missing" ]; then
+  ok "every PR-floor gate ($(printf '%s' "$PR_FLOOR")) is in UNCONDITIONAL"
+else
+  bad "PR-floor gate(s) NOT in UNCONDITIONAL:$_floor_missing" \
+      "moving one there is how ci-pass goes OK over a PR that ran almost nothing -- it is a POLICY change, not bookkeeping"
+fi
+
+# ⚠️ NOT CLOSED BY ANY OF THIS, named rather than implied: a job NEUTERED IN PLACE
+# (`run: make static-check-fast` -> `run: true`) is green everywhere -- conclusion=success,
+# nsteps>=1. An anchor assertion on the run: line is the shape that would catch it; not built.
+
 # ── the aggregator's OWN if: — the one line in the graph that nothing asserted ──────────────────
 # ⚠️ THE ASSERTION ABOVE DELIBERATELY EXCLUDES $S_SELF (`grep -vx`), which is correct for the
 # CONDITIONAL-set comparison and left ci-pass's own guard covered by NOTHING. An adversary round
@@ -181,6 +221,32 @@ echo
 echo "== the caller can break this, so the script must refuse loudly =="
 # MEASURED: with filter=all the API returns every attempt, so a rerun --failed that FIXES ci makes
 # the run permanently unmergeable. Runs 32044956290 and 32044785511 are the real instances.
+# ── D3: a FAILED CONDITIONAL job must REFUSE — and nothing pinned that until now ────────────────
+# MEASURED 2026-09-08: all 11 `static-check` lines across this file and scripts/fixtures/*.tsv are
+# `skipped` or `success`, and ZERO fixtures carry ANY conditional job at a failing conclusion. So
+# the failure|cancelled|timed_out arm had never been exercised for one. An adversary built the
+# exploit -- `[ "$name" = static-check ] && continue`, justified as "a CONDITIONAL job's failure is
+# not our business" -- and the 25-case suite scored 25/0 over it. This fixture catches it.
+#
+# ⚠️ ASSERT THE MESSAGE, NOT rc. A DIFFERENT plausible mutation (a per-job `continue` earlier in the
+# loop) also exits non-zero -- but with `ABSENT from the jobs list`, the INPUT-parsing arm, whose
+# text instructs the very list edit that blinds the gate. A fixture asserting only rc!=0 banks that
+# as a proof. This is the schedule shape: static-check RAN (own-steps=10) and FAILED.
+_run REFUSE "a CONDITIONAL job that RAN and FAILED must refuse (schedule shape)" <<'EOF'
+changes	success	3
+static-check-fast	success	3
+secrets	success	4
+docs-lint	success	5
+static-check	failure	10
+diagrams-check	success	3
+EOF
+if printf '%s' "$LAST_OUT" | grep -qE '^FAIL  static-check .*conclusion=failure'; then
+  ok "...and it REFUSED for the RIGHT reason (named static-check, conclusion=failure)"
+else
+  bad "the refusal did not name static-check's conclusion" \
+      "rc!=0 alone is satisfied by the ABSENT arm, whose text tells you to edit the list that blinds this gate: $(printf '%s' "$LAST_OUT" | tr '\n' '|' | cut -c1-160)"
+fi
+
 _run REFUSE "filter=all — a job appearing twice is refused and named" <<'EOF'
 changes	success	3
 secrets	failure	0
