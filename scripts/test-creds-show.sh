@@ -1559,8 +1559,18 @@ _sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-content-or-
 # label | binary | sink | EXPIRED marker | VALID marker | UNKNOWN marker
 # The markers are the POSITIVE CONTROL: two of every three cells expect a count of ZERO, which is the
 # shape that passes by NOT LOOKING, so a cell that never reached its arm must not read as a pass.
-_sso_rows='creds/site1|creds||EXPIRED at|has NOT expired|no readable expiry
-creds/site2-sink|creds|VKS_STATE_KIND=1|not read — Supervisor token EXPIRED|not read — the Supervisor token is still valid|run: make argocd-password
+# ⚠️ THE MARKERS MOVED 2026-09-09 and the reason matters. The EXPIRED cause and its recipe used to
+# be restated on EVERY row that lost a value (measured: 264 chars, printed twice), so any of those
+# strings proved the arm. The operator's word for the result was "a poem". The fault and its command
+# are now a BANNER at the very top, printed only when something is wrong, and every affected cell
+# reads exactly `<not read>` -- so no per-row string can serve as a marker any more.
+#
+# creds/* EXPIRED therefore pins the BANNER. The site-2 row cannot: the banner fires for site 1 too,
+# and this row exists to reach the `:496` ArgoCD dispatch site. Its marker is the banner's
+# ArgoCD FOLLOW-UP line, which is emitted only when `_argo_pw_expired=1` -- set by that site's
+# EXPIRED arm and nowhere else. That flag IS the observable; the cell text no longer is.
+_sso_rows='creds/site1|creds||Supervisor token EXPIRED|has NOT expired|Expiry is unreadable
+creds/site2-sink|creds|VKS_STATE_KIND=1|then, for the ArgoCD row: make argocd-password|not read — the Supervisor token is still valid|run: make argocd-password
 argocd-password|argocd-password||EXPIRED at|has NOT expired|no readable expiry'
 
 # ⚠️ ASSERT THE PROPERTY, NOT AN EXACT COUNT. EXPIRED must name the command AT LEAST once (measured:
@@ -1606,6 +1616,32 @@ while IFS='|' read -r _sso_lbl _sso_bin _sso_sink _sso_mE _sso_mV _sso_mU; do
 done <<SSOROWS
 $_sso_rows
 SSOROWS
+
+# ── The cause is stated ONCE. This is the property the dedup bought, and nothing else pins it. ────
+# The expiry instant used to be restated on every row that lost a value, alongside the renewal
+# recipe. MEASURED on this fixture BEFORE the change: the instant appeared 2x (site1) and 3x
+# (site2-sink); on the real lab the 264-char recipe line printed TWICE. It is now in the Context
+# block and each row says only `see Context`.
+# ⚠️ Counted with `grep -o | wc -l` (OCCURRENCES), never `grep -c` (LINES) -- :1571 records that
+# `grep -c` reported "1" for a string appearing twice on ONE line and was simply false.
+for _dup_sink in '' 'VKS_STATE_KIND=1'; do
+  _dup_out="$(_sso_render creds "$(_jwt 1000000000)" "$_dup_sink" || true)"
+  _dup_ts="$(printf '%s' "$_dup_out" | sed -n 's/.*token EXPIRED \([0-9][0-9-]*T[0-9:]*Z\).*/\1/p' | head -1)"
+  _dup_lbl="site$([ -n "$_dup_sink" ] && printf 2-sink || printf 1)"
+  if [ -z "$_dup_ts" ]; then
+    bad "dedup: ${_dup_lbl} render names no expiry instant at all -- the cell is VACUOUS and the
+      count below would be a pass by not looking. Suspect the stub or the Context block."
+    continue
+  fi
+  _dup_n="$(printf '%s' "$_dup_out" | grep -oF "$_dup_ts" | wc -l | tr -d ' ')"
+  if [ "${_dup_n:-0}" -eq 1 ]; then
+    ok "dedup: ${_dup_lbl} states the expiry instant ONCE (${_dup_ts})"
+  else
+    bad "dedup: ${_dup_lbl} states the expiry instant ${_dup_n}x. The cause belongs in the Context
+      block once; a row that lost a value says 'see Context'. Restating it per row is what made
+      this report unreadable (264-char lines, printed twice on the lab)."
+  fi
+done
 
 
 fi
