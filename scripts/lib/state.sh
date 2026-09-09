@@ -216,6 +216,14 @@ state_check() {
   # while `.env.state.stale-*` files pile up. Declining to source is already sufficient; the rename
   # bought nothing and cost the operator their state. Archiving belongs on a WRITE path only
   # (state_claim_kind, below), where we are about to overwrite the file anyway.
+  #
+  # ⚠️ THIS IS THE ONLY BRANCH THAT SETS THE FLAG, and load_env reads it to refuse the UNSTAMPED
+  # legacy .env.kind as well. Without that, the refusal printed just above is COSMETIC:
+  # measured A/B with a control, a sink stamped for cluster A printed "NOT sourcing it — its
+  # LB IPs, CA paths and passwords belong to the other cluster" and .env.kind then supplied
+  # cluster A's HARBOR_PASSWORD anyway. The checked file was refused; the unchecked one was
+  # not. A control whose refusal is overridden manufactures confidence.
+  export _VKS_STATE_MISMATCH=1
   return 1
 }
 
