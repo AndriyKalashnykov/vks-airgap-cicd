@@ -15,7 +15,13 @@ if require_gate_tool shellcheck; then
   # Exclude nothing; lib/os.sh is sourced so give it shell=bash via its directive.
   # Include repo-root *.sh (e.g. bootstrap-jumpbox.sh) — not just scripts/.
   # PARALLEL FOR THE PASS, SERIAL FOR THE REPORT. shellcheck was MEASURED at 37.3s of lint's 38.5s
-  # (97%) — it is CPU-bound, not fork-bound: `-x` re-parses lib/os.sh for each of 126 scripts, so
+  # (97%) — it is CPU-bound, not fork-bound: `-x` re-parses lib/os.sh for every script carrying a
+  # `# shellcheck source=` directive, so
+  # ⚠️ THE COUNT IS PRINTED AT RUNTIME, DELIBERATELY, AND MUST NOT BE RE-TYPED HERE. This
+  # sentence said "126 scripts" for months; the corpus is now 337 and the directive-carrying
+  # subset 207 — and two honest measurements of that SAME subset, one commit apart, differed by
+  # 19 because they used different predicates. A literal here is a landmine with a fresh date;
+  # `hadolint` below has printed its denominator all along, and this is that habit, applied.
   # the existing single xargs batch was already optimal shape and simply slow. Fanning it across
   # cores measures 10.3s on 24 cores — and, because the objection is always "but CI has 2 vCPUs",
   # MEASURED there too: `-P 2 -n 4` is 19.3s vs 35.7s serial, still 1.85x faster. The red path costs
@@ -65,6 +71,18 @@ if require_gate_tool shellcheck; then
   # does not apply (i.e. on every 4-vCPU CI runner), and this file runs `set -euo pipefail`.
   _p="$(nproc 2>/dev/null || echo 4)"
   if [ "$_p" -gt 8 ]; then _p=8; fi
+  # THE DENOMINATOR. A gate that cannot say what it looked at cannot be trusted to have looked, and
+  # this one had no number at all while its comment carried a stale one. Counted from `_sc_files`
+  # ITSELF — not `git ls-files` — because they are not the same set: lint globs `find scripts`,
+  # `find apps` and repo-root `*.sh`, so one untracked `.sh` under scripts/ makes them diverge
+  # silently. `tr -cd` counts the NUL separators the producer emits.
+  # ⚠️ `|| true` IS LOAD-BEARING, and I proved it rather than assumed it: with NO file carrying the
+  # directive, `grep -l` exits 1 -> `xargs` exits 123 -> the pipeline fails -> the ASSIGNMENT fails
+  # -> `set -euo pipefail` (line 3) kills lint with rc=1 and NO MESSAGE. Measured: the probe printed
+  # nothing at all. That is the empty/starved corpus, i.e. exactly the case a denominator exists for.
+  _sc_n="$(_sc_files | tr -cd '\0' | wc -c | tr -d ' ' || true)"
+  _sc_x="$(_sc_files | xargs -0 grep -l '# shellcheck source=' 2>/dev/null | wc -l | tr -d ' ' || true)"
+  log_info "shellcheck: linting ${_sc_n} file(s); ${_sc_x} carry a '# shellcheck source=' directive that -x re-parses"
   if ! _sc_files | xargs -0 -P "$_p" -n 4 shellcheck -x >/dev/null; then
     log_warn "the parallel shellcheck pass exited non-zero — re-running serially to find out why (parallel output interleaves, so it cannot be printed)"
     # The SERIAL pass is AUTHORITATIVE for the REPORT — not for the verdict, which fails EITHER way:
