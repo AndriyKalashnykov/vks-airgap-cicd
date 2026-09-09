@@ -1085,8 +1085,9 @@ points at the real Supervisor. Pin **every** candidate.
   `if ! is_placeholder`, so robot username + empty password published `HARBOR_USERNAME=admin`. The
   file had already been fixed once for a sibling bypass *within* that block; nobody questioned the
   block.
-- **HTTP 412 IS AUTHENTICATED**, measured with controls (wrong secret / nonexistent robot / no
-  credentials **all 401**) + goharbor v2.15.2 source. The same unhandled string was giving OPPOSITE
+- **HTTP 412 IS AUTHENTICATED**, measured with three controls that **all return 401** — a wrong
+  robot credential, a nonexistent robot, and an unauthenticated request — plus goharbor v2.15.2
+  source. The same unhandled string was giving OPPOSITE
   wrong answers: exit 0 in `env-validate`, and **a hard stop of `install-all` at prerequisite 7**
   (`ensure_skip_if_credential_works`'s `unchecked:no*` arm does not match `unchecked:the probe did
   not complete`). `lib/harbor.sh`'s "a robot gets 403" comment was measurably false.
