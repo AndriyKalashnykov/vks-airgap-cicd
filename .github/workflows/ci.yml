@@ -453,9 +453,21 @@ jobs:
   # check-toolchain-alignment would have caught it. Making the job unconditional turns `skipped`
   # into an unambiguous defect, which is what lets the explicit assertion in ci-pass work.
   #
-  # NO mise here. MEASURED 2026-08-16: all 23 gates pass with the mise toolchain OFF PATH (rc=0) —
-  # they are shell/grep/python3/jq, and ubuntu-latest preinstalls python3 and jq. Dragging in the
-  # JDK/Go/kubectl/helm toolchain for them would cost more than the gates do.
+  # NO mise here. RE-MEASURED 2026-09-08 over the CURRENT set (40 gates + test-ci-pass-verdict),
+  # rc=0 on two draws, with BOTH toolchain sources off PATH. The 2026-08-16 original said "all 23
+  # gates" and 17 of today's were never in its scope, so it was re-run rather than re-quoted.
+  # ⚠️ THE FIRST DRAFT OF THAT RE-RUN WAS CONFOUNDED AND ITS GREEN PROVED NOTHING: stripping only
+  # mise left a SECOND copy of jq/shellcheck/kubectl/helm in ~/.local/bin. Stripping both, the
+  # survivors were /usr/bin's jq, python3, awk, sed and shellcheck; kubectl, helm, java, go and yq
+  # were ABSENT — which is the property this job claims. Dragging the JDK/Go/kubectl/helm toolchain
+  # in for these would cost more than they do.
+  # ⚠️ COST — TWO operating points, because one is not a mechanism: 69s on a 24-core dev box, 122s
+  # on this runner (dispatch 34293235658). The comment on the Makefile target said "~9s", which was
+  # 13.6x low against the runner. Read the run, not a number in a comment.
+  # test-ci-pass-verdict is HERE and not in test-scripts-fast because it guards `ci-pass` — the sole
+  # required check — against job-list rot, and its header promised it fails "at PR time, loudly".
+  # It could not: no `ci-tier` marker puts it in TEST_FAST, which is reachable only via
+  # `static-check-pr`, which NOTHING invokes (B571). It costs 0.06s, measured over 3 draws.
   # `needs: []` on purpose: this job does not consult the change classifier at all.
   static-check-fast:
     runs-on: ubuntu-latest
