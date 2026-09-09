@@ -54,6 +54,9 @@ CMDPOS='(^|[;&|`]|\$\()[[:space:]]*(if[[:space:]]+|while[[:space:]]+|until[[:spa
 # NOT exempt: create, delete, `export kubeconfig`, and any UNKNOWN/variable verb (the array case).
 READONLY_VERBS=" get version build completion help load "
 
+# Composed ONCE. `[[ =~ ]]` needs the pattern in a variable to keep it unquoted-but-unglobbed.
+_K_RE="${CMDPOS}${K}[[:space:]]"
+
 files=$(git ls-files 'scripts/*.sh' 'scripts/**/*.sh' 'Makefile' 2>/dev/null) || files=""
 [ -n "$files" ] || { echo "check-kind-kubeconfig: ERROR — could not list tracked files" >&2; exit 2; }
 
@@ -75,7 +78,15 @@ while IFS= read -r f; do
     trimmed="${line#"${line%%[![:space:]]*}"}"
     case "$trimmed" in '#'*|'') continue ;; esac
     # a `kind` invocation at a command position: line start, or after ; & | ` $( or `run `
-    printf '%s' "$line" | grep -qE "${CMDPOS}${K}[[:space:]]" || continue
+    # ⚠️ THE RHS IS UNQUOTED ON PURPOSE. In bash, `[[ $x =~ "$p" ]]` compares a LITERAL — the match
+    # becomes impossible and this gate would report `clean 0 of 0` forever, which is the fake-green
+    # `rules/shell/coding-style.md` opens with. Unquoted = ERE. (zsh does the OPPOSITE, so verify any
+    # change to this line with `bash -c`, never at the prompt.)
+    # WHY A BUILTIN: this was `printf '%s' "$line" | grep -qE …` — 2 forks per non-comment line over
+    # 68,047 lines, MEASURED at 44.5s/44.1s of a ~90s job, to produce a denominator of 7. The repo's
+    # own rules already name the anti-pattern and its 62s -> 0.3s fix. The denominator is the control:
+    # `7 of 7 … 8 read-only exempt` must not move, and a dead matcher would read `0 of 0`.
+    [[ $line =~ $_K_RE ]] || continue
     # NOTE the delimiter is `#`, not `/`: the command-position group contains `/` (absolute
     # paths), and an unescaped delimiter inside the pattern is a classic sed footgun.
     verb=$(printf '%s' "$line" | sed -E "s#.*${CMDPOS}${K}[[:space:]]+##" | awk '{print $1}')
@@ -86,7 +97,9 @@ while IFS= read -r f; do
       [ "$sub" = logs ] && { exempt=$((exempt + 1)); continue; }
     fi
     seen=$((seen + 1))
-    if printf '%s' "$line" | grep -q -- '--kubeconfig'; then covered=$((covered + 1)); continue; fi
+    # ⚠️ NOTE THE OPPOSITE QUOTING RULE, three lines from the `=~` above: `==` takes a GLOB, so the
+    # literal is written bare with `*` wildcards. Getting either backwards is silent.
+    if [[ $line == *--kubeconfig* ]]; then covered=$((covered + 1)); continue; fi
     if [ -n "$exp_line" ] && [ "$exp_line" -lt "$n" ]; then covered=$((covered + 1)); continue; fi
     fail=1
     # shellcheck disable=SC2016  # the $ below is PROSE about the variable, not an expansion.
