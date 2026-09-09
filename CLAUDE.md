@@ -1108,7 +1108,12 @@ points at the real Supervisor. Pin **every** candidate.
 2. **The FIVE homes** of the Harbor auth predicate. Deleting `02-env.sh:520-528`'s hand-rolled copy
    in favour of `harbor_auth_report` is the durable fix; it changes what `env-validate` prints.
 3. **B719** — 30 of 252 cited `B<nnn>` ids resolve to no row; some legitimately cross-repo.
-4. Untouched and open: **B484**, **B498**, **B480**, **B565**, **B523**.
+4. Untouched and open: **B484**, **B498**, **B565**, **B523**.
+   ⚠️ **B480 was listed here and is CLOSED** — `istio_refuse_foreign_owner` is called by BOTH
+   installers and `test-istio-ownership.sh` passes 22/22; the row simply never recorded it. That is
+   the SECOND stale-open row this session (B563 was the first). **Check a row's premise before
+   briefing from it** — and check it with the SCRIPT's wording, not the row's paraphrase: grepping
+   B523's paraphrase (`cursed`) read 0 hits and would have closed a row that is genuinely open.
 
 ⚠️ **B563 is CLOSED** — the previous handoff listed it as open while its own PR table said #1185
 shipped it. Verify a row before briefing from it; the status is a CLAIM.

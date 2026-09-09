@@ -1278,7 +1278,32 @@ round: report **without failing** on `istio-existing` (a printer, so a tenant se
 can raise it with their platform team); or assert only over objects *we* created; or key the skip on
 whether the namespace shows evidence of our own install rather than on the mode string.
 
-## 🔴 B480 — the two Istio install paths ADOPT each other's objects, silently and permanently 🔴 open
+## ✅ B480 — CLOSED (the guard shipped; the ROW was stale, not the code) — the two Istio install paths ADOPTED each other's objects
+
+> **✅ CLOSED 2026-09-09 — the fix is IN THE TREE and this row never recorded it.** Found while
+> working down the open list, by checking the row's own premise rather than briefing from it.
+>
+> The row asserts *"neither checks whether the other already owns the namespace"* with a 0-hits
+> table. MEASURED at HEAD: `istio_refuse_foreign_owner` exists in `scripts/lib/istio.sh` and is
+> called by **BOTH** installers — `43-install-istio-package.sh:231` (`… package`) and
+> `46-install-istio.sh:72` (`… helm`) — backed by `scripts/test-istio-ownership.sh`, **22 cases,
+> ALL PASS**, with explicit RED *and* GREEN sections.
+>
+> ⚠️ **Its GREEN cases are the load-bearing ones**, and the test says so: *"a guard written as
+> 'refuse on any foreign marker' passes every RED case here and still breaks the idempotency of the
+> script it protects — the own-path retry. That is the objection that killed an earlier sibling
+> design."* Both retries are asserted.
+>
+> ⚠️ **It cannot be reproduced on KinD** — `packageinstalls`/`packagerepositories`/`apps.kappctrl`
+> are absent there, so `43` can never run and no adoption can occur. The fixture is the only form
+> that runs in CI; a behavioural RED needs the lab.
+>
+> **This is the SECOND stale-open row this session** (after B563, which the handoff listed as open
+> while its own PR table said #1185 shipped it). A row's status is a CLAIM — check it before
+> briefing from it, and note the instrument matters: my first check for the sibling row B523 grepped
+> the ROW'S PARAPHRASE (`cursed`) rather than the script's wording and read 0 hits, which would have
+> closed a row that is genuinely OPEN — `25-vks-cluster-create.sh:310` still asserts *"THE CAUSE IS A
+> REUSED NAME, and that is measured, not inferred"*, the exact attribution its round refuted.
 
 **Measured 2026-08-25 on the live lab. This is reachable by running the DOCUMENTED commands in the
 DOCUMENTED order — it is not lab damage.**
