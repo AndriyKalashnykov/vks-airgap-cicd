@@ -178,9 +178,13 @@ ensure_project() {
 # was actually wrong was the one it did not look at. This closes that, for every reader and every
 # credential, without depending on anyone reading prose.
 #
-# 403 IS A PASS, and this is not a nicety: a PROJECT-SCOPED ROBOT (what scenario-1 Step 9 tells the
-# reader to create, and what the pipeline should run as) is fully authenticated and still gets 403
-# from /users/current, which is a SYSTEM-scoped endpoint. Treating "any non-200" as failure would
+# A NON-200 CAN BE A PASS, and this is not a nicety. /users/current is SYSTEM-scoped, so a
+# PROJECT-SCOPED ROBOT (what scenario-1 Step 9 tells the reader to create, and what the pipeline
+# should run as) is fully authenticated and still does not get 200.
+# ⚠️ CORRECTED 2026-09-09: this comment said the robot code is 403. MEASURED on the live lab, it is
+# **412** ("get current user not available for security context: robot"); 403 was never observed
+# here and no test exercises 412 (two tests pin 403). The 403 arm is KEPT — in Harbor 403 never
+# means "wrong password" — but 412 is the code this repo's own robots actually return. Treating "any non-200" as failure would
 # turn the least-privilege path into a hard stop -- a false RED introduced by a gate meant to help.
 # Only 401 means the credential is wrong; Harbor returns 403 for a permissions problem.
 # _harbor_auth_code <curl-tls-args...> — ONE http code, or 000. The probe, with no opinion.
@@ -259,6 +263,16 @@ harbor_auth_verdict() {
   fi
   case "$(_harbor_auth_code "${cafg[@]}")" in
     200|403) printf 'accepted' ;;
+    # 412 IS AUTHENTICATED. Harbor answers a valid ROBOT with 412 + "get current user not available
+    # for security context: robot" from this SYSTEM-scoped endpoint. MEASURED on the live lab with
+    # all three controls, and the controls are what make it safe to treat as a PASS:
+    #     real robot + real secret -> 412      real robot + WRONG secret -> 401
+    #     nonexistent robot        -> 401      no credentials            -> 401
+    # Source-confirmed at goharbor/harbor v2.15.2 (`src/server/v2.0/handler/user.go`):
+    # `RequireAuthenticated(ctx)` runs FIRST and returns UnauthorizedError, so the PreconditionFailed
+    # that yields 412 is UNREACHABLE without authentication. A dead/rotated/revoked robot lands on
+    # 401 and the `rejected` arm already handles it correctly.
+    412)     printf 'accepted' ;;
     401)     printf 'rejected' ;;
     *)       printf 'unchecked:the probe did not complete' ;;
   esac
@@ -395,6 +409,8 @@ harbor_auth_report() {
 
   case "$acode" in
     200) printf '%sHarbor accepts %s (http 200)\n' "$ok_p" "${HARBOR_USERNAME:-admin}" >&2; return 0 ;;
+    412) printf '%sHarbor accepts %s (http 412 from /users/current — a ROBOT, authenticated; that endpoint is system-scoped)\n' \
+           "$ok_p" "${HARBOR_USERNAME:-admin}" >&2; return 0 ;;
     403) printf '%sHarbor accepts %s (http 403 from /users/current — a project-scoped robot, authenticated)\n' \
            "$ok_p" "${HARBOR_USERNAME:-admin}" >&2; return 0 ;;
     401)

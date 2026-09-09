@@ -8701,7 +8701,7 @@ assertions **stayed green under the mutation** and are labelled in the file as N
 offline: without a reachable Supervisor the script dies before `env_publish_all`. They are a
 containment tripwire, not proof of containment.
 
-## 🔴 B715 — `make env-validate` EXITS 0 over the robot credential it is named as the way to check (HTTP 412) — and `lib/harbor.sh`'s 403 claim is STALE
+## ✅ B715 — SHIPPED 2026-09-09: 412 is AUTHENTICATED — and the same unhandled status was ALSO hard-stopping `make install-all`
 
 **SETTLED ON THE LIVE LAB 2026-09-09**, with the repo's own probe:
 
@@ -8726,14 +8726,42 @@ already in-tree from **2026-09-06** in four places, and `23-mirror-verify.sh:128
 the exact consequence. What is new here is only that CLAUDE.md said something false about it. The
 corpus still excludes the real case, so its green is evidence about a subset.
 
-**NOT FIXED — it needs an idea round**, because "is 412 authenticated?" is a design question, not a
-typo. The message (*"get current user not available for security context: robot"*) reads as Harbor
+**FIXED, after a round settled the premise by MEASUREMENT.** "Is 412 authenticated?" turned out not
+to be a design question at all — live lab, with the controls that make it safe to treat as a pass:
+real robot + real secret -> **412**; real robot + **WRONG** secret -> **401**; nonexistent robot ->
+401; no credentials -> 401. Source-confirmed at goharbor v2.15.2 (`src/server/v2.0/handler/user.go`):
+`RequireAuthenticated` runs FIRST, so 412 is **unreachable without authentication**. A dead or
+rotated robot lands on 401, which the `rejected` arm already handles. Mapped 412 -> `accepted`.
+
+⚠️ **THE ROUND FOUND THE ROW UNDERSTATED THE BLAST RADIUS, and that is the more useful half.** The
+same string feeds a FOURTH consumer the row never listed: `22-harbor-robot.sh` ->
+`ensure_skip_if_credential_works`, arms `accepted|rejected|unchecked:no*|*`. VERIFIED —
+`unchecked:the probe did not complete` does **not** match `unchecked:no*`, so it falls to `*)` ->
+**die** — and `harbor-robot-ensure` is **prerequisite 7 of `install-all`** (`Makefile:1072`). One
+unhandled status, OPPOSITE wrong answers: exit 0 in `env-validate`, and a HARD STOP of the documented
+install on exactly the state scenario-1 Step 9 creates. The row had it as a false GREEN only.
+
+⚠️ **THE 403 COMMENT WAS MEASURABLY FALSE**, corrected in place: `lib/harbor.sh` asserted a
+project-scoped robot "still gets 403"; this lab's robot gets 412 and 403 is not on any path through
+that handler. The 403 arm is KEPT (in Harbor 403 never means "wrong password") but is no longer
+described as the robot case.
+
+**RED-PROOF** (`test-harbor-auth-report.sh`, 18 -> 22 cases, offline TLS oracle, no live Harbor):
+⚠️ an **rc-only** assertion is VACUOUS here — the report returned 0 at 412 BEFORE the fix too, so
+`check "412 -> 0"` passes identically on the broken and fixed tree, and the file's existing cases are
+written that way. The new cases assert the **verdict STRING** and the **CHAIN**; removing the arm
+fails exactly two, and the chain case prints `got=DIE`.
+
+**STILL OPEN — the duplication.** FIVE homes for one predicate, not the four the row listed:
+`lib/harbor.sh` verdict + report + comment, the hand-rolled copy at `02-env.sh:520-528`, and
+`harbor_is_sysadmin` (accidentally correct at 412). The durable fix is to delete the `02-env.sh` copy
+and call `harbor_auth_report`; not done here because it changes what `env-validate` prints. The message (*"get current user not available for security context: robot"*) reads as Harbor
 RECOGNISING the principal, i.e. authenticated-but-wrong-endpoint, which is the same class as the
 existing 403 arm. But the honest alternative is a hard ERROR saying only `make mirror` discriminates.
 Do not pick one without a round; and fix all four homes together (`lib/harbor.sh:180-185`, `:398`,
 `creds.sh:1700`, the two tests) or they drift again.
 
-## 🔴 B716 — `check-env-coverage` PASS 2 is VACUOUS over 64% of its corpus, and reports OK
+## 🟡 B716 — `check-env-coverage` PASS 2's window is UNBOUNDED — but my prescribed fix is a MASS FALSE-RED and my RED-proof target is DOCUMENTED
 
 Its own header says a wider window *"would pick up a NEIGHBOURING block's marker and the gate would
 never fire — which is exactly what it did on its first version"*. **It regressed to v1 behaviour.**
@@ -8869,3 +8897,36 @@ failing exactly its own cases. ⚠️ One of my assertions was **vacuous** as fi
 recorded here so the shape is recognised: `NOT 'inconclusive'` stayed green under the mutation
 because the fixture pulled successfully; an EMPTY event list is the only fixture in which the old
 code prints the misleading line.
+
+### ⛔ B716 round, 2026-09-09 — the DEFECT is confirmed; the PRESCRIPTION is refuted three ways
+
+Every number in the row reproduced exactly (241 / 155 / 102 / max 247 / 57 / reports 0). What was
+wrong is everything I proposed to do about it.
+
+1. **The 57 are not 57 undocumented variables — 34 of them (60%) are documented by a GROUP HEADER
+   that names them**, and the file's dominant idiom is one header above a RUN of slots. The
+   unconditional reset severs every slot after the first from its header. Measured split: **34**
+   in-a-run-with-a-marker-bearing-header (FALSE RED), **3** in-a-run-whose-header also lacks one,
+   **20** first-slot-after-prose. The honest design is a window of *(own contiguous non-slot
+   comments) + (the block above the FIRST slot of this run)* — measured **fail=23** and max window
+   **247 → 42**, which fixes the actual defect without inventing 34 false REDs.
+2. **My prescribed RED-proof target is a FALSE POSITIVE.** `VKS_PASSWORD` IS documented — its slot
+   line is `# VKS_PASSWORD=<SET-IN-.env>          # vsphere method only …`, i.e. the file's own
+   you-set placeholder plus an inline scope note. The awk is `NR<n`, so **it never reads the slot
+   line itself**, and that is where this file's declared acquisition idiom lives (`<SET-IN-…>`, used
+   20 times; `ACQ_MARKERS` has no `SET-IN` alternative). Pinning "VKS_PASSWORD must FAIL" would
+   enshrine a false positive as the gate's correctness criterion.
+3. **"It REGRESSED to v1" is wrong.** `.env.example:2005-2008` already documents this as a known
+   convention, verbatim: *"a run of keys under one shared marker would let each pass on its
+   NEIGHBOUR's. Do not consolidate them — and if you want that to be more than a convention, earn it
+   with a RED first."* It was never enforced; a prior session wrote that down **in the scanned
+   file**. Any fix must update that paragraph in the same commit.
+
+**NOT LANDABLE AS ONE COMMIT:** `check-env-coverage` is a prereq of `static-check-fast`, which is a
+per-PR job and a `needs:` of `ci-pass` — so 57 REDs block every PR **including the PRs that would
+document the 57**. Staged: (1) report-only + a denominator, (2) triage the ~21 survivors, (3) enforce
+at zero. Markers are a SEPARATE arc (word-anchoring costs 4; dropping bare `password` alone REDs a
+correctly-documented secret).
+
+**And PASS 2 has NO DENOMINATOR** — the only count printed is PASS 1's, so a PASS-2 loop that stopped
+iterating is indistinguishable from a pass. That is the cheapest real improvement in the whole row.

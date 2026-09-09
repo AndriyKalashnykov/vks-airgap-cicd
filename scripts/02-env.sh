@@ -518,7 +518,14 @@ env_validate() {
           acode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${CURL_MAX_TIME_SECONDS:-10}" "${cafg[@]}" -K "$cfg" "$scheme://$HARBOR_URL/api/v2.0/users/current" 2>/dev/null || echo 000)"
           rm -f "$cfg"
           case "$acode" in
-            200|403) log_info "Harbor credentials accepted (HTTP $acode)" ;;   # 403 = robot lacks /users/current but auth passed
+            # ⚠️ THIS IS A HAND-ROLLED COPY of lib/harbor.sh's probe and it drifted: 412 fell to the
+            # `*)` warn arm, so env-validate exited 0 over the ROBOT credential the pipeline runs
+            # as -- while the SAME unhandled string made `harbor-robot-ensure` DIE inside
+            # install-all. One unhandled status, opposite wrong answers. 412 = a valid robot on a
+            # SYSTEM-scoped endpoint (measured, with 401 controls: wrong secret, nonexistent robot
+            # and no credentials ALL give 401). Filed to delete this copy and call
+            # harbor_auth_report instead -- five homes for one predicate is the real defect.
+            200|403|412) log_info "Harbor credentials accepted (HTTP $acode)" ;;   # 403/412 = robot: auth passed, endpoint is system-scoped
             401)     log_error "Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)"
                      # Until 2026-08-22 this arm named NO remedy, so env-validate told the operator they
                      # were broken and stopped there. It is the DIAGNOSE half of the pair. (B209)
