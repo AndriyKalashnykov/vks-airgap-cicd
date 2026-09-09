@@ -1749,7 +1749,99 @@ appears in 0 of 37 docs and 0 Makefile lines, the default is `helm`, so the matr
 code path. The decisive live run is a VKS guest with `ISTIO_INSTALL_METHOD=package`; everything here
 is stub-measured.
 
-## 🔴 B486 — `ARGOCD_SERVER` is published as an **IP**, and `.env.example` says it must be a **NAME** 🔴 open
+## 🔴 B486 — `ARGOCD_SERVER` is published as an **IP**, and `.env.example` says it must be a **NAME** 🔴 open — change 1 AND clause 2 are REFUTED (see the top of this row)
+
+⚠️ **CHANGE 1 IS REFUTED — MEASURED 2026-09-08 by two independent rounds. Do NOT implement it, and
+do NOT re-derive it from the "typed twice" argument below.** This row's own prescribed fix ("publish
+`${ARGOCD_HOST}` when it is set, the IP otherwise") was implemented, went **33/33 green**, and was
+then refuted. The implementation is preserved unmerged at `6bfff07` on `fix/b486-argocd-host` so
+nobody rebuilds it.
+
+**The refutation is a PRIMARY-SOURCE read, not a judgement call.** `.env.example:1508-1509` documents
+`ARGOCD_HOST` as:
+
+    a real default: ARGOCD_SERVER — show-dns-records.sh reads ${ARGOCD_HOST:-${ARGOCD_SERVER:-…}}
+    how: you choose it — the name your REAL DNS will answer for ArgoCD, e.g. argocd.example.com
+
+So the documented dependency runs `ARGOCD_HOST` <- `ARGOCD_SERVER`, and change 1 **inverts it into a
+circle**. And `ARGOCD_HOST` is an *arbitrary operator-chosen DNS name*, while `ARGOCD_SERVER` is
+required to be *a name the CERTIFICATE carries* (`.env.example:495`, `23-argocd-preflight.sh:211`,
+`70-configure-argocd.sh:495`, `:648`). **Different contracts.** The "typed twice" smell is real; the
+two values are not the same value.
+
+**Five further defects the 33/33 green suite was structurally blind to.** Both rounds found the first
+independently:
+
+1. **It publishes a NAME and then classifies the IP.** `_eff` is computed at `:269` from the
+   pre-write value and the whole display block keys on it, so with `ARGOCD_HOST` set the terminal
+   fires "That address is an IP" **about a name** — verbatim the bug `09`'s own header at
+   `:313-317` records as having already shipped once and been fixed.
+2. **It overwrites a GRANTED tenant address, and lies about provenance.** `argocd_effective_addr`
+   takes the leave arm only on `server != ip`, so a tenant handed the current LB IP falls to the
+   WRITE branch, where change 1 turns a no-op into a replacement and logs *"(we wrote the previous
+   value)"* with no marker present. That false line is INTRODUCED by change 1: today's condition is
+   `!= "$ip"`, which cannot fire in that cell.
+3. **The remedy's own ordering window.** Step 2 sets `ARGOCD_HOST`; step 3 publishes the A record.
+   Re-running `make argocd-address` in between — which `09:244` invites — publishes a non-resolving
+   name, and `fetch-ca.sh:58` then dies *before* its SAN-printing arm, disabling remedy step 1, the
+   step by which the operator learns the SAN names at all.
+4. **`make creds` silently stops disclosing the untrusted cert.** `_argo_tls_note` keys on IP-ness
+   BY DESIGN (`creds.sh:253`: *"the IP case is a fact, the name case is not ours to assert"*).
+   Change 1 makes the tool itself publish the name, converting "not ours to assert" into "we caused
+   it". ⚠️ This is a CONSEQUENCE of change 1, **not** an independent defect in `creds.sh` — do not
+   "fix" that heuristic; its reasoning is recorded and correct.
+5. **2 of the 6 new tests are VACUOUS.** Under mutation (`_publish` -> `$ip`) they stay GREEN while
+   the script writes an IP and claims it came from `ARGOCD_HOST`, because the log block is gated on
+   `[ -n "$ARGOCD_HOST" ]` — decoupled from what was actually published.
+
+**CLAUSE 2 IS ALSO REFUTED — do not implement it either.** MEASURED: `-include` is parse-time, and
+`09` runs only from `make argocd-address` (it is NOT in `install-all`), so the realistic sequence is
+two make invocations and `ARGOCD_SERVER` wins first-wins in the second. The `ARGOCD_LB_IP` arm at
+`Makefile:733` is therefore **unreachable on the Supervisor path, before AND after change 1**; its
+only other readers (`creds.sh:281`, `91-e2e-tenant-mechanism.sh:254`) are unreachable or KinD-only.
+Writing it buys nothing and would falsify three recorded comments — `creds.sh:271`,
+`walk-doc.sh:159`, and `os.sh:702` (*"ARGOCD_LB_IP, which NO sourced file sets"*), the last being the
+stated basis of an inverse control at `test-insecure-toggle-snapshot.sh:162`. The correct fix for the
+`:302` sentence is to **delete it**, not to make it true.
+
+**One claim in the refuted diff was itself wrong**, and it was the load-bearing half of the safety
+argument: it said `ARGOCD_HOST` is safe to repurpose because it has *"exactly TWO consumers"*.
+Measured: **one** value-consumer (`show-dns-records.sh:82`); the other two occurrences are prose. It
+counted occurrences, not consumers.
+
+**What IS still worth doing** — each independent of change 1, none a licence to re-open it:
+
+- **`ARGOCD_HOST` carries TWO INCOMPATIBLE CONTRACTS in this repo, and that is what made change 1
+  look safe.** `09`'s remedy step 2 says *"choose a name from that list"* — the CERT's SAN list —
+  while `.env.example:1509` says *"you choose it — the name your REAL DNS will answer"*. One
+  variable, two constraints. Reconciling them is the real prerequisite for any future work here.
+- **`Makefile:729` is ambiguous and has already caused one false operator-facing claim.** Its
+  *"its writer 09-argocd-address.sh is Supervisor-only"* has `ARGOCD_LB_IP` as the nearest antecedent
+  (false), while the clause that follows only holds if it means `ARGOCD_SERVER` (true).
+  `test-creds-show.sh:305` spells the same sentence out unambiguously.
+- **`ARGOCD_HOST` is absent from BOTH selector lists** (`os.sh:713` and `check-env-clobber.sh:106`)
+  while 14 siblings are present, so a per-run override loses to an uncommented `.env` value. Latent
+  today only because it ships commented.
+- **A PRE-EXISTING false provenance claim on `main`, independent of everything above.** The shipped
+  write branch logs *"correcting ARGOCD_SERVER `<value>` -> `<ip>` (we wrote the previous value)"*
+  whenever `ARGOCD_SERVER` is non-empty and differs from the IP. On the write branch that includes
+  the **`.env.example` placeholder**, which we did NOT write — the repo ships it. Honest form is two
+  branches: *replacing the placeholder* vs *correcting a value we wrote*. RULE ZERO-V, one branch to
+  fix, and it is on `main` today.
+- **`_render` in `test-argocd-address-classify.sh` does not neutralise `ARGOCD_HOST`.** `SKIP_DOTENV=1`
+  blocks `.env` but not an exported shell variable, and the operator most likely to have it exported
+  is the one following `09`'s own remedy. Add `ARGOCD_HOST=` to the fixture prefix regardless of what
+  happens to this row.
+
+⚠️ **If this row is ever re-opened, two fix SHAPES were already measured-correct and one was
+measured-WRONG — do not re-derive them.** A `_shown` variable (the address in effect after the
+guard) driving the display/classifier, with `_eff` left as the write-DECISION, is correct in both
+the name and IP-literal cells. Reassigning `_eff` itself is **wrong**: `:367` is nested inside the
+`:337` IP arm, so it only misfires when `ARGOCD_HOST` holds an IP literal — a cell nothing
+validates against. And ownership CANNOT be derived from `argocd_effective_addr`: called on all four
+write-branch states it returns the identical string, so its return carries zero bits about which
+case you are in. A sibling predicate in `lib/argocd.sh` is the right home, not a second copy of one
+clause in `09`.
 
 ⚠️ **An idea round (2026-09-08) says: do NOT close this, and do NOT implement its Done-when.**
 
