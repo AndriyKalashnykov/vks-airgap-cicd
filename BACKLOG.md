@@ -760,6 +760,31 @@ token — measured, all three of its SKIP arms are unreachable at its only call 
 `--require-asserted` flag could never fire — and once [[B569]] removed the goal-list pin it would
 hard-fail a *correct* `make e2e-kind INGRESS_CONTROLLER=traefik`.
 
+### 🔴 MEASURED 2026-09-08 — the denominator is **31**, not ~5, and the token count moved to 2
+
+The row predicted its own finding (*"the denominator, not the token, is the finding"*). Measured on
+`2ac0c42`, so a round has real input rather than an estimate:
+
+| population | predicate | count |
+|---|---|---|
+| every tracked `scripts/*.sh` | prints a SKIP-ish line via `log_*`/`echo`/`printf` | **83 of 330** |
+| **operator-flow + gates** (`scripts/[0-9][0-9]-*.sh` + `scripts/check-*.sh`) | same | **31 of 117** |
+| machine-readable verdict tokens emitted anywhere | `<name>-verdict:` | **2** — `gateway-image-verdict`, `workload-image-verdict` |
+
+So the row's "~5, and 1 of 1 instrumented" is now **31, and 2 of 31**. `workload-image-verdict`
+arrived with #1185 after the row was written; the ratio improved, the gap did not close.
+
+⚠️ **The 83 is a SHAPE count and is NOT the finding** — most of it is test harnesses printing SKIP
+for a genuinely unmeasurable case (`test-*.sh` running as root, an absent engine), which is correct
+behaviour and out of scope. The 31 is the population a round should reason about; the top of it by
+arm count is `02-env.sh` (9), `96-verify-gateway-image` (4), `08-install-argocd-service` (4),
+`06-install-harbor` (4).
+
+⚠️ **Still UNMEASURED, and it is the row's actual first question:** which of those 31 arms is
+**REACHABLE** at its call site AND **WRONG** if taken. Counting arms is not that — a `check-*.sh`
+that skips on an absent optional corpus is fine. Do not instrument all 31; that is the
+enumerated-list reflex the row already refuses.
+
 ## 🔴 B564 — `ci-pass` REFUSES after `gh run rerun --failed`, because a partial attempt has a partial job list 🔴 open
 
 MEASURED 2026-09-08 on PR #1167: a raced `ci-pass` (it read `static-check-fast conclusion=none` while
