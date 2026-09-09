@@ -461,9 +461,13 @@ jobs:
   # survivors were /usr/bin's jq, python3, awk, sed and shellcheck; kubectl, helm, java, go and yq
   # were ABSENT — which is the property this job claims. Dragging the JDK/Go/kubectl/helm toolchain
   # in for these would cost more than they do.
-  # ⚠️ COST — TWO operating points, because one is not a mechanism: 69s on a 24-core dev box, 122s
-  # on this runner (dispatch 34293235658). The comment on the Makefile target said "~9s", which was
-  # 13.6x low against the runner. Read the run, not a number in a comment.
+  # ⚠️ COST — DO NOT QUOTE A NUMBER HERE. I wrote "122s on this runner" earlier the same day and my
+  # OWN change (#1204, a fork-per-line gate) made it stale within hours: measured on three
+  # consecutive runner runs, 115s -> 61s -> 45s. Before that, the Makefile said "~9s", 13.6x low.
+  # Every literal anyone has put in this comment has rotted. Read the run:
+  #   gh run list --branch main --limit 1 --json databaseId --jq '.[0].databaseId' \
+  #     | xargs -I{} gh run view {} --json jobs \
+  #         --jq '.jobs[]|select(.name=="static-check-fast")|"\(.startedAt) \(.completedAt)"'
   # test-ci-pass-verdict is HERE and not in test-scripts-fast because it guards `ci-pass` — the sole
   # required check — against job-list rot, and its header promised it fails "at PR time, loudly".
   # It could not: no `ci-tier` marker puts it in TEST_FAST, which is reachable only via
