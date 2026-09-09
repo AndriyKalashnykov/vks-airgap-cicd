@@ -1491,7 +1491,7 @@ TEST_FAST    := $(filter-out $(TEST_SLOW),$(TEST_OFFLINE))
 # miss same-day CVEs — so per-PR trivy means a cold DB download every run), and test-scripts' slow
 # tier (6 targets that assert wall-clock BY DESIGN = 136s of 154s). Both stay on the weekly run.
 .PHONY: static-check-pr
-static-check-pr: lint validate test-scripts-fast ## The per-PR half of static-check (no trivy, no wall-clock tests, NO app builds)
+static-check-pr: lint validate test-scripts-fast ## The LOCAL pre-merge half of static-check (no trivy, no wall-clock tests, NO app builds) — run it yourself; no CI job invokes it
 	@echo "static-check-pr: OK"
 
 .PHONY: check-help-row-ids
@@ -1907,9 +1907,12 @@ static-check-fast: check-install-chain check-notfound-discriminator check-jumpbo
 # script counted as an invocation; an over-anchored regex; `origin/main` used as "before" when it
 # already contained this change; and a `sed` that re-indented the lines the regex anchored on).
 # `grep -cx './scripts/lint.sh'` against the raw output is the form that discriminates.
-# `make ci` is UNAFFECTED (1 -> 1, measured both trees) and CI runs
-# `static-check-pr`, so no documented or automated path is touched; the cost is a slower run for a
-# human who types both, never a wrong verdict. Accepted rather than filed: a backlog row for "a
+# `make ci` is UNAFFECTED (1 -> 1, measured both trees), and the duplicate lands ONLY in
+# `static-check-pr` — which NOTHING in CI invokes (B571; measured 2026-09-08, `grep static-check-pr
+# .github/workflows/*.yml` returns only comments). ⚠️ THE ORIGINAL OF THIS SENTENCE SAID "CI runs
+# `static-check-pr`", which is FALSE; the conclusion survives for a STRONGER reason than the one it
+# was given — no automated path runs that target AT ALL, rather than one that runs it cheaply. The
+# cost is a slower run for a human who types it, never a wrong verdict. Accepted rather than filed: a backlog row for "a
 # command nobody runs is slower" is a row that never gets actioned, and this comment is where
 # somebody who hits it will actually look. It is the price of the verify running when a gate FAILS,
 # which is the half of the header's own incidents the prerequisite form was blind to.

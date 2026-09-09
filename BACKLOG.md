@@ -667,6 +667,65 @@ control, and the repo's own history says a partial control that reads as "handle
 
 ## 🔴 B571 — `static-check-pr` is invoked by NOTHING, while four comments say a PR runs it 🔴 open
 
+### ⛔ ITS F2 WAS REVIEWED 2026-09-08 AND **REFUTED AS A STRATEGY** — "correct the numbers" is the wrong fix
+
+An `adversary-bash-git-cli` round on the proposed comment-correction sweep. Every one of the eight
+false claims is genuinely false — but the *set* and the *method* were both wrong. What shipped
+instead, and what did not:
+
+| finding | verdict | where it went |
+|---|---|---|
+| **site 10 is a WIRING defect wearing a comment's clothes** — `test-ci-pass-verdict.sh` guards the sole required check, promises it fails "at PR time, loudly", and could not (no `ci-tier` marker ⇒ TEST_FAST ⇒ `static-check-pr` ⇒ nothing). It costs **0.06s**. | CRITICAL | **FIXED #1198** — wired into `static-check-fast`, RED-proven with its counterfactual (un-wired, the same breach reads rc=0) |
+| `docs/ci-cd.md:10`'s **2026-09-08 "correction" carries a NEW false citation** (`ci.yml:349` is a Go *cache* step; `github.event_name` appears 3× and none selects a target) **and contradicts itself** ("and `sec`" … "NOT `sec`", 11 words apart) | CRITICAL | **FIXED #1200** |
+| `make help` printed *"The per-PR half of static-check"* to an **operator** for a target no PR runs (RULE ZERO-V) | MED | **FIXED here** |
+| `Makefile`'s duplicate-`lint` decision rested on *"CI runs `static-check-pr`"* — **false** | MED | **FIXED here** — and the conclusion survives for a *stronger* reason: nothing automated runs that target at all |
+| the ci.yml *"all 23 gates pass with mise OFF PATH"* scope-staleness (40 today; 17 never in scope) | MED | **RE-MEASURED + FIXED #1198** |
+| the four rows below | — | **OPEN** |
+
+#### 🔴 F2a — `lint.sh:18`'s "126 scripts" is wrong, and BOTH proposed replacements are too
+
+The claim binds N to scripts `-x` re-parses `lib/os.sh` for, i.e. those carrying a
+`# shellcheck source=` directive — not the corpus. Measured on `daca581`: corpus **337**;
+`# shellcheck source=` **207**; sourcing anything **223**. The round measured **188** for the same
+predicate in its worktree at `09e9139`.
+
+⚠️ **Two honest measurements of "the same" number differ by 19, and that IS the finding.** Do not
+write 188, 207 or 337 into the comment. Derive it, or drop it.
+
+#### 🔴 F2b — the false-belief class is ≥24 sites, and it has SHAPED CODE, not just prose
+
+Nine files assert *"TEST_FAST runs on every PR"*; **all nine lack a `ci-tier` marker**, so none runs
+on any PR. Two of them (`check-bare-exec-redirect.sh:18`, written **2026-09-08** and
+MEASURED-labelled; `test-manifest-assert.sh:25`) chose **not** to add a marker *because* they
+believed no-marker meant every-PR. So correcting the sentences leaves those decisions standing on
+nothing — the fix is to decide, per file, whether it belongs on the PR path (as `test-ci-pass-verdict`
+now does) or to say plainly that it does not.
+
+#### 🔴 F2c — 31% of this repo's `Makefile:NNN` comment citations point at a BLANK LINE, and NO gate asserts any of them
+
+Measured by the round over 16 distinct citations: 5 dead (`builder-image` cited at `:406`, actually
+`:589`; `install-all` cited at `:459`, actually `:1072`), and **B571's own citations, written the day
+before, were already off by 8**. Counts rot as fast: `scripts/test-*.sh` went **143 → 151 → 155 in
+~34 h**. 49 `check-*.sh` exist; the four that mention `file:line` only *cite*, never *assert*.
+**This is why "correct the numbers" is refuted: it re-arms the same landmine with a fresh date.**
+Needs an idea round — and note a gate here is the un-gateable-judgement shape, so a printer may be
+the honest answer.
+
+#### 🔴 F2d — `.github/` is in the adversary gate's `EXEMPT_PREFIXES`, so a CI-graph change gets no round
+
+Measured: `.claude/hooks/adversary-first-gate.py:76` lists `.github/` beside `.claude/`;
+`ci.yml` → rc=**0** while `Makefile`/`scripts/`/`docs/` → rc=**2**. Five of that round's ten findings
+live in that one exempt file — including the mis-wiring `test-ci-pass-verdict` exists to catch, which
+until #1198 was unguarded by BOTH controls at once. ⚠️ The exemption is **load-bearing for the hook's
+own wiring** (`.claude/`), so the fix is narrowing `.github/` → a `workflows/` carve-in, not deletion.
+Needs its own idea round.
+
+⚠️ **NOT a finding: the hook's `Bash` arm not guarding the guarded paths.** It is deliberate,
+measured and documented in the hook's own header (porting the sibling's arm matches 652 commands,
+85% of them RED-PROOF restores, while MISSING 2,644 `python3 - <<PY` writes — this repo's dominant
+editing idiom). *"Do NOT improve this by widening it to guarded paths."* Read the header before
+re-filing it.
+
 Found by B568's round. MEASURED: `grep static-check-pr .github/workflows/*.yml` returns **only
 comments**. The `static-check` job is gated `github.event_name == 'schedule' || … 'workflow_dispatch'`
 (`ci.yml:199`), and the live checks show `static-check  skipping` on every PR. `static-check-fast`
