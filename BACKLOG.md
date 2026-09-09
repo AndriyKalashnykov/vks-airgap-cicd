@@ -8786,7 +8786,7 @@ existing 403 arm. But the honest alternative is a hard ERROR saying only `make m
 Do not pick one without a round; and fix all four homes together (`lib/harbor.sh:180-185`, `:398`,
 `creds.sh:1700`, the two tests) or they drift again.
 
-## 🟡 B716 — `check-env-coverage` PASS 2's window is UNBOUNDED — but my prescribed fix is a MASS FALSE-RED and my RED-proof target is DOCUMENTED
+## 🟡 B716 — STAGE 1 of 3 SHIPPED 2026-09-09 (report-only + a denominator): PASS 2's window is UNBOUNDED, and my original prescribed fix was a MASS FALSE-RED
 
 Its own header says a wider window *"would pick up a NEIGHBOURING block's marker and the gate would
 never fire — which is exactly what it did on its first version"*. **It regressed to v1 behaviour.**
@@ -8955,3 +8955,47 @@ correctly-documented secret).
 
 **And PASS 2 has NO DENOMINATOR** — the only count printed is PASS 1's, so a PASS-2 loop that stopped
 iterating is indistinguishable from a pass. That is the cheapest real improvement in the whole row.
+
+### ✅ B716 STAGE 1 SHIPPED 2026-09-09 — report-only, with the denominator PASS 2 never had
+
+**The window that shipped** is the round's design, and I re-measured all three myself before
+building on it rather than taking the numbers:
+
+| window | flagged | max window |
+|---|---|---|
+| current (reset only on a non-comment line) | **0** | **247** |
+| the row's original fix (also reset on a slot line) | **57** — the mass false-RED | 42 |
+| **section-scoped** (own non-slot comments + the block above the run's FIRST slot) | **23** | 42 |
+| section-scoped + the slot LINE + a `set-in` marker | **21** | 42 |
+
+**It is REPORT-ONLY and must stay so until stage 2.** `check-env-coverage` is a prerequisite of
+`static-check-fast`, a per-PR job and a `needs:` of `ci-pass` — flipping it to enforcing would RED
+every PR, *including the PRs that would document the survivors*.
+
+**PASS 2 now prints a DENOMINATOR** (`241 commented slot(s) examined, 21 flagged`) with a floor of
+200, and the success sentence no longer makes PASS 1's claim on PASS 2's behalf. That was the
+cheapest real improvement in the row: the only count printed used to be PASS 1's, so a PASS-2 loop
+that stopped iterating was indistinguishable from a clean run.
+
+**RED-PROVEN with FIXTURES** (`scripts/test-env-coverage-window.sh`, 10 cases) — not against the live
+`.env.example`, because keying a proof on real variable names rots on the next documentation edit,
+which is exactly how the row's original *"VKS_PASSWORD must FAIL"* target would have rotted. Two
+mutations, each failing only its own cases: reverting to the **naive** window fails precisely the
+*"a group header covers the WHOLE run"* assertion (the one that makes the 57-false-RED design
+impossible to ship by accident); reverting to the **v1** window fails the three bounded-window cases.
+
+⚠️ **Three of the failures while writing that test were the FIXTURE, not the product**, and the
+shapes are worth keeping: copying the real `lib/os.sh` in made PASS 1 flag ~21 vars so the gate
+exited 1 and every PASS-2b assertion read 0 (three failures, one cause); the 200 padding slots were
+CONTIGUOUS with the fixture slots, forming one run whose head was a padded `# how:` block, so cases
+passed for a reason they were not testing; and twice my own explanatory prose *inside the heredoc*
+contained the marker word `how`. The file now carries an **instrument check** that greps the rendered
+fixture for markers before believing any verdict about it.
+
+**STAGE 2** — triage the 21 survivors (`CREDS_PROBE_TIMEOUT_SECONDS`, `HARBOR_INSECURE`,
+`ARGOCD_MANAGER_*`, the `ISTIO_*` group, `BUNDLE_TARBALL`, `CAPACITY_PREFLIGHT`, …). Some need a
+`how:`; at least one (`INGRESS_CONTROLLER`, 40 lines of its own documentation and no marker word) is
+a MARKER-VOCABULARY miss, not a documentation hole — decide per item and say which in the commit.
+**STAGE 3** — enforce, only once the flagged count is 0, in a commit that touches nothing else.
+Markers are a SEPARATE arc (word-anchoring costs 4; dropping bare `password` alone REDs a
+correctly-documented secret).
