@@ -804,7 +804,7 @@ preflight: export CA_STATUS_STRICT = 1
 preflight: check-tools engine-check env-check lab-preflight psa-check argocd-preflight ## Read-only: can this lab actually run the flow? Run it BEFORE the 20-minute mirror (first prereq of install-all)
 
 .PHONY: vks-trust-probe
-vks-trust-probe: ## LIVE: does this guest cluster trust our Harbor, and by what mechanism? (read-only; throwaway ns, cleaned up)
+vks-trust-probe: ## LIVE: does this guest cluster trust our Harbor, and by what mechanism? (read-only; a throwaway ns it cleans up — PROBE_NS=<yours> is used as-is and NEVER deleted)
 	@$(SCRIPTS)/vks-trust-probe.sh
 
 .PHONY: argocd-preflight
