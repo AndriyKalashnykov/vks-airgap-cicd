@@ -68,10 +68,55 @@ _route_dead="${TMPDIR:-/tmp}/.creds-route-dead.$$"
 
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+
+# ── the Supervisor credential, decided ONCE and OFFLINE ──────────────────────────────────────────
+# `kube_token_expiry` (lib/os.sh) parses the kubeconfig's bearer token locally and never dials.
+# MEASURED on a powered-off lab: it returns `EXPIRED <ts>` in 26 ms, while ONE live Supervisor call
+# with the same knowledge burns its full budget and exits 124 having learned nothing (3005 ms).
+# This report made FOUR such calls -- 19 s of a 26.5 s run -- and then told the operator "my own
+# budget expired ... this is not a statement about the cluster", which is FALSE: it is a statement
+# about the CREDENTIAL, and we were holding it the whole time.
+#
+# ⚠️ EXPIRED ONLY, NEVER `UNKNOWN`. `EXPIRED` is a fact read out of the file; `UNKNOWN` means we
+# could not parse one, which is not evidence of anything. Short-circuiting on UNKNOWN would turn a
+# slow truth into a fast lie -- and a credential being dead says nothing about whether the CLUSTER
+# is up, so this must never gate a probe that is not Supervisor-authenticated (see :615, which uses
+# the guest kubeconfig and is deliberately left alone).
+
+# _sup_timeout <budget> <cmd...> — `timeout`, except it returns AT ONCE when the Supervisor
+# credential is provably dead, with the real reason on stderr so `_kube_classify` can speak it.
+_sup_timeout() {
+  local _b="${1:?_sup_timeout: budget required}"; shift
+  if [ "${_SUP_DEAD:-0}" = 1 ]; then
+    # 119: no code `timeout` itself emits (124/125/126/127/137), AND no code kubectl emits
+    # (0/1/2/3). ⚠️ NOT a completeness proof — `timeout` passes a CHILD's status through
+    # unchanged, so a wrapped command that can exit 119 would be misread as "we skipped it".
+    # Every wrapped site runs kubectl today; RE-CHECK THIS if a script is ever wrapped
+    # (argocd-password.sh nearly was, and was reverted for a different reason).
+    printf 'NOT ATTEMPTED: the Supervisor token EXPIRED at %s\n' "${_SUP_DEAD_AT}" >&2
+    return 119
+  fi
+  timeout "$_b" "$@"
+}
 # Silence the internal state-stamp warning for this report only: it names .env.state and its
 # "stamp", which is maintainer vocabulary, and the Context block below already states the same
 # fact in plain English. Every other caller of load_env still gets the warning.
 load_env 2> >(grep -v "does not record which cluster it belongs to" >&2)
+
+# ⚠️ AFTER load_env, NOT BEFORE — this was a HIGH found by an implementation round on this very diff.
+# `supervisor_kubeconfig_candidates()` resolves from VKS_SUPERVISOR_KUBECONFIG, REPO_ROOT,
+# ARGOCD_KUBECONFIG and VKS_LAB_STATE_DIR, and load_env sets ALL FOUR from `.env` under `set -a`.
+# Computed earlier, the file whose token decided the skip could be a DIFFERENT file from the one the
+# wrapped calls dial — measured: a stale secrets/supervisor.kubeconfig read EXPIRED while the
+# .env-pointed one read VALID, so four calls that WOULD have succeeded were skipped and the report
+# blamed a timestamp from a file they never touch. Worse, the ArgoCD cell (which resolves AFTER
+# load_env) then printed "still valid" in the SAME report — one document asserting both about one
+# credential. RULE ZERO-B: `.env` is the documented surface, so that was the documented path.
+_SUP_DEAD=0; _SUP_DEAD_AT=""
+_sup_expiry_probe="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
+case "$_sup_expiry_probe" in
+  EXPIRED*) _SUP_DEAD=1; _SUP_DEAD_AT="${_sup_expiry_probe#EXPIRED }" ;;
+esac
 
 # NOW RE-ARM THE SNAPSHOT ONE-WAY: probe-OFF wins, probe-ON can never be granted by a file.
 #
@@ -173,7 +218,7 @@ fi
 # ⚠️ A FALSE 'dead' IS THE RISK TO AVOID: this deliberately probes the ADVERTISED port and treats
 # anything other than a refused/timed-out connect as alive. If it cannot decide, it keeps the value.
 _ing="${INGRESS_LB_IP:-}"
-_ing_live=1
+_ing_live=1; _ing_probed=0
 if [ -n "$_ing" ]; then
   # ⚠️ GATED ON THE SNAPSHOT, and the literal 2 replaced by the documented variable.
   # MEASURED 2026-09-05 (adversary, HIGH): with CREDS_NO_PROBE=1 -- which this report ITSELF
@@ -185,6 +230,7 @@ if [ -n "$_ing" ]; then
   # `$_no_probe_snapshot` (:52) rather than the live variable, for the same reason SHOW_SECRETS is
   # snapshotted: load_env's `set -a` can clobber it from the operator's .env.
   if [ "$_no_probe_snapshot" != "1" ]; then
+    _ing_probed=1
     timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" bash -c "exec 3<>/dev/tcp/${_ing}/${INGRESS_PROBE_PORT:-80}" 2>/dev/null || _ing_live=0
   fi
 fi
@@ -457,6 +503,10 @@ if [ "$_no_probe_snapshot" = "1" ]; then
   if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then argo_pw="$ARGOCD_ADMIN_PASSWORD"; _argo_rc=0
   else                                         argo_pw=""; _argo_rc=0; _argo_noprobe=1; fi
 else
+  # ⚠️ DELIBERATELY NOT `_sup_timeout`. argocd-password.sh tries the Supervisor AND the guest
+  # kubeconfig (:105-122), so an expired SUPERVISOR token does NOT prove this cannot succeed.
+  # Wrapping it here was a category error; test-creds-show.sh caught it (the ArgoCD row lost
+  # its password). Skipping a call that another credential can still serve is a fast lie.
   argo_pw="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" "${SCRIPT_DIR}/argocd-password.sh" --wait 0 --raw 2>"$_argo_err")" || _argo_rc=$?
 fi
 # THREE states now, not one hedge. argocd-password.sh compares argocd-secret's admin.passwordMtime
@@ -735,8 +785,9 @@ case "$_prov" in
   # contradicted names BOTH servers, so it is a fact the reader can check rather than a mood.
   STORED)     if [ -z "$_stamp" ]; then
                 printf '    values below : your .env, plus values discovered at install time. Nothing here records\n'
-                printf '                   WHICH cluster they came from, which is NORMAL on a real lab and does NOT\n'
-                printf '                   mean they are stale. The Reachable column BELOW is the live answer.\n'
+                printf '                   WHICH cluster they came from, which is NORMAL on a real lab and does not\n'
+                printf '                   BY ITSELF mean they are stale. The Reachable column BELOW is the live\n'
+                printf '                   answer, and a STORED address it reports as silent may indeed be old.\n'
                 printf '                   To re-check credentials: make env-validate\n'
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
@@ -809,10 +860,22 @@ fi
 if [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
   echo
   echo "  ⚠️  the recorded ingress ${INGRESS_LB_IP} is NOT ANSWERING on port ${INGRESS_PROBE_PORT:-80}."
-  echo "      It is a STORED value and survives a rebuild, so it is probably a previous lab's."
+  # ⚠️ THE CLAIM IS WHAT WAS OBSERVED, NOT A DIAGNOSIS — the same rule the elif branch below already
+  # records for its own message. This branch said "it is probably a previous lab's" and prescribed
+  # "Re-run the ingress install". MEASURED 2026-09-09 with the lab POWERED OFF: that produces the
+  # identical observation, and the advice sent the operator to reinstall ingress when the fix was to
+  # start the lab. Nothing here can tell a stale IP from a stopped lab, so it must not pick one.
+  echo "      That is the observation, not a diagnosis. It is a STORED value that survives a"
+  echo "      rebuild, so it may be a previous lab's — but a POWERED-OFF or still-booting lab is"
+  echo "      silent in exactly the same way, and nothing here can tell those apart."
   echo "      NOT printing an /etc/hosts line for it — a hosts entry pointing at nothing sends you"
-  echo "      to debug your browser. Re-run the ingress install, or reach the services on their own"
-  echo "      LoadBalancers (shown in the table)."
+  echo "      to debug your browser. Check the lab is up FIRST; if it is, re-run the ingress"
+  # ⚠️ NAME WHICH. Only Harbor and ArgoCD have their own LoadBalancer rows; Gitea, Tekton,
+  # headlamp and every app row resolve ONLY through this ingress, so telling the operator to
+  # "reach the services on their own LoadBalancers" is a remedy that does not exist for most
+  # of the table — and my rewrite had made that claim MORE assertive, not less.
+  echo "      install. Harbor and ArgoCD have their OWN LoadBalancers and are in the table;"
+  echo "      Gitea, Tekton, headlamp and the apps are reachable ONLY through this ingress."
 elif [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   if [ "$_ing_http_dead" = 1 ]; then
@@ -1247,6 +1310,44 @@ _kube_classify() {
   # names a vSphere SSO bind — and vCenter locks out PERMANENTLY after THREE failures. Keying on the
   # exit code guarantees that regardless of what the fault happens to write to stderr, which no
   # string-matching model can promise.
+  # ⚠️ 119 IS OURS AND MEANS **NOT ATTEMPTED**. `_sup_timeout` returns it when the Supervisor token
+  # is PROVABLY expired — read offline from the token's own `exp`, in 26 ms, versus the 3005 ms the
+  # live call costs to learn nothing (measured, lab powered off). Without this arm the skip fell
+  # through to the unclassified `*)` arm and printed "kubectl failed for a reason we do not
+  # classify", which is strictly worse than the timeout it replaced: I measured that regression and
+  # it is why this arm exists.
+  #
+  # ⚠️ NAMING THE RENEWAL IS SAFE ON EXACTLY THIS ARM, for the same reason the EXPIRED arm below may:
+  # the cause is a FACT read from the token, not a hypothesis. The SSO-lockout rule forbids
+  # prescribing a bind for a state we cannot decide; this state IS decided.
+  case "$_rc" in
+    119)
+      _kube_tok="<not read — Supervisor token EXPIRED ${_SUP_DEAD_AT:-?}>"
+      _kube_state="${_p} — NOT ATTEMPTED: the Supervisor token EXPIRED at ${_SUP_DEAD_AT:-?}, so this call could not have succeeded and no time was spent on it. $(_renew_how)"
+      # ⚠️ AND SAY WHETHER THE REMEDY CAN EVEN RUN. MEASURED 2026-09-09, lab powered off: every
+      # sentence above was TRUE and the one action offered was a DEAD END — `vks-login` dials a
+      # vCenter that neither resolves nor answers. A round graded that HIGH, and the reason it
+      # stings is that the report was HOLDING the disconfirming evidence: its own ingress probe had
+      # already answered nothing, in the same run, and this arm did not consult it.
+      # ⚠️ The expiry is COINCIDENT, NOT CAUSAL, on a dead lab: measured, an unauthenticated curl to
+      # the same endpoint ALSO times out at 3 s, while an expired token against a REACHABLE server
+      # returns 401 in ~30 ms. So the skip stays (the implication is valid) but it must not imply
+      # that renewing is sufficient.
+      # ⚠️ SAY ONLY WHAT WAS OBSERVED. The first version of this note said "nothing in this lab
+      # answered" on the strength of ONE TCP connect to the GUEST cluster's ingress — inside an arm
+      # that is entirely about SUPERVISOR calls. Harbor and ArgoCD have their OWN LoadBalancers and
+      # Harbor is a Supervisor Service, so a silent guest ingress is NOT evidence about the
+      # Supervisor: with a stale INGRESS_LB_IP and a healthy lab every clause of that sentence was
+      # false, and it withheld the CORRECT remedy. Same category error this file refuses at :615,
+      # committed in the opposite direction.
+      # ⚠️ AND IT REQUIRES _ing_probed. _ing_live starts at 1 and is only ever downgraded, so
+      # "never probed" (no INGRESS_LB_IP, or CREDS_NO_PROBE=1) read as "answered" — suppressing the
+      # caveat in exactly the powered-off case it exists for.
+      if [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; then
+        _kube_state="${_kube_state} NOTE: the recorded ingress did not answer during this run either — check the lab is UP before spending an SSO attempt."
+      fi
+      return 0 ;;
+  esac
   case "$_rc" in
     124|137)
       _kube_tok="<could not ask>"
@@ -1349,7 +1450,7 @@ if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
     # in rules/shell/coding-style.md). Parameter expansion does the same job with no forks and no
     # status to lose.
     if [ -z "$_h_ns" ]; then
-      _h_nsraw="$(KUBECONFIG="$_h_sup" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl \
+      _h_nsraw="$(KUBECONFIG="$_h_sup" _sup_timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl \
           --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-5s}" get ns \
           -l appplatform.vmware.com/serviceId=harbor -o name 2>"$_h_err")" && _h_rc=0 || _h_rc=$?
       _h_ns="${_h_nsraw%%$'\n'*}"; _h_ns="${_h_ns#namespace/}"
@@ -1368,7 +1469,7 @@ if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
       # MEASURED with two stubs (NotFound rc=1; rc=0 with the key renamed): both rendered a bare
       # `<not read>` with no footnote at all. The stderr capture added on the same line was written
       # to a file nothing read.
-      _h_enc="$(KUBECONFIG="$_h_sup" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl \
+      _h_enc="$(KUBECONFIG="$_h_sup" _sup_timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl \
           --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-5s}" -n "$_h_ns" get secret harbor-core-ver-1 \
           -o jsonpath='{.data.HARBOR_ADMIN_PASSWORD}' 2>"$_h_err")" && _h_rc2=0 || _h_rc2=$?
       if [ "$_h_rc2" -ne 0 ]; then
@@ -1974,7 +2075,7 @@ else
   else
     _lab_err="$(mktemp)"
     # `&& rc=0 || rc=$?` and NOT `; rc=$?` — the latter dies under `set -e` (rules/shell).
-    _ssh_list="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
+    _ssh_list="$(_sup_timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
                    -n "$VKS_NAMESPACE" get secret -o name </dev/null 2>"$_lab_err")" && _ssh_rc=0 || _ssh_rc=$?
     if [ "$_ssh_rc" -ne 0 ]; then
       # THE WHOLE POINT: name WHY we could not ask, so it is never mistaken for "there is none".
@@ -2015,7 +2116,7 @@ else
       else
         # stderr to a FILE, never 2>&1: a server `Warning:` header concatenates in front of the
         # base64 on a SUCCESSFUL read and base64 -d then emits partial garbage (lib/argocd.sh:327).
-        _ssh_b64="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
+        _ssh_b64="$(_sup_timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
                       -n "$VKS_NAMESPACE" get secret "$_ssh_sec" \
                       -o jsonpath='{.data.ssh-passwordkey}' </dev/null 2>>"$_lab_err")" && _ssh_rc=0 || _ssh_rc=$?
         # purity-check before decoding, or a partial decode ships a WRONG password.
@@ -2051,7 +2152,7 @@ else
     # FALL BACK, never fail: an older//different platform may not carry the label, and a report that
     # prints nothing is worse than one that prints an unscoped address AND SAYS SO.
     _ssh_scoped=1
-    _ssh_addr="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
+    _ssh_addr="$(_sup_timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
                    -n "$VKS_NAMESPACE" get vm -l "cluster.x-k8s.io/cluster-name=${VKS_CLUSTER_NAME:-}" \
                    -o jsonpath='{range .items[*]}{.status.network.primaryIP4}{" "}{end}' \
                    </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
@@ -2060,7 +2161,7 @@ else
     # base64/date/sed/head/cut and no tr; the script that would install it is internet-side only.)
     if [ "${_ssh_vrc:-1}" -eq 0 ] && [ -z "$(printf '%s' "${_ssh_addr:-}" | sed 's/[[:space:]]//g')" ]; then
       _ssh_scoped=0
-      _ssh_addr="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
+      _ssh_addr="$(_sup_timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
                      -n "$VKS_NAMESPACE" get vm \
                      -o jsonpath='{range .items[*]}{.status.network.primaryIP4}{" "}{end}' \
                      </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
