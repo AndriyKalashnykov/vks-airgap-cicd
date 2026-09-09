@@ -60,7 +60,7 @@ scenario-1	VCF_CLI_SRC_DIR	EMIT	Step 1: the licensed archives are scp'd to /tmp/
 scenario-1	HARBOR_URL	EMIT	Step 4: the reader chooses a name their real DNS answers
 scenario-1	HARBOR_STORAGE_CLASS	EMIT	Step 4: no default, and its only lookup needs the Step-3 kubeconfig
 scenario-1	ARGOCD_NAMESPACE	EMIT	Step 5: load_env derives it from VKS_NAMESPACE, so an unset value is silently wrong
-scenario-1	HARBOR_PASSWORD	FORBID	the document's §8.5 fetches it. Injecting it makes 28-harbor-admin-password.sh:40-56 exit early on `accepted`, so the branch that READS the installed password is never walked
+scenario-1	HARBOR_PASSWORD	FORBID	the document's §8.5 fetches it. Injecting it makes 28-harbor-admin-password.sh exit early on `accepted` (grep -n 'already authenticates'), so the branch that READS the installed password is never walked
 scenario-1	HARBOR_USERNAME	FORBID	same as HARBOR_PASSWORD — §8.5 must run to obtain the pair
 scenario-1	VKS_K8S_VERSION	EXEMPT	24-vks-k8s-version.sh:208 set_env_var's it seconds before use; a pinned value goes stale WITHIN one lab cut
 scenario-1	ARGOCD_SERVER	EXEMPT	09-argocd-address.sh:158 set_env_var's it after Step 5 creates argocd-server

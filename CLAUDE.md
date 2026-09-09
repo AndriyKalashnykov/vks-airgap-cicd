@@ -203,7 +203,7 @@ on the live lab 2026-09-09.** `/api/v2.0/users/current` answers a `robot$…` wi
 verdict `unchecked` → `errs` is NOT incremented → `02-env.sh:620` **exits 0**. So the sentence above
 ("`make env-validate` gets it right in one command") holds for an **admin** credential and NOT for
 the robot the pipeline actually runs as. `lib/harbor.sh:180-185` still claims a robot gets **403**
-and two tests pin that; the live lab says 412 and **no test covers 412**. Filed as **B558** — do not
+and two tests pin that; the live lab says 412 and **no test covers 412**. Filed as **B715** — do not
 "fix" it by widening an arm without a round.
 
 `make env-validate` gets it right in one command **for an ADMIN credential** (rc=1, `Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)`)
@@ -536,7 +536,7 @@ KinD stand-in is a convenience. Design for the tenant first.
    marks every target tenant-safe or SUPERVISOR-ONLY.
 2. **A tenant whose credential is stale CANNOT recover it.** There is no self-service path and no
    target will invent one. `make env-validate` is how they LEARN it is stale (rc=1, HTTP 401 — for an
-ADMIN credential; it CANNOT judge a robot, see B558); the
+   ADMIN credential; it CANNOT judge a robot, see B715); the
    fix is a REQUEST to the platform team, not a command. Any "sync/recover" mechanism must say so
    plainly rather than fail obscurely.
 3. **Anything that needs more than `.env` must be a REQUEST, and must be named as one** — a Harbor
@@ -1134,11 +1134,14 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 - **B561's printer** and **B564 Stage 2** — both scoped, both explicitly gated on evidence that has
   not arrived (Stage 2 only if the lag recurs; on current incidence you would be building against
   one day's GitHub weather).
-- Untouched and open, in rough order of bite: **B563** (no running-image provenance assertion for our
-  own workloads on ANY path — the sibling of the breach fixed today), **B484** (a fail-open air-gap
+- Untouched and open, in rough order of bite: **B484** (a fail-open air-gap
   check where Forbidden reads as absent), **B498** (Kaniko is ARCHIVED and the maintained fork
   publishes no image), **B480** (the two Istio install paths silently ADOPT each other's objects),
   **B565**, **B523**.
+  ⚠️ **B563 was listed here and is CLOSED** — this section's own PR table two blocks up says #1185
+  shipped it, and the row reads `✅ closed 2026-09-08`. A handoff that contradicts both itself and
+  the backlog is the stale-status class this file warns about; corrected 2026-09-09. Verify a row
+  before briefing from it — the status is a CLAIM.
   ⚠️ B532 and B536 are **SHIPPED**, not pending — I nearly listed them here off memory; the row
   headings say so.
 

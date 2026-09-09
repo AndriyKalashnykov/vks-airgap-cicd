@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ci-tier: fast
-# Offline RED/GREEN for vks-trust-probe.sh's PULL-EVENT classifier (B575).
+# Offline RED/GREEN for vks-trust-probe.sh's PULL-EVENT classifier (B720).
 #
 # THE BUG. A kubelet DNS failure emits
 #     Failed to pull image "harbor.env1.lab.test/apps/probeimg:0.1.0": ... dial tcp: lookup

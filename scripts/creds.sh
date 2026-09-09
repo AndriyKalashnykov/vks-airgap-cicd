@@ -789,9 +789,23 @@ case "$_prov" in
   STORED)     if [ -z "$_stamp" ]; then
                 printf '    values below : your .env, plus values discovered at install time. Nothing here records\n'
                 printf '                   WHICH cluster they came from, which is NORMAL on a real lab and does not\n'
-                printf '                   BY ITSELF mean they are stale. The Reachable column BELOW is the live\n'
-                printf '                   answer, and a STORED address it reports as silent may indeed be old.\n'
-                printf '                   To re-check credentials: make env-validate\n'
+                # "BELOW" was unscoped: `Reachable` is a column on the SERVICES table only. The
+                # `Lab access` table has four columns and none of them is Reachable, and its
+                # vCenter/SSO rows are deliberately NEVER probed (SSO locks out after 3 binds). A
+                # reader scanning down for a verdict on those rows finds none and reads the absence
+                # as "nothing wrong with that one".
+                printf '                   BY ITSELF mean they are stale. The Reachable column on the SERVICES table\n'
+                printf '                   is the live answer for THOSE rows, and a STORED address it reports as\n'
+                printf '                   silent may indeed be old. The Lab access rows are NOT probed.\n'
+                # ⚠️ SCOPED, because the unqualified word was FALSE. MEASURED: `env_validate`
+                # (02-env.sh) has ZERO references to `supervisor_kubeconfig` and ZERO to
+                # ARGOCD/VCENTER/VCF_CLI/VKS_PASSWORD, so it cannot re-check ANY of the four
+                # `Lab access` rows below -- including the credential this report may have just
+                # declared dead. Makefile:367's help was already accurate and narrow; this line is
+                # moved to it rather than the reverse. And it CANNOT judge a robot at all: B715.
+                printf '                   To re-check Harbor + KUBECONFIG: make env-validate\n'
+                printf '                   (it does NOT re-check the Lab access rows below, and it\n'
+                printf '                    cannot judge a robot$ Harbor credential — see B715.)\n'
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
                 printf '                   passwords below belong to that one, not to the cluster you are talking to.\n'
@@ -1454,7 +1468,7 @@ _kube_classify() {
 # `<not read — run: make harbor-admin-password>`. But this whole block is gated on
 # `harbor_username_is_robot`, so whenever that sentence renders, HARBOR_USERNAME *is* a robot — and
 # in exactly that state `28-harbor-admin-password.sh` either exits 0 without reading the admin
-# secret (:60-62, "already authenticates - leaving it alone") or DIES REFUSING (:79, "is a ROBOT
+# secret (grep -n 'already authenticates' -- "leaving it alone") or DIES REFUSING (grep -n 'is a ROBOT
 # account ... that would silently downgrade a least-privilege setup"). So the report sent the
 # operator to a command that, in the only state where the advice appeared, cannot produce the value.
 # A shipped RULE ZERO-V violation, found by a round on 2026-09-07 that was chartered to look at
@@ -1790,8 +1804,16 @@ fi
 # AND no headlamp, who got a bare token and no explanation — strictly LESS than the wrong-remedy
 # sentence it replaced.
 #
-# ⚠️ THE REFUSAL SENTENCE IS NOT AN ABSOLUTE. 28-harbor-admin-password.sh has TWO robot behaviours:
-# :58-62 exits 0 leaving a WORKING robot credential alone, and :78-89 dies refusing. Saying it
+# ⚠️ THE REFUSAL SENTENCE IS NOT AN ABSOLUTE. 28-harbor-admin-password.sh has THREE robot branches
+# collapsing to two OUTCOMES -- it said TWO until 2026-09-09, and the missing one was the bug:
+#   1. `accepted` -> exits 0, leaving a WORKING robot credential alone   (grep -n 'already authenticates')
+#   2. the EARLY die, when HARBOR_PASSWORD is empty/placeholder so no verdict exists at all
+#      (grep -n 'is a ROBOT account and HARBOR_PASSWORD is empty') -- ADDED 2026-09-09; before it,
+#      that state skipped every robot check and published HARBOR_USERNAME=admin
+#   3. the in-block die, when a verdict exists and is not `accepted`
+#      (grep -n 'is a ROBOT account, and this command')
+# NO LINE NUMBERS ON PURPOSE: the four that used to be here went stale by +25 the day after a
+# commit whose entire subject was stale citations in this file. Saying it
 # "REFUSES" unconditionally is false in the healthy state scenario-1 Step 9 produces — the operator
 # runs it, gets rc=0 and two INFO lines, and still has no password. Say what is true of BOTH arms.
 if [ -n "${_h_admin_why:-}" ]; then
@@ -1822,6 +1844,18 @@ fi
 # as sourced and is worse than no marker at all. Display text is not a control channel.
 case "${_argo_tls_flag:-0}" in
   1)
+    # ⚠️ THE LEGEND IS UNCONDITIONAL, AND IT IS THE POINT. Four credential-shaped columns beside a
+    # green fifth read as ONE verdict. They are not: `Reachable` probes the ADDRESS only -- Harbor's
+    # probe sends no -u/-K/-H, ArgoCD's is a bare TCP connect, the ingress rows are a `curl -H Host:`
+    # -- and Username/Password are ECHOED from .env / the install-time overlay, never read back from
+    # the system. This file already said so, exactly, IN A COMMENT; a round measured that no PRINTED
+    # line ever told the operator. And the discriminator matters: `secrets/` is gitignored operator
+    # state nothing cleans up, so a robot pair survives every lab re-cut and reads valid to any proxy
+    # check -- only a real push discriminates (CLAUDE.md, "THREE HARBOR AUTH CHECKS THAT DO NOT
+    # DISCRIMINATE"), and `make env-validate` cannot judge a robot at all (B715).
+    printf '\n  legend: Reachable = the ADDRESS answered. It says NOTHING about the Username/Password\n'
+    printf '          beside it — those are shown AS CONFIGURED (from .env / the install overlay),\n'
+    printf '          not tested. Only a real push (make mirror) proves a Harbor credential.\n'
     printf '\n  note: rows marked "untrusted cert" are not signed by a CA your machine trusts.\n'
     printf '        In a browser: click through the warning. With curl/CLI: --insecure.\n'
     printf '        ArgoCD is also at a BARE IP and its cert carries no IP SAN, so no client can\n'
@@ -2230,8 +2264,29 @@ else
     _ssh_first="${_ssh_addr%% *}"
     if [ "${_ssh_vrc:-1}" -ne 0 ]; then
       # An absence is a claim about the QUERY first. A tenant may simply not be allowed to list VMs.
-      if grep -qi 'forbidden' "$_ssh_verr" 2>/dev/null; then _ssh_ep="<not allowed to read addresses>"
-      else                                                   _ssh_ep="<could not read node addresses>"; fi
+      #
+      # ⚠️ ROUTE IT THROUGH THE SAME CLASSIFIER AS THIS BLOCK'S TWO SIBLINGS. This arm used to be a
+      # hand-rolled TWO-way `grep -qi forbidden`, while the queries at the `_ssh_cands` and
+      # `get secret` steps both call `_kube_classify`. MEASURED 2026-09-09: with the Supervisor token
+      # expired, `_sup_timeout` returns 119 WITHOUT DIALLING and writes `NOT ATTEMPTED: the
+      # Supervisor token EXPIRED at <ts>` into the very stderr this arm greps -- so the report was
+      # HOLDING the cause and printing `<could not read node addresses>`, sending the reader to hunt
+      # node networking or RBAC. `_kube_classify`'s own 119 arm says falling through to the
+      # unclassified arm "is strictly worse ... I measured that regression and it is why this arm
+      # exists"; this line reproduced it 30 lines away. Two independent rounds found it.
+      #
+      # BUT THE SHORT-TOKEN DISCIPLINE BELOW (:"SHORT TOKEN IN THE COLUMN") STILL BINDS: the Endpoint
+      # column's width is a max over all rows, and `_kube_tok`'s expiry token is ~54 chars, which
+      # would wrap all four rows on an 80-col terminal -- the exact defect that discipline records.
+      # So the classifier supplies the SENTENCE (printed under the table) and the column keeps a
+      # short token.
+      _kube_classify "$_ssh_verr" "the node addresses" "${_ssh_vrc}"
+      _ssh_ep_state="$_kube_state"
+      case "${_ssh_vrc}" in
+        119) _ssh_ep="<not read — token expired>" ;;
+        *)   if grep -qi 'forbidden' "$_ssh_verr" 2>/dev/null; then _ssh_ep="<not allowed to read addresses>"
+             else                                                   _ssh_ep="<could not read node addresses>"; fi ;;
+      esac
     elif [ -z "$_ssh_addr" ]; then
       _ssh_ep="<no node address yet>"
     elif [ "$_ssh_n" -gt 1 ]; then
@@ -2304,7 +2359,16 @@ EOF
 # about the lab, and scenario-1.md:1102 documents that intent ("never a blank that would read as
 # this cluster has none"). A reader applying the absolute would discount an actionable lab fact.
 printf '\n  Lab access — from your .env. A <not set> means THIS REPORT does not have the value;\n'
-printf '                it does not mean the lab lacks one. The guest node SSH row is read live.\n'
+# ⚠️ "read live" IS A CLAIM, and it used to print unconditionally -- including on the run where
+# `_sup_timeout` returned 119 WITHOUT DIALLING. Paired with `<could not read node addresses>` it told
+# the operator the live cluster HAD been asked and had no readable addresses (a lab/RBAC fact) when
+# nothing had been asked at all. Say which of the two happened.
+if [ "${_SUP_DEAD:-0}" = 1 ]; then
+  printf '                it does not mean the lab lacks one. The guest node SSH row was NOT probed\n'
+  printf '                (the Supervisor token is expired) — see the note under the table.\n'
+else
+  printf '                it does not mean the lab lacks one. The guest node SSH row is read live.\n'
+fi
 printf '\n  %-*s  %-*s  %-*s  %s\n' "$_lw1" "Target" "$_lw2" "Endpoint" "$_lw3" "Username" "Password"
 printf '  %-*s  %-*s  %-*s  %s\n' \
   "$_lw1" "$(printf '%*s' "$_lw1" '' | tr ' ' '-')" \
@@ -2401,6 +2465,19 @@ fi
 # query. The exact conflation the probe rewrite above exists to fix, re-committed two lines below it.
 if [ -z "$_ssh_pw" ]; then
   printf '  Guest-node SSH password NOT read: %s\n' "$_ssh_state"
+fi
+# The ENDPOINT is a SEPARATE query with its own rc, so it needs its own sentence: the row can carry
+# two different failures with two different causes, and printing only the password's leaves the
+# address marker unexplained -- which reads as "the lab has no node addresses".
+if [ -n "${_ssh_ep_state:-}" ]; then
+  # Compare the CAUSE, not the whole string: both states are "<label> — <cause>" and only the
+  # LABEL differs, so a whole-string compare never collapses them (measured: still 3 copies).
+  _ep_cause="${_ssh_ep_state#* — }"; _pw_cause="${_ssh_state:-}"; _pw_cause="${_pw_cause#* — }"
+  if [ "${_ep_cause}" = "${_pw_cause}" ]; then
+    printf '  Guest-node ADDRESSES not read either — same cause as the line above.\n'
+  else
+    printf '  Guest-node ADDRESSES not read: %s\n' "$_ssh_ep_state"
+  fi
 fi
 
 echo

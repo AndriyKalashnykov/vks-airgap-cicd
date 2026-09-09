@@ -8668,7 +8668,7 @@ to *Harbor's* note; and `kube_token_expiry` had **zero** tests, so all four fixe
 `scripts/test-kube-token-expiry.sh` now pins 17 cases, each a measured defect from one of the rounds
 rather than a hypothetical, RED-proven by three separate mutations.
 
-## B557 — ✅ SHIPPED 2026-09-09: `make harbor-admin-password` SILENTLY DOWNGRADED a robot credential to full admin
+## ✅ B714 — SHIPPED 2026-09-09: `make harbor-admin-password` SILENTLY DOWNGRADED a robot credential to full admin
 
 Three adversary rounds on `make creds`' operator-facing claims; this one is not about prose.
 
@@ -8701,7 +8701,7 @@ assertions **stayed green under the mutation** and are labelled in the file as N
 offline: without a reachable Supervisor the script dies before `env_publish_all`. They are a
 containment tripwire, not proof of containment.
 
-## B558 — 🔴 `make env-validate` EXITS 0 over the robot credential it is named as the way to check (HTTP 412) — and `lib/harbor.sh`'s 403 claim is STALE
+## 🔴 B715 — `make env-validate` EXITS 0 over the robot credential it is named as the way to check (HTTP 412) — and `lib/harbor.sh`'s 403 claim is STALE
 
 **SETTLED ON THE LIVE LAB 2026-09-09**, with the repo's own probe:
 
@@ -8718,9 +8718,13 @@ mints it at :865; Step 11 runs env-validate at :972).
 PASS … a PROJECT-SCOPED ROBOT … still gets 403 from /users/current"*, and **two tests pin 403**
 (`test-harbor-auth-report.sh:95,:160`). `creds.sh:1700-1703` records **412** from the live lab with
 controls. The live lab says **412**. So the harbor.sh comment and both tests describe an operating
-point that does not occur here, and the one that does is **untested** — `grep -rn '412' scripts/test-*`
-→ **zero**. That is why this shipped: the corpus excludes the real case, so its green is evidence
-about a subset.
+point that does not occur here, and the one that does is **untested**. ⚠️ An implementation round corrected my own published
+command: `grep -rn '412' scripts/test-*` returns **one** hit, a COMMENT at
+`test-creds-show.sh:707` — so "no test EXERCISES 412" is still true, but the row had shipped a
+reproducible command with a wrong stated result. It also over-claimed novelty: the 412 fact was
+already in-tree from **2026-09-06** in four places, and `23-mirror-verify.sh:128` already records
+the exact consequence. What is new here is only that CLAUDE.md said something false about it. The
+corpus still excludes the real case, so its green is evidence about a subset.
 
 **NOT FIXED — it needs an idea round**, because "is 412 authenticated?" is a design question, not a
 typo. The message (*"get current user not available for security context: robot"*) reads as Harbor
@@ -8729,7 +8733,7 @@ existing 403 arm. But the honest alternative is a hard ERROR saying only `make m
 Do not pick one without a round; and fix all four homes together (`lib/harbor.sh:180-185`, `:398`,
 `creds.sh:1700`, the two tests) or they drift again.
 
-## B559 — 🔴 `check-env-coverage` PASS 2 is VACUOUS over 64% of its corpus, and reports OK
+## 🔴 B716 — `check-env-coverage` PASS 2 is VACUOUS over 64% of its corpus, and reports OK
 
 Its own header says a wider window *"would pick up a NEIGHBOURING block's marker and the gate would
 never fire — which is exactly what it did on its first version"*. **It regressed to v1 behaviour.**
@@ -8749,7 +8753,7 @@ argument for allowing a section-scoped marker EXPLICITLY rather than by accident
 word `password` from `ACQ_MARKERS`: it matches any variable whose own NAME contains it.
 ⚠️ Tightening a gate is a control change — idea round first.
 
-## B560 — 🔴 the guest-node-SSH ENDPOINT arm bypasses `_kube_classify`, so a known cause is discarded
+## ✅ B717 — SHIPPED 2026-09-09: the guest-node-SSH ENDPOINT arm bypassed `_kube_classify`, so a known cause was discarded
 
 **TWO INDEPENDENT ROUNDS converged on this**, with the same evidence. `creds.sh:2231-2234` classifies
 the node-address failure with a hand-rolled TWO-way `grep -qi 'forbidden'` — while its two SIBLING
@@ -8765,12 +8769,16 @@ happen and goes hunting node networking or RBAC.
 `_kube_classify`'s own comment says falling through to the unclassified arm *"is strictly worse … I
 measured that regression and it is why this arm exists"* — and this line reproduces it 30 lines away.
 
-**Done-when:** route `:2232-2234` through `_kube_classify`; make `:2307` conditional on a probe
-having been ATTEMPTED. ⚠️ A round also flagged the CLASS: `_kube_classify` is called at `:1510`,
+**SHIPPED.** Routed through `_kube_classify` (which supplies the SENTENCE; the column keeps a SHORT
+token, because the Endpoint width is a max over all rows and the full token is ~54 chars) and the
+"read live" line is now conditional. ⚠️ **The fix introduced a defect caught only by re-reading the
+whole output as an operator:** a second note put the ~370-char renewal recipe on screen THREE times
+in one report. It now collapses to "same cause as the line above" — and the first collapse did NOT
+fire, because the two states differ only in their LABEL. Compare the CAUSE, not the string. ⚠️ A round also flagged the CLASS: `_kube_classify` is called at `:1510`,
 `:1528`, `:2133`, `:2176` but not here, so any future `_sup_timeout`-wrapped probe inherits the
 defect — consider a gate asserting every such call routes through it.
 
-## B561b — 🔴 three UNSCOPED operator-facing claims in `make creds` (all measured FALSE-as-written)
+## ✅ B718 — SHIPPED 2026-09-09: three UNSCOPED operator-facing claims in `make creds` (all measured FALSE-as-written)
 
 Filed together because the fix is one pass over `creds.sh`'s prose and each was measured:
 
@@ -8797,3 +8805,67 @@ false on the success path, the only path that comment is about.
 
 **Also measured, in an ALWAYS-LOADED file:** `CLAUDE.md:199` and `:528` say env-validate returns
 **rc=2**; `02-env.sh:620` is the only exit path and it is `exit 1`.
+
+## 🟡 B719 — the backlog is 1.46 MB and THREE rows are 15% of it — do NOT bulk-prune it
+
+Recorded during a cleanup pass, 2026-09-09, because the obvious remedy is the dangerous one.
+
+**MEASURED:** `BACKLOG.md` is **1,460,620 bytes / 8,803 lines**; 68 detail sections hold 446,291 of
+them. Three rows dominate: **B213 (86,209 B)**, **B501-original (70,409 B)**, **B537-original
+(59,438 B)** — **216 KB, ~15% of the file**. For scale, this file was split out of `CLAUDE.md`
+when it was **85 KB**; one row is now larger than that.
+
+**⛔ DO NOT PRUNE IT TO SHRINK IT.** `configuration.md` §"PRUNING a doc DELETES THE CORRECTION and
+KEEPS THE TEXT IT CORRECTED" is exactly this file's shape: the stale CLAIM reads as durable prose
+and survives, while the CORRECTION reads as dated history and gets cut — so the file stops
+contradicting itself and starts being uniformly wrong. Measured there at a **71%** cut. The three
+big rows here are `(original)` sections whose whole purpose is to preserve a refuted design so it is
+not rebuilt; they are the LAST thing to delete.
+
+**What is safe, if size ever becomes a real cost:** it is not auto-loaded (`CLAUDE.md` says so), so
+the cost is paid only by a session that opens it. If that changes, the honest move is to **split by
+era into `BACKLOG-archive.md`** — moving whole rows, corrections attached — never to trim within a
+row. **Done-when:** nothing, unless a measured cost appears. Filed so the next session does not
+"tidy" it.
+
+**A THIRD FINDING, recorded not fixed — DANGLING CITATIONS.** 30 of 252 distinct `B<nnn>` ids
+cited across `*.sh` and `*.md` resolve to **no row in either form**. Some are legitimately
+**cross-repo** (B428/B436/B453/B454 live in `nested-vsphere-lab`, as `CLAUDE.md` records), so a naive
+gate would false-RED on those; the rest are real rot. ⚠️ **And note the probe matters more than the
+number:** a first pass reported B700–B713 as dangling because it looked only for `## <emoji> B<n> —`
+headings and this file ALSO carries `| **B<n>** |` index rows. Any gate here must accept BOTH forms
+and exempt the cross-repo set, which is why it is a **row and not a one-liner**.
+
+**Also fixed in the same pass:** the always-loaded handoff listed **B563** as *"Untouched and open"*
+while its own PR table said #1185 shipped it and the row read `✅ closed 2026-09-08`. And five new
+rows used the minority trailing-emoji heading form, which a `^## <emoji> B` grep misses (76 rows use
+the leading form); normalised.
+
+## ✅ B720 — SHIPPED 2026-09-09: a DNS fault was reported to the operator as a TRUST problem
+
+An idea round **REFUTED** the obvious remedy — building a `make dns-node-check` target — and the
+refutation is the durable half: `vks-trust-probe` **already is** that design (PSA-compliant pod,
+`imagePullPolicy: Always`, verdict read from the EVENT not the phase, `trap` cleanup, plus two
+things the proposal omitted — it derives the image from a running workload and copies the
+`harbor-pull` secret, so it measures the CREDENTIALED path). A DNS-only pod is worse, not cheaper:
+default `dnsPolicy: ClusterFirst` resolves via a CoreDNS pod that may sit on ANOTHER NODE, and the
+only shell-capable mirrored image lives IN Harbor, so probing the name under test needs the name
+under test. And such a gate's RED is **not demonstrable in KinD** — `HARBOR_URL` there is a bare LB
+IP with containerd pinned to it, so there is no name to fail to resolve.
+
+**The shippable unit was the CLASSIFIER.** `lookup … no such host` matched `*x509*|*"Failed"*`, so
+the operator was told *"an x509 line is a TRUST problem"* for a fault that has nothing to do with
+trust. Arm order is asserted (x509 BEFORE the DNS arm — an x509 line proves the address resolved);
+`i/o timeout` is deliberately **out** of the DNS arm, since on `dial tcp <ip>:443` it is routing.
+
+Two more from the same round: an **RBAC denial was reported as a timing problem** (a tenant's
+`ensure_namespace` failure was swallowed and surfaced as *"inconclusive — no pull event within the
+wait budget"*), and **that fix armed a footgun** — telling a tenant to pass `PROBE_NS` pointed
+`_cleanup` at a namespace THEY own, which it deleted unconditionally. Ownership is now recorded at
+assignment time.
+
+RED-proven by three separate mutations (`scripts/test-vks-trust-probe-classify.sh`, 20 cases), each
+failing exactly its own cases. ⚠️ One of my assertions was **vacuous** as first written and is
+recorded here so the shape is recognised: `NOT 'inconclusive'` stayed green under the mutation
+because the fixture pulled successfully; an EMPTY event list is the only fixture in which the old
+code prints the misleading line.
