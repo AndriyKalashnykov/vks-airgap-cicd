@@ -260,9 +260,90 @@ while IFS=: read -r ln line; do
 done < <(grep -nE '^#[[:space:]]*[A-Za-z][A-Za-z0-9_]*#' "$ENV_FILE" || true)
 [ "$splice_rc" -eq 0 ] || rc=1
 
+# ---------------------------------------------------------------------------------------------
+# PASS 2b — SECTION-SCOPED WINDOW, REPORT-ONLY (B716 stage 1 of 3).
+#
+# WHAT IS WRONG WITH PASS 2 ABOVE, measured: its awk resets the block only on a NON-COMMENT line,
+# and `.env.example` is an unbroken run of `#` lines — so a variable's "own block" absorbs its
+# NEIGHBOURS'. Numbers, reproduced independently twice: 241 slots examined, 155 (64%) with a window
+# >20 lines, 102 (42%) >50, **max 247**, and it flags **0**. Its own comment above says a wider
+# window "would pick up a NEIGHBOURING block's marker and the gate would never fire". That is the
+# state it is in.
+#
+# ⚠️ THE OBVIOUS FIX IS A MASS FALSE-RED AND IS NOT SHIPPED HERE. Also resetting on a slot line
+# gives **57** flags — but MEASURED, **34 of them (60%) are documented by a GROUP HEADER that names
+# them**, because this file's dominant idiom is one header above a RUN of slots. Severing every slot
+# after the first from its header invents 34 false REDs, and the cheapest response to a false RED is
+# to weaken the gate.
+#
+# THE WINDOW BELOW is: (a variable's own contiguous non-slot comments) PLUS (the block above the
+# FIRST slot of the maximal run it belongs to). Measured: **23** flagged, and max window 247 -> 42.
+# Including the slot LINE itself and honouring this file's own `<SET-IN-.env>` idiom (declared at
+# `.env.example`'s head, used 20 times, and matched by NO existing marker) takes it to **21**.
+#
+# ⚠️ REPORT-ONLY, DELIBERATELY, AND IT MUST STAY THAT WAY UNTIL THE SURVIVORS ARE TRIAGED.
+# `check-env-coverage` is a prerequisite of `static-check-fast`, which is a per-PR job and a
+# `needs:` of `ci-pass` — so flipping this to enforcing would RED every PR, including the PRs that
+# would document the survivors. Stage 2 triages them; stage 3 enforces at zero.
+#
+# ⚠️ AND "IT REGRESSED TO v1" IS WRONG — `.env.example` documents this as a KNOWN CONVENTION, in the
+# scanned file, ending "if you want that to be more than a convention, earn it with a RED first"
+# (grep -n 'earn it with a RED first'). This is that RED, earned in report-only form.
+ACQ_MARKERS_REPORT="${ACQ_MARKERS}|set[- ]in|set[- ]it[- ]in"
+pass2_examined=0; pass2_flagged=0; pass2_names=""
+# ⚠️ IFS=$'\t', NOT IFS='\t' — the latter is a LITERAL backslash and a literal t, so `read` never
+# splits, `flag` is empty, and the flagged count reads 0 no matter what the awk emitted. Measured:
+# it printed "0 flagged" against a real 21, and the DENOMINATOR was still right (241), which is
+# exactly what makes it dangerous — the number that would expose it looked healthy.
+while IFS=$'\t' read -r ln var flag; do
+  [ -n "${ln:-}" ] || continue
+  pass2_examined=$((pass2_examined + 1))
+  if [ "$flag" = FLAG ]; then
+    pass2_flagged=$((pass2_flagged + 1)); pass2_names="${pass2_names} ${var}"
+  fi
+done < <(awk -v mk="$(printf '%s' "$ACQ_MARKERS_REPORT" | tr '[:upper:]' '[:lower:]')" '
+  { line[NR] = $0 }
+  function is_slot(s) { return s ~ /^#[[:space:]]*[A-Z][A-Z0-9_][A-Z0-9_]+=/ }
+  function is_cmt(s)  { return s ~ /^#/ }
+  END {
+    for (i = 1; i <= NR; i++) {
+      if (!is_slot(line[i])) continue
+      v = line[i]; sub(/^#[[:space:]]*/, "", v); sub(/=.*/, "", v)
+      if (v !~ /^[A-Z][A-Z0-9_][A-Z0-9_]+$/) continue
+      w = tolower(line[i])                      # the SLOT LINE ITSELF: `<SET-IN-.env>` lives here
+      for (k = i - 1; k >= 1; k--) {            # (a) own contiguous NON-SLOT comments
+        if (!is_cmt(line[k]) || is_slot(line[k])) break
+        w = w "\n" tolower(line[k])
+      }
+      rs = i                                    # (b) first slot of this maximal run
+      while (rs - 1 >= 1 && is_slot(line[rs - 1])) rs--
+      if (rs != i)
+        for (k = rs - 1; k >= 1; k--) {
+          if (!is_cmt(line[k]) || is_slot(line[k])) break
+          w = w "\n" tolower(line[k])
+        }
+      printf "%d\t%s\t%s\n", i, v, (w ~ mk ? "ok" : "FLAG")
+    }
+  }' "$ENV_FILE")
+
+# THE DENOMINATOR PASS 2 NEVER HAD. Until now the only count printed was PASS 1's, and the success
+# sentence below made PASS 1's claim — so a PASS-2 loop that stopped iterating (a changed slot
+# regex, a grep that matches nothing) was INDISTINGUISHABLE from a clean run.
+log_info "check-env-coverage PASS 2: ${pass2_examined} commented slot(s) examined, ${pass2_flagged} flagged (REPORT-ONLY, B716 stage 1)"
+if [ "$pass2_examined" -lt 200 ]; then
+  log_error "check-env-coverage PASS 2: only ${pass2_examined} slots examined — expected ~241."
+  log_error "  A silent shrink here reads exactly like a clean run. Fix the slot regex, do not lower this floor."
+  rc=1
+fi
+if [ "$pass2_flagged" -gt 0 ]; then
+  log_warn "  no acquisition path stated (report-only — NOT failing the build):${pass2_names}"
+  log_warn "  Stage 2 triages these; some may need a marker, others a wider marker vocabulary."
+fi
+
 echo >&2
 if [ "$rc" -eq 0 ]; then
-  log_info "check-env-coverage: OK — every operator-settable variable the scripts read is documented in .env.example."
+  log_info "check-env-coverage: OK — every variable the scripts read has a SLOT in .env.example (PASS 1),"
+  log_info "  and PASS 2's acquisition-path check ran over ${pass2_examined} slots, flagging ${pass2_flagged} (report-only)."
 else
   log_error "check-env-coverage: .env.example is INCOMPLETE —${missing}"
   log_error "  .env.example is the committed source of truth: a variable only the script knows about"
