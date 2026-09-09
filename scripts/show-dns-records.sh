@@ -117,10 +117,19 @@ done
 if [ "$nrec" -gt 0 ]; then
 cat <<'NOTE'
 
-  Create these as A records in the DNS your GUEST CLUSTER NODES resolve.
-  /etc/hosts on the jump box is NOT enough: the nodes pull images from Harbor and cannot see it.
+  Create these as A records in EVERY DNS that must answer for this name. That is USUALLY TWO,
+  and publishing to only one is the worst failure shape:
 
-  On a libvirt lab box, per network:
+    1. the DNS your GUEST CLUSTER NODES and the Supervisor resolve — they pull images from Harbor
+    2. the DNS THIS JUMP BOX resolves — every `make` target here dials these names too
+
+  Miss (1) and the cluster cannot pull while everything looks fine to you. Miss (2) and it looks
+  broken to you while the cluster is fine. /etc/hosts on the jump box satisfies NEITHER: it cannot
+  help the nodes, and it hides (2) rather than fixing it.
+
+  If this lab's DNS is libvirt dnsmasq (it is NOT, at most sites), repeat this PER NETWORK — the
+  nodes' network AND the jump box's. `virsh -c qemu:///system net-list` lists them; the one whose
+  subnet contains the address above is the nodes'.
     virsh -c qemu:///system net-update <net> add dns-host \
       "<host ip='<IP>'><hostname><HOSTNAME></hostname></host>" --live --config
 NOTE

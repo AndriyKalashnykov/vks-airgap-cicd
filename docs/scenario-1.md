@@ -369,9 +369,12 @@ make show-dns-records DNS_RECORDS_WAIT_SECONDS=900   # waits for the LoadBalance
 **Expect:** a HOSTNAME / IP / SOURCE table with at least one row, then `Create these as A records`.
 If the LoadBalancer has no address yet this waits for it — up to 15 minutes with the value above.
 
-**Now create the A records `make show-dns-records` just printed.** `/etc/hosts` is **not** enough —
-the guest nodes must resolve the name too. **Reinstalling?** The LoadBalancer IP is new, so update
-the record you already have.
+**Now create the A records `make show-dns-records` just printed — in EVERY DNS that must answer
+for the name, which is usually two: the one your guest nodes resolve AND the one this jump box
+resolves.** Publishing to only one is the worst failure shape — miss the nodes and the cluster
+cannot pull images while everything looks fine to you; miss the jump box and `make creds` reports
+`unresolved` while the cluster is fine. `/etc/hosts` satisfies neither.
+**Reinstalling?** The LoadBalancer IP is new, so update the record you already have.
 
 Then confirm it — run this as soon as the record is in; it waits:
 
