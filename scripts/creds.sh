@@ -1140,9 +1140,13 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
   # make install-headlamp". A false claim about the lab plus an actionable-but-wrong remedy, in the
   # same report B544 made honest everywhere else.
   # `&& rc=0 || rc=$?` is an AND-OR list, so it keeps the non-fatality the old `|| true` provided.
+  # ⚠️ CAPTURE STDERR. It was `2>/dev/null`, and rc ALONE CANNOT DISCRIMINATE: a Forbidden and a
+  # NotFound are BOTH rc=1, so the two rendered byte-identically — which is precisely why one
+  # sentence could serve four different faults.
+  _hl_err="$(mktemp)"
   _hl_t="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s \
              -n "$_hl_ns" create token "$_hl_sa" --duration="${HEADLAMP_TOKEN_DURATION:-24h}" \
-             </dev/null 2>/dev/null)" && _hl_rc=0 || _hl_rc=$?
+             </dev/null 2>"$_hl_err")" && _hl_rc=0 || _hl_rc=$?
   # _mask, NOT _lab_secret: that wrapper is defined ~380 lines BELOW this line, so calling it
   # here dies `_lab_secret: command not found`. It only ever fired once headlamp was installed AND
   # a token minted — a path that did not exist until 2026-09-05, which is why it shipped green.
@@ -1214,7 +1218,48 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
     headlamp_tok="<could not ask — my own ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s budget expired>"
   elif [ "${_hl_rc:-0}" = 137 ]; then
     headlamp_tok="<could not ask — the probe was KILLED (rc=137)>"
-  else                     headlamp_tok="<not read — is headlamp installed? make install-headlamp>"; fi
+  elif [ "${_hl_rc:-0}" = 0 ]; then
+    # rc=0 with EMPTY stdout — the B544 shape this file records at :1136. Not a fault we can name.
+    headlamp_tok="<not read — kubectl succeeded but returned no token>"
+  else
+    # ⚠️ NotFound FIRST, and BEFORE the classifier. `classify_kube_failure` has NO NotFound class
+    # (measured: a serviceaccounts-NotFound returns UNKNOWN), and this is the ONE arm where
+    # "make install-headlamp" is a TRUE remedy — it is also the likeliest reason this fires on a
+    # fresh box. Routing it through the classifier would have deleted the only correct advice here.
+    # ⚠️ kube_is_notfound, NOT a substring. `*NotFound*` matches things the API SERVER never said:
+    # os.sh:2276 records, measured with real kubectl, that a dangling `current-context` and any
+    # HTTP 404 body both carry the phrase — and that when this exact shortcut shipped in
+    # 48-istio-preflight.sh it steered a tenant with a stale kubeconfig into helm-installing a
+    # SECOND mesh over the platform team's. check-notfound-discriminator caught my first version.
+    # BOTH tokens: the SA and the namespace each mean "not installed here", and a namespace-NotFound
+    # does not carry the SA's name.
+    if kube_is_notfound "$_hl_err" "$_hl_sa" || kube_is_notfound "$_hl_err" "$_hl_ns"; then
+      headlamp_tok="<not read — headlamp is not installed in '${_hl_ns}': make install-headlamp>"
+    else
+        # ⚠️ `classify_kube_failure` DIRECTLY, in `case` form, NOT `_kube_classify`. That wrapper is
+        # defined 77 lines BELOW this point in a top-level `set -e` block (rc=127 would kill the
+        # whole table), and it speaks SUPERVISOR — headlamp is a GUEST component, and its
+        # UNAUTHORIZED arm prescribes a vCenter SSO bind that locks out PERMANENTLY after 3 tries.
+        # This form is also the one `check-classifier-consumers` recognises, so the site is gated.
+        case "$(classify_kube_failure "$_hl_err" 2>/dev/null || true)" in
+          FORBIDDEN)
+            headlamp_tok="<forbidden — this kubeconfig may not create a token for '${_hl_sa}' in '${_hl_ns}'; ask your platform admin>" ;;
+          UNAUTHORIZED)
+            # NOT the Supervisor, and deliberately NO command: this is the GUEST kubeconfig, and
+            # naming an SSO bind for a credential we did not test could spend a lockout attempt.
+            headlamp_tok="<auth failed — the GUEST kubeconfig was rejected for this namespace>" ;;
+          UNREACHABLE)
+            headlamp_tok="<unreachable — the guest cluster did not answer>" ;;
+          STALE_CA|PLAINTEXT|NO_KUBE_TARGET|KUBECONFIG_UNUSABLE)
+            headlamp_tok="<not read — the guest kubeconfig is unusable for this call>" ;;
+          *)
+            # VERBATIM, not "a reason we do not classify": the operator can act on kubectl's own
+            # sentence, and it is the only thing here that is certainly true.
+            headlamp_tok="<not read — kubectl: $(head -1 "$_hl_err" 2>/dev/null)>" ;;
+        esac
+    fi
+  fi
+  rm -f "$_hl_err"
 else
   headlamp_tok="<not read — no KUBECONFIG>"
 fi
@@ -1226,10 +1271,12 @@ add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress "
 # tenant with no ArgoCD access, and on any cluster with headlamp but no ArgoCD at all. Both
 # adversary rounds flagged it, and it sat two lines above this file's own warning about keying a
 # note on the wrong flag. It is now gated on the token having actually been read.
-case "$headlamp_tok" in
-  '<not read'*) : ;;
-  *) _headlamp_note=1 ;;
-esac
+# ⚠️ KEYED ON A POSITIVE FACT, NOT A STRING PREFIX. This tested `'<not read'*`, and the new arms
+# emit `<forbidden …>`, `<auth failed …>`, `<unreachable …>` — none of which match, so a FORBIDDEN
+# tenant would have been told "if the token screen comes straight back, the token expired — copy a
+# fresh one above" while the cell reads `<forbidden>` and there is nothing to copy. The note is
+# about a token we HANDED OVER, so gate it on having one.
+[ -n "${_hl_t:-}" ] && _headlamp_note=1
 # ── WHY THIS ROW IS NOT READ LIVE FROM THE CLUSTER (B202 F5/D) ──────────────────────────────────
 # NOT because "a printer must not probe" — it demonstrably does: the guest-node SSH row below runs
 # two live kubectl calls (PR #901). Stating that as the reason would be refuted by this very file.
