@@ -726,7 +726,7 @@ harbor-ca-from-cluster: ## Get the lab Harbor's CA from the Supervisor when it i
 # .env, not the environment, not even `make fetch-argocd-ca ARGOCD_SERVER=…` on the command
 # line, GNU make's strongest precedence — that could redirect it. On a box with BOTH a live
 # KinD and a live lab that fetches the KinD ArgoCD's CA over the one the operator asked for.
-# ⚠️ Do NOT 'simplify' by dropping ARGOCD_LB_IP: its writer 09-argocd-address.sh is
+# ⚠️ Do NOT 'simplify' by dropping ARGOCD_LB_IP: ARGOCD_SERVER's writer 09-argocd-address.sh is
 # Supervisor-only and .env.example ships ARGOCD_SERVER commented, so nothing sets it on KinD
 # and the recipe would die with an empty endpoint (measured).
 fetch-argocd-ca: ## Fetch the CA that ISSUED the ArgoCD server's cert → ARGOCD_CA_FILE, and VERIFY it (endpoint: ARGOCD_SERVER, else ARGOCD_LB_IP)

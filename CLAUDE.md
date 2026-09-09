@@ -716,7 +716,8 @@ Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#
   with the CA (`certs.d/<ip>/`), and `state_set`s `HARBOR_URL`(LB IP)+`HARBOR_INSECURE=0`+
   `HARBOR_CA_FILE` to `.env.state` (`HARBOR_INSECURE=1` selects the original plain-HTTP mode).
   `07-install-argocd.sh` exposes ArgoCD on its **own** LB with self-signed TLS (default) and
-  publishes `ARGOCD_LB_IP`. That overlay (loaded last by `load_env` / `-include`) makes the
+  publishes `ARGOCD_LB_IP`. That overlay (sourced by `load_env`, `-include`d by the Makefile;
+  a legacy `.env.kind` still outranks it in BOTH layers — see B570) makes the
   normal flow run against kind unchanged. `kind-down.sh` prunes cloud-provider-kind + `kindccm-*` orphans.
 - **Manifest rendering**: k8s/ YAML (gitea, istio, traefik, tekton, argocd) carry `${VAR}` tokens rendered by
   the configure scripts with a RESTRICTED `envsubst` allowlist (so step-script

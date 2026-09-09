@@ -176,7 +176,8 @@ Endpoint = the Harbor LoadBalancer **IP** (cert SAN = `IP:<lb-ip>`).
 - **`scripts/07-install-argocd.sh`:** secure mode leaves upstream self-signed TLS on 443
   (what real VKS serves); insecure mode patches `server.insecure`. In **both** modes,
   `argocd-server` is exposed as its **own `type: LoadBalancer`** (the KinD analog of the VKS
-  L4 LB), the IP is discovered and published as **`ARGOCD_LB_IP`** to `.env.kind`. ArgoCD is
+  L4 LB), the IP is discovered and published as **`ARGOCD_LB_IP`** to `.env.state` (`state_set`;
+  `.env.kind` is the sink's pre-2026-07-13 name and nothing writes it). ArgoCD is
   **not** fronted by the shared `*.vks.local` ingress — VKS gives it its own LB.
 - **Ingress:** the `argocd` route was removed from `k8s/istio/gateway.yaml`,
   `k8s/traefik/ingress.yaml`, and the `${ARGOCD_HOST}`/`${ARGOCD_NAMESPACE}` allowlist entries

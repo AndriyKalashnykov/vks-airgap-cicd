@@ -783,11 +783,32 @@ load_env() {
   else
     export _VKS_STATE_SOURCED=0
   fi
-  # One release of back-compat: a legacy .env.kind is still read (last, so the new sink wins).
+  # One release of back-compat: a legacy .env.kind is still read. ⚠️ IT IS SOURCED LAST, SO IT WINS
+  # over .env.state — this comment used to say "(last, so the new sink wins)", the exact inverse.
+  # MEASURED with controls: with both present the legacy value is effective even when state_check
+  # PASSED (state_sourced=1). On the ORDINARY path that is intended (Makefile:76-80 states the
+  # mirror; note test-env-precedence.sh pins only the MAKE layer — it never calls load_env, so this
+  # layer is asserted by no test).
+  #
+  # ⚠️ BUT IT IS NOT EXEMPT FROM state_check. .env.kind carries no cluster stamp, so it cannot be
+  # shown to belong to the cluster the operator selected. Sourcing it unconditionally made the
+  # refusal above COSMETIC: measured A/B with a control, a sink stamped for cluster A printed "NOT
+  # sourcing it — ... passwords belong to the other cluster" and then handed over cluster A's
+  # HARBOR_PASSWORD from the legacy file anyway. A control whose refusal is overridden is worse
+  # than no control, because it manufactures confidence.
+  #
+  # ⚠️ GATE ON THE MISMATCH FLAG, NEVER ON _VKS_STATE_SOURCED. That is also 0 when the sink is
+  # merely ABSENT, and refusing there loses the only copy of a generated password (measured).
   if [ -f "$legacy" ]; then
-    log_warn "reading legacy .env.kind — run 'make state-migrate' to move it to $(basename "$state")"
-    # shellcheck disable=SC1090
-    . "$legacy"
+    if [ "${_VKS_STATE_MISMATCH:-0}" = 1 ]; then
+      log_error "state: ALSO not sourcing the legacy .env.kind — it carries no cluster stamp, so it"
+      log_error "  cannot be shown to belong to the cluster you selected, and it would override the"
+      log_error "  refusal above. Run 'make state-migrate', or remove it."
+    else
+      log_warn "reading legacy .env.kind — run 'make state-migrate' to move it to $(basename "$state")"
+      # shellcheck disable=SC1090
+      . "$legacy"
+    fi
   fi
   set +a
 
@@ -1406,13 +1427,20 @@ assert_env_effective() {
 
   log_error "WROTE ${key} to .env, and it did NOT take effect${why:+ (${why})}."
   log_error "  a higher-precedence file already sets ${key}, so the next command still reads that one."
-  local f
+  local f _win_f="" _win_l=""
   for f in "$(state_file 2>/dev/null || printf '%s' "${REPO_ROOT}/.env.state")" "${REPO_ROOT}/.env.kind"; do
     [ -f "$f" ] || continue
     # `|| true`: grep exits 1 when the key is absent, which is the normal case for one of the two.
     local hit; hit="$(grep -nE "^${key}=" "$f" 2>/dev/null | head -1 || true)"
-    [ -n "$hit" ] && log_error "    ${f}:${hit%%:*}  <- this one wins"
+    [ -n "$hit" ] || continue
+    # ⚠️ The loop runs in SOURCING order and load_env sources these under `set -a`, so the LAST
+    # match is the one in effect. This used to print "this one wins" for EVERY match — with both
+    # files holding the key that is two contradictory sentences, in the diagnostic whose entire
+    # job is naming the winner. Defer the verdict until the loop ends.
+    if [ -n "$_win_f" ]; then log_error "    ${_win_f}:${_win_l}  <- also sets it (overridden)"; fi
+    _win_f="$f"; _win_l="${hit%%:*}"
   done
+  if [ -n "$_win_f" ]; then log_error "    ${_win_f}:${_win_l}  <- this one WINS (sourced last)"; fi
   log_error "  remove that line (or fix the writer that put it there) and re-run."
   return 1
 }
