@@ -8999,6 +8999,7 @@ a MARKER-VOCABULARY miss, not a documentation hole — decide per item and say w
 **STAGE 3** — enforce, only once the flagged count is 0, in a commit that touches nothing else.
 Markers are a SEPARATE arc (word-anchoring costs 4; dropping bare `password` alone REDs a
 correctly-documented secret).
+
 ## ⛔ B721 — REFUTED: do NOT delete `02-env.sh`'s auth probe and call `harbor_auth_report`
 
 B715 closed saying the durable fix was to delete the hand-rolled copy. **An idea round refuted that**,
