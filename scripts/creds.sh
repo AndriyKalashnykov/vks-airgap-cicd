@@ -423,6 +423,10 @@ _renew_how() { supervisor_renew_how "$@"; }
 # CHARACTERS in a UTF-8 locale. So any cell holding a multibyte character is padded short and every
 # column to its right shifts left — a visibly broken table in the one report the operator reads.
 # MEASURED: `<not read — token expired>` is 26 chars / 28 bytes, so its row lost 2 columns.
+# ⚠️ SCOPED TO A UTF-8 LOCALE. `${#var}` counts characters under UTF-8 and BYTES under LC_ALL=C, so
+# under a C locale this degrades to exactly the byte padding it replaced -- self-consistent (both
+# sides use `${#}`), never worse, but not exact. Measured: last-column start 123 on every row under
+# UTF-8; 123/125 split under LC_ALL=C.
 # Only the DATA rows need this; the headers and the `---` separators are ASCII by construction.
 _pad() {
   local _n=$(( $1 - ${#2} ))
@@ -572,7 +576,11 @@ else
   # one session, twice by reviewers who then prescribed a fix that would have died rc=127 here); `kube_token_expiry` comes from lib/os.sh, is offline, and answers the one question
   # that decides which of the two sentences is true.
   if [ "$_have_sink" = 1 ]; then
-    _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
+    # ⚠️ REUSE :116's PROBE, do not re-run it. Byte-identical inputs, but each call reads the clock
+    # independently (lib/os.sh's `date -u +%s`), so a token expiring BETWEEN the two reads yielded
+    # `<not read>` + `_argo_pw_expired=1` with NO banner and no explanation anywhere in the report.
+    # One read, one verdict.
+    _ap_exp="$_sup_expiry_probe"
     case "$_ap_exp" in
       # The remedy is per-VALUE, so it aggregates into the Context block rather than into the
       # cell. `_argo_pw_expired` is also the only observable that proves THIS dispatch site ran --
@@ -598,6 +606,10 @@ fi
 if [ -n "${ARGOCD_AUTH_TOKEN:-}" ]; then
   argo_user="(token)"
   argo_pw="<ARGOCD_AUTH_TOKEN from .env — not a password>"
+  # This OVERWRITES whatever the expiry dispatch above decided, so the banner must not go on
+  # advertising `make argocd-password` for a row that already holds a working credential -- and a
+  # tenant cannot run that command at all (it reads a Supervisor secret; RULE ZERO-A0).
+  _argo_pw_expired=0
 else
   argo_user="${ARGOCD_USERNAME:-admin}"
 fi
@@ -763,7 +775,15 @@ else                               _overlay_state=NONE
 fi
 [ "${CREDS_TOKEN:-0}" = "1" ] && printf 'state-overlay: %s\n' "$_overlay_state"
 if [ "${_SUP_DEAD:-0}" = 1 ]; then
-  printf '\n  \u26a0\ufe0f  Supervisor token EXPIRED %s — every <not read> below needs it.\n' "${_SUP_DEAD_AT:-?}"
+  # F5: the old headline said "every <not read> below needs it" and MEASURED to ZERO referents in
+  # a reachable state, while nine unrelated `<not read — …>` variants compete for the reader's eye.
+  # State the fact, do not send them hunting for a marker.
+  printf '\n  \u26a0\ufe0f  Supervisor token EXPIRED %s — values that depend on it could not be read.\n' "${_SUP_DEAD_AT:-?}"
+  # BEFORE the command, never after: it is the reason NOT to run it yet.
+  if [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; then
+    printf '     FIRST: the recorded ingress did not answer either — check the lab is UP before spending\n'
+    printf '     an SSO attempt. Three failures lock the vCenter account PERMANENTLY.\n'
+  fi
   printf '     %s\n' "$(_renew_how)"
   [ "${_argo_pw_expired:-0}" = 1 ] && printf '     then, for the ArgoCD row: make argocd-password\n'
 fi
@@ -807,7 +827,8 @@ case "$_prov" in
   # make it VARY, not to delete it. Unstamped (the normal real-lab state) is neutral; stamped-and-
   # contradicted names BOTH servers, so it is a fact the reader can check rather than a mood.
   STORED)     if [ -z "$_stamp" ]; then
-                printf '    values below : your .env + install-time discovery. Only Reachable is live.\n'
+                printf '    values below : your .env + install-time discovery. Reachable is probed live,\n'
+                printf '                   and the headlamp token is MINTED fresh on every run.\n'
                 # "BELOW" was unscoped: `Reachable` is a column on the SERVICES table only. The
                 # `Lab access` table has four columns and none of them is Reachable, and its
                 # vCenter/SSO rows are deliberately NEVER probed (SSO locks out after 3 binds). A
@@ -825,7 +846,8 @@ case "$_prov" in
                 # this lab `make env-validate` returns rc=0 with "Harbor credentials accepted
                 # (HTTP 412)". It also cited an internal backlog id at an operator who has only this
                 # repo. Both gone. What it re-checks is stated once, plainly.
-                printf '                   re-check: make env-validate  (Harbor + KUBECONFIG only)\n'
+                printf '                   re-check: make env-validate  (Harbor login + KUBECONFIG only —\n'
+                printf '                   it cannot tell whether a robot credential can PUSH)\n'
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
                 printf '                   passwords below belong to that one, not to the cluster you are talking to.\n'
@@ -1434,9 +1456,6 @@ _kube_classify() {
       # ⚠️ AND IT REQUIRES _ing_probed. _ing_live starts at 1 and is only ever downgraded, so
       # "never probed" (no INGRESS_LB_IP, or CREDS_NO_PROBE=1) read as "answered" — suppressing the
       # caveat in exactly the powered-off case it exists for.
-      if [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; then
-        _kube_state="${_kube_state} NOTE: the recorded ingress did not answer during this run either — check the lab is UP before spending an SSO attempt."
-      fi
       return 0 ;;
   esac
   case "$_rc" in
@@ -2388,11 +2407,11 @@ printf '\n  Lab access — from your .env. <not set> = this report lacks it, not
 # `_sup_timeout` returned 119 WITHOUT DIALLING. Paired with `<could not read node addresses>` it told
 # the operator the live cluster HAD been asked and had no readable addresses (a lab/RBAC fact) when
 # nothing had been asked at all. Say which of the two happened.
-if [ "${_SUP_DEAD:-0}" = 1 ]; then
-  printf '    guest node SSH: NOT probed.\n'
-else
-  printf '    guest node SSH: read live.\n'
-fi
+case "${_ssh_ep:-}" in
+  '<not probed>'|'') printf '    guest node SSH: NOT probed.\n' ;;
+  '<not read>')      printf '    guest node SSH: NOT probed.\n' ;;
+  *)                 printf '    guest node SSH: read live.\n' ;;
+esac
 printf '\n  %-*s  %-*s  %-*s  %s\n' "$_lw1" "Target" "$_lw2" "Endpoint" "$_lw3" "Username" "Password"
 printf '  %-*s  %-*s  %-*s  %s\n' \
   "$_lw1" "$(printf '%*s' "$_lw1" '' | tr ' ' '-')" \

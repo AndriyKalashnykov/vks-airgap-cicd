@@ -1594,7 +1594,8 @@ while IFS='|' read -r _sso_lbl _sso_bin _sso_sink _sso_mE _sso_mV _sso_mU; do
       *"$_sso_mark"*) ;;
       *) bad "SSO gate: ${_sso_lbl}/${_sso_v} never reached its arm (no '${_sso_mark}') -- the cell
       is VACUOUS and its count says nothing. Suspect the kubectl stub, the Supervisor kubeconfig,
-      the sink stamp, or base64 -- not the code under test."
+      the sink stamp, or base64 -- OR, since 2026-09-09, the code under test itself: these markers
+      now pin the BANNER and the ArgoCD dispatch arm, so a reworded banner lands here too."
          continue ;;
     esac
     _sso_got="$(printf '%s' "$_sso_out" | grep -o 'make vks-login' | wc -l | tr -d ' ')"
