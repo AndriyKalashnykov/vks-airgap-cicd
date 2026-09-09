@@ -1048,107 +1048,78 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-08 — an air-gap breach closed, and FOUR of my designs refuted before they shipped
+## ▶️ HANDOFF 2026-09-09 — a privilege downgrade, a live `install-all` break, and THREE of my own probes were broken
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### 🔴 DISTRUST FIRST
+### 🔴 DISTRUST FIRST — and this session's theme is MY INSTRUMENTS, not the product
 
-- **THERE ARE TWO `grep`s ON THIS BOX, and they disagree.** The interactive shell resolves `grep` to
-  **ugrep 7.8.4**, which honours `\t` in an ERE; a script gets **GNU grep 3.11**, which does NOT —
-  it matches a literal `t`. Measured on the same file with the same pattern: **ugrep 4 matches, GNU
-  grep 0**. I verified a new gate's pattern at the prompt, watched it find 4, and shipped it — and
-  in the test it found 0 and reported `ok — no recipe re-pins` over a Makefile with the defect
-  deliberately reinstated. **Verify any pattern destined for a script with `bash -c`, never at the
-  prompt**, and never write `\t` in a portable ERE.
-- **`static-check` does NOT run on a PR** (`ci.yml:199` gates it on `schedule || workflow_dispatch`),
-  and **nothing invokes `static-check-pr`** although four comments say a PR runs it — filed as
-  **B571**. The per-PR job is `static-check-fast`, which contains **neither `lint` nor
-  `test-scripts-fast`**. So a green PR check is not evidence for the change in it. Standing rule G.4
-  (`docs/matrix-standing-rules.md:375`) exists for this, and **skipping it reddened `main` twice
-  today** — 3× SC2016, then a 21/21 → 12/9 test regression.
-- **Three of my own RED-proofs were vacuous, each caught only by checking the instrument.** A `sed`
-  mutation that silently did not match (reported 21/21 as proof); a probe using
-  `printf "%s" "$(...)"`, where `set -e` does not fire, so it passed 15/15 with the fix removed; and
-  a guard whose grep was dead (the ugrep split above). **Verify the mutation LANDED, then read WHICH
-  case failed.** A non-zero exit is not a proof.
-- **An adversary's prescribed FIX is a separate claim from the bug it found**, and two were wrong
-  this session: the B569 round prescribed RED-proving via `make -n` diffing (impossible — `make -n`
-  prints recipe TEXT and the pin is an `export`, so it is byte-identical by design in BOTH the fixed
-  and broken tree), and the B564 round's `cmd && exit 0` sketch worried me under `bash -e` until I
-  measured it safe. Both findings were right; both prescriptions needed checking.
+**THREE separate probes I wrote returned confident wrong answers, all the same shape: an instrument
+that cannot see most of its corpus.** Assume the next one is broken too.
 
-### Merged today — **38 PRs** (#1152–#1189), the ones that decide what comes next
-
-| PR | what |
+| probe | what it did |
 |---|---|
-| **#1178** | **the air-gap breach itself**: Tekton injects `place-scripts` from a hardcoded `-shell-image` FLAG STRING, so `cgr.dev/chainguard/busybox` was pulled **from the public internet on every TaskRun**. Single-sourced `MIRROR_REGISTRY_HOSTS`; added the `source` line without which the rewrite corrupts every path (`gcr.io/x/y` → `gcr.ioH/xH/y`). |
-| **#1179** | **B568** — the complementary gate: which host-shaped refs are **NOT** covered? Runs in `10-mirror-pull.sh`, not `static-check` (`bundle/` is gitignored, so CI would scan an empty dir and pass vacuously). Its own round then found it **fail-open** (`chmod 000` → `rc=0, "OK"`) and a **truncation forging an exemption** (`EU.gcr.io/…` reported as `gcr.io`). Both fixed; suite 15 → 21. |
-| **#1180 · #1182** | B564's stated mechanism measured FALSE; four rounds' verdicts recorded; **B570/B571/B572** filed. |
-| **#1181** | **B569** — `make e2e-kind INGRESS_CONTROLLER=traefik` silently ran istio. A goal-list assignment is a sub-make command-line variable, which outranks the caller's own. **Shipped by me in #1170**, 13 lines below a comment condemning that exact form. |
-| **#1183** | **B564 Stage 1** — the jobs API lags the `needs` context (measured 5.2–7.3s, 4 events); re-read once on refuse. Safe because **monotone**: it can convert a refuse into a pass and never a pass into a refuse. |
+| `grep -oE '^## B[0-9]+'` to pick the next backlog id | matched only the TRAILING-emoji heading form, missed all 68 LEADING-emoji rows -> undercounted the max by **157** -> I reused **two live ids** (B557, B560) |
+| a "dangling citation" check | looked only for `## <emoji> B<n> —` headings; this file ALSO carries `\| **B<n>** \|` index rows, so it called **14 real rows dangling** |
+| `ps`/`grep -c` style helper in a test | `grep -c` prints `0` **and exits 1**, so `\|\| echo 0` fired too and the helper returned `"0\n0"` — every comparison failed while printing the right number |
 
-### The rounds are the story: 4 dispatched, 4 substantive, 2 designs killed
+**`static-check-fast` DOES NOT RUN `lint`.** SC2016 sat in a test I wrote for an hour under a green
+PR check; it would have reddened only the WEEKLY run. Run `make lint` yourself before pushing.
+And **a `# shellcheck disable` scopes to the NEXT COMMAND, not the file** — mine silently did nothing.
 
-- **B561 REFUTED** — `state_check` discriminates in **1 of 3 reachable cells**, and the two it misses
-  are the DEFAULT posture (`.env.example` ships `KUBECONFIG` commented; on a real lab
-  `30-vks-login.sh` writes it **into `.env.state` itself**, so the selector lives inside the file
-  being judged). All three permissive arms are deliberate and adversary-forced. **Ship a PRINTER
-  keyed on the FILE, not a gate keyed on the stamp.**
-- **The verdict-token consumer REFUTED** — it could never fire (all three SKIP arms unreachable at
-  its only call site). But it surfaced B569, which was real.
-- ⛔ **The one design to never build**: cross-checking the `needs` context in `ci-pass`. Replay the
-  founding incident plus the measured lag and it goes **green over a failed security scan**.
+**AN rc-ONLY ASSERTION IS OFTEN VACUOUS.** `harbor_auth_report` returned **0 at 412 both before and
+after** the fix, so `check "412 -> 0"` passes identically on the broken and fixed tree — and the
+file's existing cases are written exactly that way. Assert the VERDICT STRING and the CHAIN.
+Two more of mine were vacuous until fixed: a `NOT 'inconclusive'` case whose fixture pulled
+successfully, and three `NO admin published` assertions that stay green because the script dies
+earlier (labelled in-file rather than deleted).
 
-### The second half of the day: four more rounds, and a THREE-WEEK-RED gate nobody had noticed
+**MY "OFFLINE" TEST MADE LIVE API CALLS.** It pinned `VKS_SUPERVISOR_KUBECONFIG` and missed the other
+resolver candidates; `${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}/kubeconfig` EXISTS here and
+points at the real Supervisor. Pin **every** candidate.
 
-- **#1185 · B563** — a running-image provenance gate for the namespaces we build in. Its round found
-  the predicate FALSE-PASSED a **lookalike registry** (`oldharbor.h.local` vs `h.local`) — and
-  **96-verify-gateway-image.sh, already shipped, had the identical bug**. Both fixed by calling
-  `registry_hostport()`, the repo's existing "ONE HOST PARSER"; I had written a third copy. The same
-  fix closed a mirror-image false RED on the `https://`, trailing-slash and `:443` spellings of
-  `HARBOR_URL`. 96 now sources the shared lib and its 16 cases caught a real loss on the first try.
-- **#1186 · B570 REFUTED** — including **two false evidence sentences I had written into the row**:
-  `kind-down.sh` never touches `.env.kind` (the variable is a legacy misnomer for `.env.state`), and
-  a printer already ships at `os.sh:788`. The real defect is **ordering** — measured, the DEAD sink
-  outranks the LIVE one — which no printer can touch.
-- **#1187 · B571 — all five options refuted.** The dispatch gate's rationale ("the ONLY thing that
-  installs the six app toolchains") **died 4h22m after it was written**: `4d15c09` 11:33,
-  `f8c38dc` 15:55 removed those toolchains, nobody re-opened it. Verified from the two timestamps.
-- **#1188 · B573** — **the weekly `schedule` run had been RED since 2026-08-24**, and it is the ONLY
-  place `lint`, the unit suite and `sec` run in CI. Cause, diagnosed by dispatching a fresh run
-  because the logs had aged out: a VKS **data-values** file (no `apiVersion`, no `kind`) was being
-  fed to kubeconform. Fixed with a **hard-fail default** — a kindless file is a defect unless
-  allowlisted with a reason, because "skip files without a kind" would silently stop validating a
-  manifest whose `kind:` was mis-indented.
-- **#1189 · G.4 did not mirror CI**, and that is why nobody saw it: `make validate` reports **0
-  errors** while `KUBECONFORM_REQUIRE_SCHEMAS=1 make validate` — what CI runs — reproduces the
-  failure. The rule now carries the variable, in both of its homes.
+### Merged: #1219, #1220
 
-### NOT done — next units
+- **A PRIVILEGE DOWNGRADE.** `is_placeholder ''` is TRUE, the sole robot guard sat INSIDE
+  `if ! is_placeholder`, so robot username + empty password published `HARBOR_USERNAME=admin`. The
+  file had already been fixed once for a sibling bypass *within* that block; nobody questioned the
+  block.
+- **HTTP 412 IS AUTHENTICATED**, measured with three controls that **all return 401** — a wrong
+  robot credential, a nonexistent robot, and an unauthenticated request — plus goharbor v2.15.2
+  source. The same unhandled string was giving OPPOSITE
+  wrong answers: exit 0 in `env-validate`, and **a hard stop of `install-all` at prerequisite 7**
+  (`ensure_skip_if_credential_works`'s `unchecked:no*` arm does not match `unchecked:the probe did
+  not complete`). `lib/harbor.sh`'s "a robot gets 403" comment was measurably false.
+- **`make creds`**: a discarded cause (the report HELD `NOT ATTEMPTED: token EXPIRED` and printed
+  `<could not read node addresses>`), `"read live"` printed when nothing was probed, three unscoped
+  claims, and a table with four credential columns and **no legend**.
+- **`vks-trust-probe`**: a DNS fault was classified as a TRUST problem; a tenant RBAC denial was
+  reported as a timing problem; and fixing that armed a footgun (`PROBE_NS` pointed `_cleanup` at a
+  namespace the operator owns).
 
-- **B570** (`.env.kind` bypasses `state_check` at BOTH layers — measured with no `.env.state` at all:
-  `state_sourced=0` and the KinD values won anyway). Needs an idea round. **Do not fold into B561.**
-- **B571** (`static-check-pr` invoked by nothing) and **B572** (~5 uninstrumented rc=0 skip arms).
-- **B561's printer** and **B564 Stage 2** — both scoped, both explicitly gated on evidence that has
-  not arrived (Stage 2 only if the lag recurs; on current incidence you would be building against
-  one day's GitHub weather).
-- Untouched and open, in rough order of bite: **B484** (a fail-open air-gap
-  check where Forbidden reads as absent), **B498** (Kaniko is ARCHIVED and the maintained fork
-  publishes no image), **B480** (the two Istio install paths silently ADOPT each other's objects),
-  **B565**, **B523**.
-  ⚠️ **B563 was listed here and is CLOSED** — this section's own PR table two blocks up says #1185
-  shipped it, and the row reads `✅ closed 2026-09-08`. A handoff that contradicts both itself and
-  the backlog is the stale-status class this file warns about; corrected 2026-09-09. Verify a row
-  before briefing from it — the status is a CLAIM.
-  ⚠️ B532 and B536 are **SHIPPED**, not pending — I nearly listed them here off memory; the row
-  headings say so.
+### NOT done — next units, in order
+
+1. **B716** — the round REFUTED my prescription three ways (34 of 57 REDs are group-documented; my
+   RED-proof target `VKS_PASSWORD` is itself documented; "it regressed" is wrong —
+   `.env.example:2005-2008` documents it as a known convention). It needs the **staged rollout** the
+   row specifies: report-only + a denominator, then triage ~21, then enforce. **PASS 2 has no
+   denominator at all** — that is the cheapest real improvement.
+2. **The FIVE homes** of the Harbor auth predicate. Deleting `02-env.sh:520-528`'s hand-rolled copy
+   in favour of `harbor_auth_report` is the durable fix; it changes what `env-validate` prints.
+3. **B719** — 30 of 252 cited `B<nnn>` ids resolve to no row; some legitimately cross-repo.
+4. Untouched and open: **B484**, **B498**, **B480**, **B565**, **B523**.
+
+⚠️ **B563 is CLOSED** — the previous handoff listed it as open while its own PR table said #1185
+shipped it. Verify a row before briefing from it; the status is a CLAIM.
 
 ### Lab
 
-Not touched this session. The Supervisor token is still expired, so Supervisor-only targets need
-`make vks-login` first — ⚠️ vCenter SSO locks out **permanently after 3 failed attempts**; never guess.
+Up and serving (all 9 `make creds` rows HTTP 200, all 6 apps `/healthz` 200; ingress LB
+`192.168.101.134`). **The Supervisor token is EXPIRED** (2026-09-09T15:53Z), so Supervisor-only
+targets need `VKS_AUTH_METHOD=vcf make vks-login` first — ⚠️ vCenter SSO locks out **permanently
+after 3 failed attempts**; never guess. Harbor has **no** lockout, so a wrong-password probe there is
+safe and is how the 412-vs-401 split was settled.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
