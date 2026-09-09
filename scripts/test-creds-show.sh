@@ -29,7 +29,34 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 # Absolute repo root, captured AFTER the cd above — render_with_env needs a path that does not
 # depend on the caller's cwd (see its own note).
 _CREDS_REPO="$(pwd)"
-export REPO_ROOT="$PWD"
+# ⚠️ A THROWAWAY ROOT, NOT THE REAL ONE. This suite's verdict used to be a function of BOX STATE:
+# measured on one box, same commit, `secrets/supervisor.kubeconfig` present vs absent changed the
+# result, and a stray `.env.kind` flipped 36 assertions (95 ok -> 59 ok / 5 FAIL). Neither file is
+# tracked, so CI and every worktree see a different suite from the maintainer.
+#
+# ⚠️ IT IS THE GLOBAL EXPORT, NOT `render()`. creds.sh is invoked from TEN sites here; five already
+# take a throwaway root and five used the real one — and the two cases that actually failed are
+# DIRECT invocations that never call render(). Patching render() would have been 1-of-5: the same
+# partial-fix shape this file records at the B548 case below, which neutralised the resolver's LAST
+# candidate and left an EARLIER one.
+#
+# ⚠️ apps/ IS COPIED ON PURPOSE. Without it `app_names` fails, creds.sh takes its "app registry
+# unreadable" warn path with stderr discarded, and the report silently loses SIX app rows while this
+# suite still reports 95 ok. That vacuity is PRE-EXISTING (all five older fixtures omit apps/ too)
+# and is its own row — copying it here just stops this change from widening it.
+#
+# ⚠️ THE OLD HEADER SAID THIS "changes what ~100 cases read — a separate change, not a comment."
+# MEASURED: zero cases break, and creds.sh's output is byte-identical. The number was never taken.
+_CREDS_SANDBOX="$(mktemp -d)"
+cp "$PWD/.env.example" "$_CREDS_SANDBOX/.env.example"
+cp -a "$PWD/apps" "$_CREDS_SANDBOX/apps"
+export REPO_ROOT="$_CREDS_SANDBOX"
+
+# ⚠️ AND PIN RESOLVER CANDIDATE #1. A throwaway root closes candidate #2
+# (${REPO_ROOT}/secrets/supervisor.kubeconfig) but NOT #1 — measured: with the root sandboxed and a
+# real file reachable via VKS_SUPERVISOR_KUBECONFIG the suite still went 94 ok / 1 FAIL. The suite
+# already pins #3 (ARGOCD_KUBECONFIG) and #4 (the lab slot); this completes all four.
+export VKS_SUPERVISOR_KUBECONFIG="/nonexistent/test-creds-show-sandbox.supervisor"
 
 # ⚠️ PIN THE SIBLING LAB SLOT FOR EVERY FIXTURE, not just the two that override REPO_ROOT.
 # `supervisor_kubeconfig_candidates()`'s last slot is `${VKS_LAB_STATE_DIR:-$HOME/.local/state/
@@ -78,7 +105,7 @@ SINK="$VKS_STATE_FILE"
 # shellcheck disable=SC2329  # invoked by the EXIT trap below
 # Also removes the hostile-stdin fixture. A SECOND `trap ... EXIT` would REPLACE this one
 # rather than run alongside it, so everything that needs cleaning goes here.
-restore() { rm -f "$SINK" "${_kc_hostile:-}"; }
+restore() { rm -f "$SINK" "${_kc_hostile:-}"; rm -rf "${_CREDS_SANDBOX:-}"; }
 trap restore EXIT
 
 # SKIP_DOTENV=1 IS LOAD-BEARING. Without it `load_env` sources the operator's real ./.env and
