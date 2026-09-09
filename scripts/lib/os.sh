@@ -2348,7 +2348,10 @@ supervisor_renew_how() {
     [ "${1:-}" = --no-command ] && printf ' This report cannot tell you which fix applies, and guessing costs one of those three attempts.'
     return 0
   fi
-  printf 'If you minted this kubeconfig here (scenario-1): VKS_AUTH_METHOD=vcf make vks-login — the AUTH_METHOD is required because Step 6 leaves .env on kubeconfig, so a bare make vks-login renews the GUEST kubeconfig instead (docs/scenario-1.md, "3. Log in to the Supervisor"). If it was HANDED to you (scenario-2 tenant): nothing here renews it — ask whoever owns the lab.'
+  # The VKS_AUTH_METHOD prefix is load-bearing and stays: Step 6 leaves .env on `kubeconfig`, so a
+  # BARE `make vks-login` targets the GUEST cluster and renews nothing here. That WHY belongs in this
+  # comment, not in the operator's terminal — it was 370 characters on one line, printed twice.
+  printf 'renew: VKS_AUTH_METHOD=vcf make vks-login  (the prefix is required). Not yours to renew? Ask the lab owner.'
 }
 
 # ── jwt_exp_seconds <jwt> — the `exp` claim in SECONDS, or EMPTY. Never guesses. ─────────────────

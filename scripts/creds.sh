@@ -418,6 +418,22 @@ if [ "$_have_sink" = 1 ] && [ "${_VKS_STATE_SOURCED-1}" = "0" ]; then _sink_refu
 # two DISAGREEING on the undecidable arm, and the "locks out PERMANENTLY" clause missing from one).
 _renew_how() { supervisor_renew_how "$@"; }
 
+# ── _pad <width> <cell> — pad to a COLUMN width, not a BYTE count ────────────────────────────────
+# printf's `%-*s` pads by BYTES. The column widths above it are computed with `${#c}`, which counts
+# CHARACTERS in a UTF-8 locale. So any cell holding a multibyte character is padded short and every
+# column to its right shifts left — a visibly broken table in the one report the operator reads.
+# MEASURED: `<not read — token expired>` is 26 chars / 28 bytes, so its row lost 2 columns.
+# ⚠️ SCOPED TO A UTF-8 LOCALE. `${#var}` counts characters under UTF-8 and BYTES under LC_ALL=C, so
+# under a C locale this degrades to exactly the byte padding it replaced -- self-consistent (both
+# sides use `${#}`), never worse, but not exact. Measured: last-column start 123 on every row under
+# UTF-8; 123/125 split under LC_ALL=C.
+# Only the DATA rows need this; the headers and the `---` separators are ASCII by construction.
+_pad() {
+  local _n=$(( $1 - ${#2} ))
+  [ "$_n" -lt 0 ] && _n=0
+  printf '%s%*s' "$2" "$_n" ''
+}
+
 # newline-joined -> space-joined, without `tr` (photon:5.0 has none). The consumer is the
 # "none is <cluster>-ssh-password: <LIST>" message; an empty LIST there names no options at all.
 # ⚠️ KEEPS THE TRAILING SPACE. The format it feeds is `...: %s— set VKS_CLUSTER_NAME...`, so the
@@ -560,9 +576,16 @@ else
   # one session, twice by reviewers who then prescribed a fix that would have died rc=127 here); `kube_token_expiry` comes from lib/os.sh, is offline, and answers the one question
   # that decides which of the two sentences is true.
   if [ "$_have_sink" = 1 ]; then
-    _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
+    # ⚠️ REUSE :116's PROBE, do not re-run it. Byte-identical inputs, but each call reads the clock
+    # independently (lib/os.sh's `date -u +%s`), so a token expiring BETWEEN the two reads yielded
+    # `<not read>` + `_argo_pw_expired=1` with NO banner and no explanation anywhere in the report.
+    # One read, one verdict.
+    _ap_exp="$_sup_expiry_probe"
     case "$_ap_exp" in
-      EXPIRED*) argo_pw="<not read — Supervisor token EXPIRED ${_ap_exp#EXPIRED }; renew that credential first, then: make argocd-password>" ;;
+      # The remedy is per-VALUE, so it aggregates into the Context block rather than into the
+      # cell. `_argo_pw_expired` is also the only observable that proves THIS dispatch site ran --
+      # test-creds-show.sh's site2 row exists to reach it, and every cell now renders identically.
+      EXPIRED*) argo_pw="<not read>"; _argo_pw_expired=1 ;;
       # A LIVE token that the Supervisor rejects is rotated/revoked, not expired — and waiting
       # cannot fix that, so do not send the reader into `argocd-password`'s wait.
       VALID*)   argo_pw="<not read — the Supervisor token is still valid (${_ap_exp#VALID }); if it is being REJECTED the credential was rotated — ask whoever owns the lab>" ;;
@@ -583,6 +606,10 @@ fi
 if [ -n "${ARGOCD_AUTH_TOKEN:-}" ]; then
   argo_user="(token)"
   argo_pw="<ARGOCD_AUTH_TOKEN from .env — not a password>"
+  # This OVERWRITES whatever the expiry dispatch above decided, so the banner must not go on
+  # advertising `make argocd-password` for a row that already holds a working credential -- and a
+  # tenant cannot run that command at all (it reads a Supervisor secret; RULE ZERO-A0).
+  _argo_pw_expired=0
 else
   argo_user="${ARGOCD_USERNAME:-admin}"
 fi
@@ -747,6 +774,19 @@ elif [ "$_have_sink"    = 1 ]; then _overlay_state=SOURCED
 else                               _overlay_state=NONE
 fi
 [ "${CREDS_TOKEN:-0}" = "1" ] && printf 'state-overlay: %s\n' "$_overlay_state"
+if [ "${_SUP_DEAD:-0}" = 1 ]; then
+  # F5: the old headline said "every <not read> below needs it" and MEASURED to ZERO referents in
+  # a reachable state, while nine unrelated `<not read — …>` variants compete for the reader's eye.
+  # State the fact, do not send them hunting for a marker.
+  printf '\n  \u26a0\ufe0f  Supervisor token EXPIRED %s — values that depend on it could not be read.\n' "${_SUP_DEAD_AT:-?}"
+  # BEFORE the command, never after: it is the reason NOT to run it yet.
+  if [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; then
+    printf '     FIRST: the recorded ingress did not answer either — check the lab is UP before spending\n'
+    printf '     an SSO attempt. Three failures lock the vCenter account PERMANENTLY.\n'
+  fi
+  printf '     %s\n' "$(_renew_how)"
+  [ "${_argo_pw_expired:-0}" = 1 ] && printf '     then, for the ArgoCD row: make argocd-password\n'
+fi
 printf '\n  Context\n'
 case "$_prov" in
   DISCOVERED) printf '    values below : read from the cluster you are talking to now\n' ;;
@@ -787,25 +827,27 @@ case "$_prov" in
   # make it VARY, not to delete it. Unstamped (the normal real-lab state) is neutral; stamped-and-
   # contradicted names BOTH servers, so it is a fact the reader can check rather than a mood.
   STORED)     if [ -z "$_stamp" ]; then
-                printf '    values below : your .env, plus values discovered at install time. Nothing here records\n'
-                printf '                   WHICH cluster they came from, which is NORMAL on a real lab and does not\n'
+                printf '    values below : your .env + install-time discovery. Reachable is probed live,\n'
+                printf '                   and the headlamp token is MINTED fresh on every run.\n'
                 # "BELOW" was unscoped: `Reachable` is a column on the SERVICES table only. The
                 # `Lab access` table has four columns and none of them is Reachable, and its
                 # vCenter/SSO rows are deliberately NEVER probed (SSO locks out after 3 binds). A
                 # reader scanning down for a verdict on those rows finds none and reads the absence
                 # as "nothing wrong with that one".
-                printf '                   BY ITSELF mean they are stale. The Reachable column on the SERVICES table\n'
-                printf '                   is the live answer for THOSE rows, and a STORED address it reports as\n'
-                printf '                   silent may indeed be old. The Lab access rows are NOT probed.\n'
+                printf '                   Nothing records which cluster they came from — normal, but unverified here.\n'
                 # ⚠️ SCOPED, because the unqualified word was FALSE. MEASURED: `env_validate`
                 # (02-env.sh) has ZERO references to `supervisor_kubeconfig` and ZERO to
                 # ARGOCD/VCENTER/VCF_CLI/VKS_PASSWORD, so it cannot re-check ANY of the four
                 # `Lab access` rows below -- including the credential this report may have just
                 # declared dead. Makefile:367's help was already accurate and narrow; this line is
                 # moved to it rather than the reverse. And it CANNOT judge a robot at all: B715.
-                printf '                   To re-check Harbor + KUBECONFIG: make env-validate\n'
-                printf '                   (it does NOT re-check the Lab access rows below, and it\n'
-                printf '                    cannot judge a robot$ Harbor credential — see B715.)\n'
+                # ⚠️ THE OLD TEXT HERE SAID env-validate "cannot judge a robot$ credential — see B715".
+                # It shipped, and then B715's fix made it FALSE: 412 now maps to `accepted`, and on
+                # this lab `make env-validate` returns rc=0 with "Harbor credentials accepted
+                # (HTTP 412)". It also cited an internal backlog id at an operator who has only this
+                # repo. Both gone. What it re-checks is stated once, plainly.
+                printf '                   re-check: make env-validate  (Harbor login + KUBECONFIG only —\n'
+                printf '                   it cannot tell whether a robot credential can PUSH)\n'
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
                 printf '                   passwords below belong to that one, not to the cluster you are talking to.\n'
@@ -844,6 +886,9 @@ printf '    flow         : %s\n' "$_flow"
 # To revisit: give it a real discriminator (does the server match VKS_STATE_SERVER? does the context
 # resolve a Cluster CRD?) and label it only when the answer is known.
 printf '    cluster      : %s\n' "$_cluster"
+# The Supervisor's token gates FIVE values below. Say so once, here, with the one remedy -- rather
+# than repeating cause + recipe on each row that lost a value (measured: 264 chars, printed twice).
+# `_renew_how` is the single source of the recipe; do not hand-write it.
 
 echo
 echo "Access the UIs:"
@@ -1338,7 +1383,9 @@ _rejected_why() {
       # about single-sourcing the sentence, not about evading a blind spot that no longer exists.)
       printf 'the token has NOT expired (valid until %s), so the Supervisor rejected a LIVE token — this is a ROTATED or REVOKED credential, not an expiry. Re-authenticating will NOT help. %s' "${_e#VALID }" "$(_renew_how --ask-only)" ;;
     *)
-      printf 'the Supervisor REJECTED this kubeconfig, and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this is NOT necessarily expiry — it may be a rotated or revoked credential. Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. %s' "$(_renew_how --no-command)" ;;
+      # WHY the expiry is unreadable (a client-cert kubeconfig carries none; an ambiguous one is
+      # refused rather than guessed) is mechanism, and lives here rather than in the operator's line.
+      printf 'the Supervisor REJECTED this kubeconfig. Expiry is unreadable, so this may be a ROTATED or REVOKED credential rather than an expired one. %s' "$(_renew_how --no-command)" ;;
   esac
 }
 
@@ -1387,8 +1434,9 @@ _kube_classify() {
   # prescribing a bind for a state we cannot decide; this state IS decided.
   case "$_rc" in
     119)
-      _kube_tok="<not read — Supervisor token EXPIRED ${_SUP_DEAD_AT:-?}>"
-      _kube_state="${_p} — NOT ATTEMPTED: the Supervisor token EXPIRED at ${_SUP_DEAD_AT:-?}, so this call could not have succeeded and no time was spent on it. $(_renew_how)"
+      _kube_tok="<not read>"
+      # The renew recipe is printed ONCE, in the Context block, not on every row it affects.
+      _kube_state="${_p} — Supervisor token expired"
       # ⚠️ AND SAY WHETHER THE REMEDY CAN EVEN RUN. MEASURED 2026-09-09, lab powered off: every
       # sentence above was TRUE and the one action offered was a DEAD END — `vks-login` dials a
       # vCenter that neither resolves nor answers. A round graded that HIGH, and the reason it
@@ -1408,9 +1456,6 @@ _kube_classify() {
       # ⚠️ AND IT REQUIRES _ing_probed. _ing_live starts at 1 and is only ever downgraded, so
       # "never probed" (no INGRESS_LB_IP, or CREDS_NO_PROBE=1) read as "answered" — suppressing the
       # caveat in exactly the powered-off case it exists for.
-      if [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; then
-        _kube_state="${_kube_state} NOTE: the recorded ingress did not answer during this run either — check the lab is UP before spending an SSO attempt."
-      fi
       return 0 ;;
   esac
   case "$_rc" in
@@ -1520,7 +1565,7 @@ if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
           -l appplatform.vmware.com/serviceId=harbor -o name 2>"$_h_err")" && _h_rc=0 || _h_rc=$?
       _h_ns="${_h_nsraw%%$'\n'*}"; _h_ns="${_h_ns#namespace/}"
       if [ "$_h_rc" -ne 0 ]; then
-        _kube_classify "$_h_err" "could not ask the Supervisor for the Harbor service namespace" "$_h_rc"
+        _kube_classify "$_h_err" "could not ask" "$_h_rc"
         _h_admin_pw="$_kube_tok"; _h_admin_why="$_kube_state"
       elif [ -z "$_h_ns" ]; then
         _h_admin_pw="<no harbor ns>"
@@ -1697,7 +1742,8 @@ while IFS=$'\t' read -r c1 c2 c3 c4 c5; do
   # summary line carries ONLY the service name -- no username, no password, no reachability.
   # It also left the --raw nested-sentinel SECURITY assertion permanently vacuous (no row => nothing
   # to assert on: a red converted into a green that can never fire) and re-opened B517.
-  printf '  %-*s  %-*s  %-*s  %-*s  %s\n' "$w1" "$c1" "$w2" "$c2" "$w3" "$c3" "$w4" "$c4" "$c5"
+  printf '  %s  %s  %s  %s  %s\n' \
+    "$(_pad "$w1" "$c1")" "$(_pad "$w2" "$c2")" "$(_pad "$w3" "$c3")" "$(_pad "$w4" "$c4")" "$c5"
   case "$c2" in
     '<needs ingress>') _un_ing="${_un_ing:-}${_un_ing:+, }${c1}" ;;
     '<not set>'|'')    _un_oth="${_un_oth:-}${_un_oth:+, }${c1}" ;;
@@ -1817,13 +1863,15 @@ fi
 # "REFUSES" unconditionally is false in the healthy state scenario-1 Step 9 produces — the operator
 # runs it, gets rc=0 and two INFO lines, and still has no password. Say what is true of BOTH arms.
 if [ -n "${_h_admin_why:-}" ]; then
-  printf '\n  Harbor admin password NOT read: %s\n' "$_h_admin_why"
+  case "${_h_admin_why}" in
+    *"Supervisor token expired"*) printf '\n  Harbor admin password NOT read (see the banner above).\n' ;;
+    *) printf '\n  Harbor admin password NOT read: %s\n' "$_h_admin_why" ;;
+  esac
   # No backticks: shellcheck reads them as command substitution inside a single-quoted printf
   # (SC2016), and they are pure decoration in terminal output.
-  printf '    make harbor-admin-password will NOT produce it: with a robot HARBOR_USERNAME (yours\n'
-  printf '    is one, which is why this row is here at all) it either leaves the working robot\n'
-  printf '    credential alone and exits 0, or refuses outright rather than downgrade a\n'
-  printf '    least-privilege credential to full admin. This value is read from the Supervisor.\n'
+  # WHY it refuses -- replacing a robot with admin is a privilege downgrade -- lives in
+  # 28-harbor-admin-password.sh, where anyone changing that behaviour will read it.
+  printf '    make harbor-admin-password will not produce it either: yours is a robot and it refuses.\n'
 fi
 if [ "${_argo_initial_note:-0}" = 1 ]; then
   case "${_argo_state}" in
@@ -1853,13 +1901,9 @@ case "${_argo_tls_flag:-0}" in
     # state nothing cleans up, so a robot pair survives every lab re-cut and reads valid to any proxy
     # check -- only a real push discriminates (CLAUDE.md, "THREE HARBOR AUTH CHECKS THAT DO NOT
     # DISCRIMINATE"), and `make env-validate` cannot judge a robot at all (B715).
-    printf '\n  legend: Reachable = the ADDRESS answered. It says NOTHING about the Username/Password\n'
-    printf '          beside it — those are shown AS CONFIGURED (from .env / the install overlay),\n'
-    printf '          not tested. Only a real push (make mirror) proves a Harbor credential.\n'
-    printf '\n  note: rows marked "untrusted cert" are not signed by a CA your machine trusts.\n'
-    printf '        In a browser: click through the warning. With curl/CLI: --insecure.\n'
-    printf '        ArgoCD is also at a BARE IP and its cert carries no IP SAN, so no client can\n'
-    printf '        verify it at that address at all; a verifying path needs a DNS name.\n' ;;
+    printf '\n  Reachable = the address answered. Username/Password are AS CONFIGURED, not tested.\n'
+    printf '\n  untrusted cert: browser -> click through; curl/CLI -> --insecure.\n'
+    printf '  ArgoCD is at a bare IP and its cert has no IP SAN, so nothing can verify it there.\n' ;;
 esac
 
 # --- footnote: WHAT IS NOT REAL YET, and whose job it is to fix ------------------------
@@ -2283,7 +2327,7 @@ else
       _kube_classify "$_ssh_verr" "the node addresses" "${_ssh_vrc}"
       _ssh_ep_state="$_kube_state"
       case "${_ssh_vrc}" in
-        119) _ssh_ep="<not read — token expired>" ;;
+        119) _ssh_ep="<not read>" ;;
         *)   if grep -qi 'forbidden' "$_ssh_verr" 2>/dev/null; then _ssh_ep="<not allowed to read addresses>"
              else                                                   _ssh_ep="<could not read node addresses>"; fi ;;
       esac
@@ -2358,17 +2402,16 @@ EOF
 # publishes no node-SSH secret"), `<unreachable>` and `<stale CA>` — every one of them a statement
 # about the lab, and scenario-1.md:1102 documents that intent ("never a blank that would read as
 # this cluster has none"). A reader applying the absolute would discount an actionable lab fact.
-printf '\n  Lab access — from your .env. A <not set> means THIS REPORT does not have the value;\n'
+printf '\n  Lab access — from your .env. <not set> = this report lacks it, not the lab.\n'
 # ⚠️ "read live" IS A CLAIM, and it used to print unconditionally -- including on the run where
 # `_sup_timeout` returned 119 WITHOUT DIALLING. Paired with `<could not read node addresses>` it told
 # the operator the live cluster HAD been asked and had no readable addresses (a lab/RBAC fact) when
 # nothing had been asked at all. Say which of the two happened.
-if [ "${_SUP_DEAD:-0}" = 1 ]; then
-  printf '                it does not mean the lab lacks one. The guest node SSH row was NOT probed\n'
-  printf '                (the Supervisor token is expired) — see the note under the table.\n'
-else
-  printf '                it does not mean the lab lacks one. The guest node SSH row is read live.\n'
-fi
+case "${_ssh_ep:-}" in
+  '<not probed>'|'') printf '    guest node SSH: NOT probed.\n' ;;
+  '<not read>')      printf '    guest node SSH: NOT probed.\n' ;;
+  *)                 printf '    guest node SSH: read live.\n' ;;
+esac
 printf '\n  %-*s  %-*s  %-*s  %s\n' "$_lw1" "Target" "$_lw2" "Endpoint" "$_lw3" "Username" "Password"
 printf '  %-*s  %-*s  %-*s  %s\n' \
   "$_lw1" "$(printf '%*s' "$_lw1" '' | tr ' ' '-')" \
@@ -2377,7 +2420,8 @@ printf '  %-*s  %-*s  %-*s  %s\n' \
   "$(printf '%*s' 8 '' | tr ' ' '-')"
 while IFS=$'\t' read -r c1 c2 c3 c4; do
   if [ -z "$c1" ]; then continue; fi
-  printf '  %-*s  %-*s  %-*s  %s\n' "$_lw1" "$c1" "$_lw2" "$c2" "$_lw3" "$c3" "$c4"
+  printf '  %s  %s  %s  %s\n' \
+    "$(_pad "$_lw1" "$c1")" "$(_pad "$_lw2" "$c2")" "$(_pad "$_lw3" "$c3")" "$c4"
 done <<EOF
 $_lab_rows
 EOF
@@ -2445,9 +2489,8 @@ if [ -z "${VCENTER_HOST:-}" ] && [ -z "${VCENTER_USERNAME:-}" ] && [ -z "${VCENT
     printf '     not set them yet.\n'
 fi
 
-printf '\n  ⚠️ vCenter SSO locks the account PERMANENTLY after 3 failed attempts. This report SHOWS these\n'
-printf '     values and NEVER authenticates with them, so a wrong one is not spent here. If one is\n'
-printf '     rejected, STOP and confirm it with whoever owns the lab — do not retry.\n'
+printf '\n  ⚠️ vCenter SSO locks out PERMANENTLY after 3 failed attempts. This report never\n'
+printf '     authenticates, so nothing here spends one. If a value is rejected: STOP, ask the lab owner.\n'
 # ⚠️ NOT DERIVED, and it no longer pretends to be (impl round, MED). The previous version looped over
 # a HARDCODED 7-element literal counting its own elements — MEASURED: injecting an 8th row still
 # printed 7. It tracked neither the rows, nor .env.example, nor the scenario docs, and reading as
@@ -2463,9 +2506,10 @@ fi
 # UNCONDITIONALLY, so a run that read NOTHING still claimed "READ LIVE from the Supervisor" and
 # asserted `Source: <none found>` — an absence about a namespace we may never have been able to
 # query. The exact conflation the probe rewrite above exists to fix, re-committed two lines below it.
-if [ -z "$_ssh_pw" ]; then
-  printf '  Guest-node SSH password NOT read: %s\n' "$_ssh_state"
-fi
+case "${_ssh_state:-}" in
+  *"Supervisor token expired"*) : ;;   # the banner at the top already says it
+  *) [ -z "$_ssh_pw" ] && printf '  Guest-node SSH password NOT read: %s\n' "$_ssh_state" ;;
+esac
 # The ENDPOINT is a SEPARATE query with its own rc, so it needs its own sentence: the row can carry
 # two different failures with two different causes, and printing only the password's leaves the
 # address marker unexplained -- which reads as "the lab has no node addresses".
@@ -2473,11 +2517,14 @@ if [ -n "${_ssh_ep_state:-}" ]; then
   # Compare the CAUSE, not the whole string: both states are "<label> — <cause>" and only the
   # LABEL differs, so a whole-string compare never collapses them (measured: still 3 copies).
   _ep_cause="${_ssh_ep_state#* — }"; _pw_cause="${_ssh_state:-}"; _pw_cause="${_pw_cause#* — }"
-  if [ "${_ep_cause}" = "${_pw_cause}" ]; then
-    printf '  Guest-node ADDRESSES not read either — same cause as the line above.\n'
-  else
-    printf '  Guest-node ADDRESSES not read: %s\n' "$_ssh_ep_state"
-  fi
+  case "${_ssh_ep_state}" in
+    *"Supervisor token expired"*) : ;;
+    *) if [ "${_ep_cause}" = "${_pw_cause}" ]; then
+         printf '  Guest-node ADDRESSES not read either — same cause as the line above.\n'
+       else
+         printf '  Guest-node ADDRESSES not read: %s\n' "$_ssh_ep_state"
+       fi ;;
+  esac
 fi
 
 echo
