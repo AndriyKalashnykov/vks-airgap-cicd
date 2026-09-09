@@ -41,6 +41,31 @@ require_cmd kubectl
 # A REJECTED credential still falls through to the admin write below; the guard added in the
 # `rejected` arm is what makes the claim true for a ROBOT pair. An ordinary rejected `admin` password
 # is still replaced, which is the whole point of the command.
+# ⚠️ THE ROBOT GUARD BELOW LIVES INSIDE THE `! is_placeholder` BLOCK, SO IT CANNOT FIRE WHEN
+# HARBOR_PASSWORD IS EMPTY -- and `is_placeholder ''` returns TRUE, because '' is the FIRST pattern
+# in its case (lib/os.sh:1204). So a ROBOT username with a blank or placeholder password skipped
+# EVERY robot check and fell through to the `env_publish_all ... HARBOR_USERNAME admin` at the tail:
+# the exact privilege downgrade the message below promises cannot happen. MEASURED 2026-09-09; the
+# file contained exactly ONE `harbor_username_is_robot` call, so there was no second net.
+#
+# THE HALF-PAIR STATE IS DOCUMENTED, NOT EXOTIC. This file's own :250-252 records that a mid-pair
+# abort "leaves the overlay holding HALF a credential pair, so the documented recovery
+# (`make harbor-admin-password`) has the same structure" -- i.e. the operator most likely to run
+# this command is the one most likely to be in the state that bypassed the guard.
+#
+# It cannot reuse the message below: `early_verdict` is computed INSIDE that block. It does not need
+# to -- with no password there is no verdict to report, and that absence is itself the reason to
+# refuse. Promoting an UNVERIFIABLE robot to admin is weaker ground than promoting a rejected one.
+if is_placeholder "${HARBOR_PASSWORD:-}" && harbor_username_is_robot; then
+  die "HARBOR_USERNAME='${HARBOR_USERNAME}' is a ROBOT account and HARBOR_PASSWORD is empty or still
+     a placeholder - so nothing here can check that robot, and this command is about to replace the
+     username with 'admin'. Refusing: that would silently downgrade a least-privilege setup to a full
+     admin credential, which is the opposite of what scenario-1 Step 9 set up.
+       Mint a fresh pair:  make harbor-robot
+     If you genuinely want the admin credential instead, clear HARBOR_USERNAME from ./.env first and
+     re-run this - the choice should be explicit, not a side effect."
+fi
+
 if ! is_placeholder "${HARBOR_PASSWORD:-}"; then
   # harbor_auth_ok, NOT harbor_auth_report: the reporter returns 0 for "nothing to report", which
   # includes an INCONCLUSIVE probe. Measured 2026-08-12 -- with a stale CA and a deliberately wrong

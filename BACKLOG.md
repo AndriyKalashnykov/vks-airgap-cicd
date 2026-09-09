@@ -8667,3 +8667,133 @@ emitter scans `$rows` and is blind to `$_lab_rows`); the ArgoCD cell's "see the 
 to *Harbor's* note; and `kube_token_expiry` had **zero** tests, so all four fixes were unguarded —
 `scripts/test-kube-token-expiry.sh` now pins 17 cases, each a measured defect from one of the rounds
 rather than a hypothetical, RED-proven by three separate mutations.
+
+## B557 — ✅ SHIPPED 2026-09-09: `make harbor-admin-password` SILENTLY DOWNGRADED a robot credential to full admin
+
+Three adversary rounds on `make creds`' operator-facing claims; this one is not about prose.
+
+`creds.sh` prints, to any operator whose `HARBOR_USERNAME` is a robot: *"it either leaves the working
+robot credential alone and exits 0, or refuses outright rather than downgrade a least-privilege
+credential to full admin."* **There was a third branch.**
+
+`28-harbor-admin-password.sh:78` was the file's **only** `harbor_username_is_robot` call, and it sat
+inside `if ! is_placeholder "${HARBOR_PASSWORD:-}"` (:44). **MEASURED:** `is_placeholder ''` returns
+**TRUE** — `''` is the FIRST pattern in its case (`lib/os.sh:1204`). So:
+
+    HARBOR_USERNAME=robot$vks-cicd  +  HARBOR_PASSWORD=   ->  every robot check SKIPPED
+                                                          ->  env_publish_all … HARBOR_USERNAME admin
+
+— the exact harm the die() message promises cannot happen, with no second net.
+
+**The state is DOCUMENTED, not exotic.** That file's own `:250-252` records that a mid-pair abort
+*"leaves the overlay holding HALF a credential pair, so the documented recovery
+(`make harbor-admin-password`) has the same structure"*. The operator most likely to run the command
+is the one most likely to be in the state that bypassed the guard.
+
+**FIXED** by hoisting a robot guard ABOVE the placeholder test. It cannot reuse the existing message
+(`early_verdict` is computed inside the block) and does not need to: with no password there is no
+verdict, and that absence is itself the reason to refuse.
+
+**RED-PROVEN** — `scripts/test-harbor-admin-robot-guard.sh`, 10 cases. Removing the guard fails
+exactly the 4 refusal assertions while BOTH controls stay green (a non-robot `admin` + empty password
+must still proceed — that is the command's entire purpose). ⚠️ The three `NO admin published`
+assertions **stayed green under the mutation** and are labelled in the file as NOT discriminating
+offline: without a reachable Supervisor the script dies before `env_publish_all`. They are a
+containment tripwire, not proof of containment.
+
+## B558 — 🔴 `make env-validate` EXITS 0 over the robot credential it is named as the way to check (HTTP 412) — and `lib/harbor.sh`'s 403 claim is STALE
+
+**SETTLED ON THE LIVE LAB 2026-09-09**, with the repo's own probe:
+
+    HARBOR_USERNAME is a robot? YES
+    /api/v2.0/users/current  -> HTTP 412
+    harbor_auth_verdict      -> unchecked:the probe did not complete
+
+412 falls to the `*` arm (`lib/harbor.sh:262`, `02-env.sh:527`), which does **not** increment `errs`,
+so `02-env.sh:620` exits **0**. `creds.sh:794` names `make env-validate` as *"To re-check
+credentials"*, and on the documented walk `HARBOR_USERNAME` **is** a robot by then (scenario-1 Step 9
+mints it at :865; Step 11 runs env-validate at :972).
+
+**A CONTRADICTION IN-TREE, now resolved by measurement.** `lib/harbor.sh:180-185` asserts *"403 IS A
+PASS … a PROJECT-SCOPED ROBOT … still gets 403 from /users/current"*, and **two tests pin 403**
+(`test-harbor-auth-report.sh:95,:160`). `creds.sh:1700-1703` records **412** from the live lab with
+controls. The live lab says **412**. So the harbor.sh comment and both tests describe an operating
+point that does not occur here, and the one that does is **untested** — `grep -rn '412' scripts/test-*`
+→ **zero**. That is why this shipped: the corpus excludes the real case, so its green is evidence
+about a subset.
+
+**NOT FIXED — it needs an idea round**, because "is 412 authenticated?" is a design question, not a
+typo. The message (*"get current user not available for security context: robot"*) reads as Harbor
+RECOGNISING the principal, i.e. authenticated-but-wrong-endpoint, which is the same class as the
+existing 403 arm. But the honest alternative is a hard ERROR saying only `make mirror` discriminates.
+Do not pick one without a round; and fix all four homes together (`lib/harbor.sh:180-185`, `:398`,
+`creds.sh:1700`, the two tests) or they drift again.
+
+## B559 — 🔴 `check-env-coverage` PASS 2 is VACUOUS over 64% of its corpus, and reports OK
+
+Its own header says a wider window *"would pick up a NEIGHBOURING block's marker and the gate would
+never fire — which is exactly what it did on its first version"*. **It regressed to v1 behaviour.**
+The awk resets the block only on a NON-comment line, and `.env.example` is an unbroken run of `#`
+lines, so a variable's "own block" absorbs its neighbours'.
+
+**MEASURED INDEPENDENTLY (not taken from the round):** 241 commented slots examined ·
+**155/241 (64%)** have a window >20 lines · **102/241 (42%)** >50 · **max 247** lines
+(`VCENTER_CA_SHA256`, `.env.example:1845`) · under a per-variable window **57/241 (23%)** would fail
+today, and the gate reports **0**. `VKS_PASSWORD` (`.env.example:1923`) has **zero** own-block comment
+lines — the line above it is `# ARGOCD_CR_APPLY_INTERVAL=10` — and no marker of its own.
+
+**Done-when:** bound the window at the previous variable slot as well
+(`if ($0 ~ /^#[[:space:]]*[A-Z][A-Z0-9_]{2,}=/) { b = "" }`), RED-prove that `VKS_PASSWORD` then
+FAILS, and **TRIAGE the 57** — some legitimately inherit a `how:` from a SECTION header, which is an
+argument for allowing a section-scoped marker EXPLICITLY rather than by accident. Also drop the bare
+word `password` from `ACQ_MARKERS`: it matches any variable whose own NAME contains it.
+⚠️ Tightening a gate is a control change — idea round first.
+
+## B560 — 🔴 the guest-node-SSH ENDPOINT arm bypasses `_kube_classify`, so a known cause is discarded
+
+**TWO INDEPENDENT ROUNDS converged on this**, with the same evidence. `creds.sh:2231-2234` classifies
+the node-address failure with a hand-rolled TWO-way `grep -qi 'forbidden'` — while its two SIBLING
+queries in the same block (`:2133`, `:2176`) call `_kube_classify`, whose **119** arm
+(`:1375-1377`) renders `<not read — Supervisor token EXPIRED …>`.
+
+On this run `_sup_timeout` returned **119 without dialling** and wrote `NOT ATTEMPTED: the Supervisor
+token EXPIRED at 2026-09-09T15:53Z` into the very stderr `:2233` greps — so the report **held the
+cause and printed `<could not read node addresses>` instead**. Worse, `:2307` prints *"The guest node
+SSH row is read live"* **unconditionally**, so the operator reads an ATTEMPT that provably did not
+happen and goes hunting node networking or RBAC.
+
+`_kube_classify`'s own comment says falling through to the unclassified arm *"is strictly worse … I
+measured that regression and it is why this arm exists"* — and this line reproduces it 30 lines away.
+
+**Done-when:** route `:2232-2234` through `_kube_classify`; make `:2307` conditional on a probe
+having been ATTEMPTED. ⚠️ A round also flagged the CLASS: `_kube_classify` is called at `:1510`,
+`:1528`, `:2133`, `:2176` but not here, so any future `_sup_timeout`-wrapped probe inherits the
+defect — consider a gate asserting every such call routes through it.
+
+## B561b — 🔴 three UNSCOPED operator-facing claims in `make creds` (all measured FALSE-as-written)
+
+Filed together because the fix is one pass over `creds.sh`'s prose and each was measured:
+
+1. **`:794` "To re-check credentials: make env-validate"** — `env_validate` (`02-env.sh:387-628`) has
+   **0** hits for `supervisor_kubeconfig` and **0** for `ARGOCD|VCENTER|VCF_CLI|VKS_PASSWORD`. It
+   cannot re-check any of the four `Lab access` rows, and it is silent about the credential the
+   report has just declared dead. `Makefile:367`'s help is accurate and narrow — **creds.sh is the
+   only surface that generalises**, so move creds.sh to the Makefile's wording, not the reverse.
+2. **`:792` "The Reachable column BELOW is the live answer"** — `Reachable` is a column header only
+   at `:1649`, the SERVICES table. The `Lab access` table has four columns and no such column, and
+   its vCenter/SSO rows are deliberately never probed (`:1933-1939`, correctly — SSO locks out after
+   3 binds). The reader scans down for a verdict on the Supervisor row and finds none.
+3. **the table has no LEGEND.** `Reachable` measures the ENDPOINT only — Harbor's probe
+   (`lib/harbor.sh:452-462`) sends no `-u`, no `-K`, no `-H`; ArgoCD's is a bare TCP connect — and the
+   Username/Password cells are **echoed from `.env`** (`creds.sh:450`, `:459`), not read from the
+   system. `creds.sh:918-924` states this exactly — **in a comment**; no printed line ever tells the
+   operator. Four credential-shaped columns beside a green fifth read as one verdict.
+
+**Also measured:** `scenario-1.md:1149` promises the SSH row *"shows the secret name it read … when
+it succeeds"* — structurally unreachable. `_ssh_sec` reaches output only via `_ssh_state`, which
+prints only under `[ -z "$_ssh_pw" ]` (`:2402`), i.e. FAILURE. `creds.sh:2190-2191` defends dropping
+the name from the Endpoint column by saying it *"already appears in the note under the table"* —
+false on the success path, the only path that comment is about.
+
+**Also measured, in an ALWAYS-LOADED file:** `CLAUDE.md:199` and `:528` say env-validate returns
+**rc=2**; `02-env.sh:620` is the only exit path and it is `exit 1`.
