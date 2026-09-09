@@ -523,9 +523,37 @@ predates 2026-07-13 without a migrate; if nobody, this closes as documentation.
 cluster stamp, and must cover `.env.kind`. Hardening `.env.state` alone is worse than nothing here:
 it advertises the class as closed.
 
-## 🔴 B573 — the WEEKLY `schedule` run has been RED for three weeks, and it is the ONLY place `lint`/`test-scripts`/`sec` runs in CI 🔴 open
+## ✅ B573 — the WEEKLY run was RED for three weeks; it is GREEN — verified by READING a dispatched run ✅ closed 2026-09-08
 
 Found by B571's round; I verified the conclusions independently.
+
+### ✅ CLOSED 2026-09-08 — dispatch `34293235658` on `2ac0c42` concludes **success**
+
+The row's own Done-when refused an inference from a merge, so this is the run, read:
+
+    static-check       success    849s   <- the job that had been red for three weeks
+    static-check-fast  success    122s
+    secrets            success     11s
+    docs-lint          success     27s
+    diagrams-check     success     18s
+    changes            success      8s
+    ci-pass            success      8s   <- the sole required check, on a FULL job set
+
+**Three causes, found one at a time, each unmasked by fixing the last:**
+
+| # | cause | fix |
+|---|---|---|
+| A | `k8s/istio/vks-package-values.yaml` — a VKS Package **data-values** file — was fed to `kubeconform`, which demands a top-level `kind:` | `validate.sh` skips it BY NAME, and any other kind-less file is a **hard fail** (a blanket skip would be the fake-green) |
+| B | three CI-only test failures, each with a **different** environment dependence: a resolver returning IPv6 first, `~/.claude/agents` present on my box, `$HOME` reaching a sibling lab repo | #1191 (partial), #1195 (the last two) |
+| C | the local G.4 command did not mirror CI, which is **why nobody saw any of it** | G.4 now pins `KUBECONFORM_REQUIRE_SCHEMAS=1` |
+
+⚠️ **B was two fixtures measuring MY BOX, and I first filed one of them as a PRODUCT bug** — the
+correction is at the end of this row, kept visible so it is not re-derived.
+
+⚠️ **This closes the ROW, not [[B571]].** The weekly being green restores the *"weekly catches it"*
+leg of B571's options; it does not put `lint` or the offline unit suite on the PR path. The three
+weeks of red are the measured cost of that gap, and the argument B571 exists for is now live rather
+than moot.
 
     34092747025  failure  2026-09-07
     33365867786  failure  2026-08-31
