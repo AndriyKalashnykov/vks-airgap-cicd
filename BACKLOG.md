@@ -703,6 +703,51 @@ now does) or to say plainly that it does not.
 
 #### 🔴 F2c — 31% of this repo's `Makefile:NNN` comment citations point at a BLANK LINE, and NO gate asserts any of them
 
+##### ✅ MEASURED REPO-WIDE 2026-09-08 — 11%, not 31%, and **the actionable set is ~11 sites**
+
+The round's 31% was a **sample of 16** Makefile citations. Measured over every `<file>:<line>` token
+in every tracked `*.sh`, `*.md`, `Makefile` and workflow, resolved against the file it names:
+
+| population | citations | blank | rate |
+|---|---|---|---|
+| **whole repo** | **804** | **96** | **11%** |
+| `Makefile:NNN` alone | 196 (116 distinct) | 24 | — |
+| `docs/reviews/` | 372 | **53** | 14% |
+| `docs/` (excl. reviews) | 403 | 53 | 13% |
+| `BACKLOG.md` | 161 | 16 | 9% |
+| **`scripts/` — LIVE PROSE** | **43** | **3** | **6%** |
+
+⚠️ **The split the 31% did not make, and it changes the verdict: 53 of the 96 are in
+`docs/reviews/`, which is an APPEND-ONLY HISTORICAL RECORD** — a citation there is legitimately *"as
+of then"*, and "fixing" it would falsify the record. The same is true of a closed BACKLOG row. **Rot
+is only rot in live prose.**
+
+**The actionable set is ~11**, and it is dominated by ONE line moving:
+
+    scripts/40-install-gitea.sh      -> Makefile:459   |  all three cite the SAME dead line;
+    scripts/41-install-tekton.sh     -> Makefile:459   |  `install-all` lived there once and is
+    scripts/check-namespace-labelled.sh -> Makefile:459 |  now at :1072
+
+    scripts/check-doc-robot-quoting.sh -> Makefile:471      scripts/lib/os.sh -> Makefile:471
+    scripts/check-lib-sourcing.sh      -> Makefile:406      scripts/lib/os.sh -> scripts/fetch-ca.sh:80
+    scripts/30-vks-login.sh            -> Makefile:916      Makefile          -> Makefile:524
+    scripts/creds.sh                   -> BACKLOG.md:1811   scripts/check-expect-literals.sh -> docs/scenario-2.md:216
+
+**The fix is the round's, and it is not "correct the numbers": name the SYMBOL, not the line**
+(`Makefile:459` → the `install-all` target). A symbol survives every edit above it; a line number
+survives none. Needs one pass reading each site for what it MEANT — mechanical, but not automatable,
+because the right symbol is whatever the sentence was pointing at.
+
+⚠️ **A GATE for this is probably the refuted shape** — `hooks.md` records that a gate asserting a
+citation RESOLVES goes green on an interpretive error and thereby LAUNDERS it. A **printer** (always
+exits 0, lists every citation and its current line, says in its own header what it cannot catch) is
+the honest form. Do not build the gate without a round.
+
+⚠️ **AND MY OWN INSTRUMENT HAD A GAP, which is the finding in miniature:** the first pass required an
+**extension** in the token, so `Makefile:1941` — the exact class the round measured — was invisible
+and Makefile reported **0** citations. A 0 that is an artifact of the predicate reads exactly like a
+clean result. Closing the gap took it to 196.
+
 Measured by the round over 16 distinct citations: 5 dead (`builder-image` cited at `:406`, actually
 `:589`; `install-all` cited at `:459`, actually `:1072`), and **B571's own citations, written the day
 before, were already off by 8**. Counts rot as fast: `scripts/test-*.sh` went **143 → 151 → 155 in
