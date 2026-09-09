@@ -225,6 +225,42 @@ _render() {  # _render <ARGOCD_SERVER> <ARGOCD_SERVER_SOURCE> -> the printed blo
   rm -f "$T/bin/curl"
 }
 
+# ── B486 change 1: publish ARGOCD_HOST when the operator gave us one ────────────────────────────
+# ⚠️ THESE ASSERT THE FILE, not the log. The log says what the script CLAIMS it wrote; `.env` is
+# what the next command reads. They have disagreed before -- 09's own header records an adversary
+# round where deleting one clause left .env holding the stale value while the report claimed the new
+# one, and a function-based test stayed GREEN.
+_render_host() {  # _render_host <ARGOCD_HOST> <ARGOCD_SERVER> <SOURCE> -> prints; .env is the ASSERTION
+  rm -f "$T/kc" "$T/.env" "$T/.env.state"
+  mk_kubectl '' 0 '10.20.30.40'
+  printf '#!/usr/bin/env bash\nprintf 403\nexit 0\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+  PATH="$T/bin:$PATH" VKS_SUPERVISOR_KUBECONFIG="$T/sup.kubeconfig" REPO_ROOT="$T" \
+    ARGOCD_NAMESPACE=cicd ARGOCD_ADDRESS_WAIT_SECONDS=4 ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS=1 \
+    SKIP_DOTENV=1 ARGOCD_HOST="$1" ARGOCD_SERVER="$2" ARGOCD_SERVER_SOURCE="$3" \
+    bash "$SCRIPT_DIR/09-argocd-address.sh" 2>&1
+  rm -f "$T/bin/curl"
+}
+_published() { sed -n 's/^ARGOCD_SERVER=//p' "$T/.env" | tail -1; }
+
+# THE BASELINE, and it is the whole blast-radius argument: unset ARGOCD_HOST must be byte-identical
+# to what shipped. The tenant, KinD and every path today are this case.
+_o="$(_render_host '' '' '')"
+ck "ARGOCD_HOST unset -> publishes the IP (unchanged)"  "$(_published)" "10.20.30.40"
+
+# THE CHANGE. This case is also its own RED-proof: revert _publish to \$ip and it publishes the IP.
+_o="$(_render_host 'argocd.lab.test' '' '')"
+ck "ARGOCD_HOST set -> publishes the NAME"              "$(_published)" "argocd.lab.test"
+ck "ARGOCD_HOST set -> says where the name came from"   "$(grep -qF 'from ARGOCD_HOST' <<< "$_o" && echo y || echo n)" "y"
+ck "ARGOCD_HOST set -> discloses it must RESOLVE + be in the SANs" \
+   "$(grep -qF 'must RESOLVE and be in the server cert' <<< "$_o" && echo y || echo n)" "y"
+
+# THE SECOND-RUN TRAP. On a re-run ARGOCD_SERVER is the NAME and the source marker is `discovered`,
+# so argocd_effective_addr returns the IP and we land in the WRITE branch again. Comparing against
+# \$ip (as the shipped code did) logs "correcting <name> -> <ip>" and OVERWRITES the name EVERY run.
+_o="$(_render_host 'argocd.lab.test' 'argocd.lab.test' 'discovered')"
+ck "re-run -> the NAME survives (idempotent)"           "$(_published)" "argocd.lab.test"
+ck "re-run -> no spurious 'correcting' line"            "$(grep -qF 'correcting ARGOCD_SERVER' <<< "$_o" && echo y || echo n)" "n"
+
 _o="$(_render '' '')"
 ck "unset -> the IP arm fires"                 "$(grep -qF 'That address is an IP' <<< "$_o" && echo y || echo n)" "y"
 ck "unset -> step 3 says REMOVE the marker"    "$(grep -qF 'ARGOCD_SERVER_SOURCE=discovered from' <<< "$_o" && echo y || echo n)" "y"

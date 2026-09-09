@@ -274,14 +274,35 @@ if [ "$_eff" != "$ip" ]; then
   log_warn "  Nothing here wrote that value, so it is treated as one you were GRANTED and is left alone."
   log_warn "  If ${ip} is the one you want, change it in .env yourself."
 else
-  if [ -n "${ARGOCD_SERVER:-}" ] && [ "${ARGOCD_SERVER}" != "$ip" ]; then
-    log_warn "correcting ARGOCD_SERVER ${ARGOCD_SERVER} -> ${ip} (we wrote the previous value)."
+  # B486 change 1: publish the NAME the operator already gave us, when they gave us one.
+  # ARGOCD_HOST is documented (.env.example §DNS) as the FQDN your real DNS answers for ArgoCD, and
+  # today it has exactly TWO consumers -- both in show-dns-records.sh -- NEITHER of which dials
+  # ArgoCD. So it is documentation-only, while this script's own remedy (:330) tells the operator to
+  # set ARGOCD_HOST at step 2 and then ARGOCD_SERVER "to the same name" at step 3. Typing the same
+  # name twice is this repo's own "anything typed twice is a missing target" smell.
+  # ⚠️ BLAST RADIUS IS ZERO WHERE ARGOCD_HOST IS UNSET -- the tenant, KinD, and every path today --
+  # because _publish is then $ip and every line below is byte-identical to what shipped.
+  # ⚠️ AND IT DOES NOT MAKE THE NAME VERIFY. .env.example's own example is argocd.example.com, which
+  # the default cert can never present; the SAN disclosure below stays exactly as it is.
+  # ⚠️ THE SECOND-RUN TRAP, and it is why the comparison below moved from $ip to $_publish: on a
+  # re-run ARGOCD_SERVER is the NAME and ARGOCD_SERVER_SOURCE is `discovered`, so
+  # argocd_effective_addr returns $ip (the source==discovered arm) and we land HERE. Comparing
+  # against $ip would have logged "correcting <name> -> <ip>" and OVERWRITTEN the name on every
+  # subsequent run. Comparing against $_publish makes the re-run idempotent.
+  _publish="${ARGOCD_HOST:-$ip}"
+  if [ -n "${ARGOCD_SERVER:-}" ] && [ "${ARGOCD_SERVER}" != "$_publish" ]; then
+    log_warn "correcting ARGOCD_SERVER ${ARGOCD_SERVER} -> ${_publish} (we wrote the previous value)."
   fi
-  set_env_var ARGOCD_SERVER "$ip" "${REPO_ROOT}/.env"
+  set_env_var ARGOCD_SERVER "$_publish" "${REPO_ROOT}/.env"
   # PROVENANCE, so a later run may correct this value (see the guard above). It goes to the STATE
   # overlay, not .env: it is something the system observed about itself, never an operator tunable.
   state_set ARGOCD_SERVER_SOURCE discovered 2>/dev/null || true
-  log_info "wrote ARGOCD_SERVER=${ip} to ./.env"
+  log_info "wrote ARGOCD_SERVER=${_publish} to ./.env"
+  if [ -n "${ARGOCD_HOST:-}" ]; then
+    log_info "  (from ARGOCD_HOST; the discovered LB IP is ${ip} and stays in ARGOCD_LB_IP)"
+    log_warn "  that name must RESOLVE and be in the server cert's SANs, or every consumer needs -k."
+    log_warn "  'make show-dns-records' prints the A record; 'make fetch-argocd-ca' prints the SAN list."
+  fi
   # DEBT, recorded where it is created: .env.example:439 says this should be
   # `<SET-a-name-the-cert-carries>`, and the lab-verified SAN list carries NO IP SAN -- so this IP
   # works only because every consumer runs --insecure/-k. Harbor survives VIP churn precisely because
