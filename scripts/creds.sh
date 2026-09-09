@@ -554,8 +554,10 @@ else
   # apart rather than inventing a chore.
   # ...but "it waits" is a DEAD END when the Supervisor token is expired: argocd-password reads the
   # secret from the SAME Supervisor, so it will fail the same way, and the operator learns that only
-  # after the wait. `_kube_classify` is defined LATER in this file (line ~1091) and so cannot be
-  # called here; `kube_token_expiry` comes from lib/os.sh, is offline, and answers the one question
+  # after the wait. `_kube_classify` is defined LATER in this file and so cannot be called here
+  # (verify with `grep -n "^_kube_classify()" "$0"` -- NO LINE NUMBER ON PURPOSE: this comment
+  # carried one, it went stale by 203 lines, and it was independently mis-cited THREE times in
+  # one session, twice by reviewers who then prescribed a fix that would have died rc=127 here); `kube_token_expiry` comes from lib/os.sh, is offline, and answers the one question
   # that decides which of the two sentences is true.
   if [ "$_have_sink" = 1 ]; then
     _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
@@ -768,8 +770,9 @@ case "$_prov" in
   # So: no writes. Say what is true, and point at the column that carries the per-row answer.
   #
   # ⚠️ THE ARM IS SPLIT, because "STORED means unstamped" is FALSE. I asserted it, and an
-  # implementation round REFUTED it by running the thing: line 610's `elif [ -n "$_stamp" ] && [
-  # "$_stamp" = "$_live_srv" ]` sends a MATCHING stamp to DISCOVERED, and everything else — including
+  # implementation round REFUTED it by running the thing: the DISCOVERED arm above — the
+  # `elif [ -n "$_stamp" ] && [ "$_stamp" = "$_live_srv" ]` — sends a MATCHING stamp there, and
+  # everything else — including
   # a stamp for a DIFFERENT cluster — falls to this `else`. It reaches here rather than being refused
   # because `state_check` returns 0 early when `_VKS_EXPLICIT_KUBECONFIG` is empty; lib/os.sh:666-669
   # records that measurement in the repo's own words ("three keys were stripped from a sink stamped
@@ -1183,7 +1186,8 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
     # ⚠️ `|| true` IS LOAD-BEARING (both rounds, CRITICAL). This file's own header says the report
     # "MUST NOT HANG OR DIE ... every failure degrades to a marker". Under `set -euo pipefail` an
     # unguarded cluster call here KILLS the whole table -- Gitea, Harbor, ArgoCD, VKS and SSH rows
-    # all lost, at line ~820 of 1570. Reachable on routine paths: a tenant kubeconfig that may
+    # all lost -- this arm sits roughly a third of the way down the report, so MOST of the table
+    # goes with it. Reachable on routine paths: a tenant kubeconfig that may
     # `create token` but not `get deploy` (the DEFAULT posture), or headlamp installed by a
     # platform team under another release name, or the 3s timeout expiring on a slow lab.
     # headlamp_deployed_ttl() cannot fail by construction; the `|| true` is belt and braces.
@@ -2316,9 +2320,10 @@ EOF
 
 # ── the note the SSH row's "see note" marker CITES ────────────────────────────────────────────
 # MEASURED 2026-09-08 on the live lab: the row rendered `192.168.101.63 (+2 more — see note)` and
-# NOTHING in the 55-line output explained it — a citation resolving to nothing, which line 1461
-# already calls "worse than no marker at all, because it reads as sourced". The existing emitter at
-# ~1448 scans `$rows` (the SERVICES table) and is structurally blind to this one, which lives in
+# NOTHING in the 55-line output explained it — a citation resolving to nothing, which the
+# see-note emitter's own header already calls "worse than no marker at all, because it reads as
+# sourced" (grep -n 'reads as sourced'). That emitter scans `$rows` (the SERVICES table) and is
+# structurally blind to this one, which lives in
 # `$_lab_rows`. Gated on the marker being PRESENT so cell and note cannot drift apart.
 # ⚠️ KEYED ON THE FLAGS, NOT ON THE RENDERED STRING. creds.sh:1503-1507 records the measured
 # incident: rewording a marker silently stopped matching it and the cell cited a note that no

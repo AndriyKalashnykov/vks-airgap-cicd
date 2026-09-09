@@ -1754,7 +1754,7 @@ is stub-measured.
 ⚠️ **CHANGE 1 IS REFUTED — MEASURED 2026-09-08 by two independent rounds. Do NOT implement it, and
 do NOT re-derive it from the "typed twice" argument below.** This row's own prescribed fix ("publish
 `${ARGOCD_HOST}` when it is set, the IP otherwise") was implemented, went **33/33 green**, and was
-then refuted. The implementation is preserved unmerged at `6bfff07` on `fix/b486-argocd-host` so
+then refuted. The implementation is preserved at tag `archive/b486-refuted-impl` (`6bfff07`) so
 nobody rebuilds it.
 
 **The refutation is a PRIMARY-SOURCE read, not a judgement call.** `.env.example:1508-1509` documents
