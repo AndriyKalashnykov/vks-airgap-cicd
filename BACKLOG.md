@@ -8273,7 +8273,7 @@ being a different one. Pin BOTH regressions in `test-classify-kube-failure.sh`: 
 timestamp AND `401` as the thread-id, each with a real memcache body. Related: B544 (the truncation
 that makes this reachable at all).
 
-## B550 — 🟡 ArgoCD is the ONLY trust anchor absent from BOTH `env-validate` AND `ca_status_report`
+## B550 — 🟡 BLOCKED on B486; the Done-when is REFUTED (round 3) — ArgoCD is the only trust anchor absent from BOTH `env-validate` AND `ca_status_report`
 
 Two rounds, 2026-09-07, after I filed a finding that was itself wrong (see B551).
 
@@ -8320,6 +8320,77 @@ expected and must not fail. WARN."* The `CA_STATUS_STRICT` mechanism (`Makefile:
 WARN-vs-BLOCK correctly and was simply never extended to ArgoCD. Its `rc=3` arm
 (`lib/tls.sh:539-542`) already prints exactly the message this lab needed: *"that certificate is NOT
 VALID FOR THIS ADDRESS … Use the DNS name the certificate was issued for, not an IP."*
+
+### ⛔ ROUND 3, 2026-09-09 — the Done-when and the WARN-under-STRICT design are BOTH REFUTED; ship D, and not yet
+
+**A — the row's own Done-when ("one line into `pairs=`") is REFUTED by the file it edits, 40 lines
+above the line it would add.** `lib/tls.sh:436-451` is a standing refutation of this exact design for
+a sibling anchor: *"⚠️ ADDING A PAIR IS NOT A ONE-LINER. A vCenter CA pair was designed and REFUTED
+2026-08-24"*, naming four obligations (call its `*_ca_default` at **both** entry points, keep it out
+of the blocking path, extend the B166 wiring gate, and the ALL-MATCH token). The Done-when discharges
+**none**. `test-ca-staleness-check.sh:212` even pre-registers the case: *"If a THIRD pair whose var
+ships COMMENTED ever lands, give it its own arm here."* `ARGOCD_CA_FILE` ships commented
+(`.env.example:503`) — it **is** that third pair.
+
+**B — "WARN-only under `CA_STATUS_STRICT`" covers 1 of 6 stale paths.** MEASURED: six
+`stale=$((stale + 1))` sites; **only `:525` is inside the STRICT guard**. The five verdict arms —
+`rc=1` (:552), **`rc=3` (:563)**, `rc=4` (:566), `rc=5` (:568), `*` (:570) — increment
+unconditionally. So the design fixes the case a *previous* round flagged and leaves the **measured**
+one fully blocking — and it is a no-op in `make ca-status`, which never sets STRICT.
+
+**C — "put it in `argocd-preflight` instead" is refuted by the Makefile.** `Makefile:804`:
+`preflight: … lab-preflight psa-check argocd-preflight`, and `23-argocd-preflight.sh:339` exits 1.
+Moving it there does not move it out of the blocking path; only making it a `note`/`warn` does.
+
+**Why blocking is disqualifying, measured.** An ArgoCD-shaped self-signed leaf (`O = Argo CD`, DNS
+SANs only, no IP SAN — the shape this lab actually serves) probed at an **IP** endpoint returns
+**rc=3** -> `stale++` (:563, unguarded) -> `ca_status_report` -> `24-lab-preflight.sh:259-260`
+`problems += _stale` -> `:271 exit "$problems"` -> `Makefile:804 preflight` -> `Makefile:1072`
+`install-all: preflight …` as **prereq 1 of 12**, while `gitops` — the only ArgoCD consumer — is
+prereq 11. And our own tooling writes that IP: `02-env.sh:164` and `09-argocd-address.sh:280` both
+`env_set ARGOCD_SERVER "$ip"`. So the blocking state is the DOCUMENTED path, not an exotic one.
+
+**And its remedy is an OPEN row.** The rc=3 text says *"use the DNS name the certificate was issued
+for, not an IP"* — which needs an A record, which **B486 exists to make a documented step**.
+`23-argocd-preflight.sh:295` states the governing rule verbatim: *"A PREFLIGHT MAY ONLY BLOCK ON WHAT
+THE OPERATOR CAN FIX RIGHT NOW"* — written after this identical shape shipped once.
+
+**D — PREFERRED: an ADVISORY ArgoCD CA line, OUTSIDE `pairs=`.** It must touch none of the three
+shared quantities — not `stale` (gates `install-all`), not `CA_STATUS_CHECKED`, not
+`CA_STATUS_MATCHED` (both runbooks pin `**Expect:** CA-STATUS: ALL-MATCH`, `scenario-1.md:788`,
+`scenario-2.md:508`). Print the same rc-derived diagnosis as a `note`, then `return 0`. Calling that
+"a `pairs=` entry" is what makes the one-liner look safe: `pairs=` is welded to a blocking exit code
+**and** to a walk-pinned token; ArgoCD needs neither.
+
+**SEQUENCING: do not land D until B486 lands.** Until then rc=3's remedy is unactionable, so advisory
+is the only honest register.
+
+**RIGHT-SIZE IT.** `ARGOCD_CA_FILE` has **zero production writers** (only test fixtures and a
+`walk-doc.sh` comment), so the pair does not build in the KinD e2e (`SKIP_DOTENV=1`), in the
+scenario-1 walk, or in the scenario-2 walk — it helps only hand-configured operators, and it gets
+**no regression test on any automated path**. Real (B551 was one such operator), but it is not "the
+report now covers ArgoCD as it covers Harbor."
+
+**⚠️ THE ROW ABOVE HAS DRIFTED — 5 of its 8 citations are stale, and one changed BEHAVIOUR.**
+`argocd_tls_opts` is at **`os.sh:2052`**, not `1895-1907` (+157), and its cell (*"nothing — returns 0
+in both cases"*) is **no longer true**: it now emits a detailed `log_warn` on set-but-missing (citing
+B553). It still `return 0`, so the reportability gap is real but **narrower** than the table claims.
+Also `tls.sh:461-462`->**482-483**, `488-497`->**511-520**, `539-542`->**560-563**,
+`argocd.sh:384-390`->**403**.
+
+**RED-PROOF D must produce** (behavioural, per `test-ca-staleness-check.sh:239-271` — count pairs
+EXAMINED, never a pair count, since `:215` records that a count "passes over a pair that never
+builds"): (1) coverage — set + a name the cert carries -> the line appears; mutate the block out ->
+it disappears; (2) **the decisive one** — set + an **IP** and a cert with no IP SAN -> the diagnosis
+prints **and** `ca_status_report` returns **0** and `make lab-preflight` exits **0**, asserting the
+specific message, not merely rc!=0; (3) `make ca-status` still prints `CA-STATUS: ALL-MATCH`;
+(4) STRICT + set-but-unfetched -> `make preflight` exits 0; (5) a stale **Harbor** CA still
+`stale++` and still fails `preflight`.
+
+**RESIDUAL:** rc=3 was measured at ONE operating point (one synthetic RSA-2048 cert, one OpenSSL,
+`openssl s_server`); the live `argocd-server` was not probed because the Supervisor token is expired
+and SSO locks out after 3 attempts. Whether rc=1 or rc=3 fires for a self-signed **leaf** is
+immaterial — both `stale++`, unguarded.
 
 ## B551 — ⛔ MY OWN REMEDIATION BROKE THE LAB, and the repo's own text prescribed it
 
