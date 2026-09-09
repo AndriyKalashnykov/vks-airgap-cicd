@@ -8999,3 +8999,67 @@ a MARKER-VOCABULARY miss, not a documentation hole — decide per item and say w
 **STAGE 3** — enforce, only once the flagged count is 0, in a commit that touches nothing else.
 Markers are a SEPARATE arc (word-anchoring costs 4; dropping bare `password` alone REDs a
 correctly-documented secret).
+
+## ⛔ B721 — REFUTED: do NOT delete `02-env.sh`'s auth probe and call `harbor_auth_report`
+
+B715 closed saying the durable fix was to delete the hand-rolled copy. **An idea round refuted that**,
+and the reason is a fake-green the library's own header already forbids.
+
+**THE SUBSTITUTION IS FORBIDDEN IN WRITING, and measured.** `lib/harbor.sh` states it: *"A REPORTER
+returns 'problems found'; 0 means 'nothing to report', which it also returns when it could not tell
+(no CA yet, a stale CA, a timeout) — so `if harbor_auth_report; then "the credential works"` is a
+FAKE GREEN. MEASURED 2026-08-12: with a wrong CA and a deliberately wrong password,
+harbor_auth_report returned 0."* `22-harbor-robot.sh` repeats it (*"NEVER harbor_auth_report"*).
+`env_validate` accumulates `errs` and exits 1 — it is a **verifier**, the exact class the header
+warns off.
+
+**AND IT WOULD GO SILENTLY BLIND IN A DOCUMENTED-SUPPORTED CONFIG.** The two CA resolutions diverge:
+
+| state | the inline copy | `harbor_auth_report` |
+|---|---|---|
+| CA set + https | `--cacert` | `--cacert` |
+| **no CA (or empty) + https** | probes **system trust** | **SKIPS, returns 0** |
+| `HARBOR_INSECURE=1` | http | http (inert flag) |
+
+So on a **publicly-trusted** Harbor with no usable `HARBOR_CA_FILE`, a **wrong password** that
+`env-validate` rejects today would produce a note and **exit 0**. `docs/scenario-2.md` documents that
+configuration (*"leave it empty only if Harbor's cert is publicly trusted"*), and `.env.example` ships
+`HARBOR_CA_FILE` **uncommented**, so any box that has not run `make fetch-harbor-ca` is in it.
+`lib/tls.sh` already names `env-validate` as *"the one gate that does catch it"*.
+
+**SIX homes, not five** — `09-harbor-auth-check.sh` (a prereq of `make mirror`) is a sixth consumer,
+so the deletion does not reduce the consumer count; it couples gates that fail independently today.
+
+### ✅ What SHIPPED instead (the two live bugs the round found, both verified here)
+
+1. **`02-env.sh` printed `HTTP 000000`.** `curl -w '%{http_code}'` already emits `000` on a
+   connection failure **and** exits non-zero, so the `|| echo 000` fallback appended a second.
+   MEASURED both forms against an unreachable endpoint: old `000000`, new `000`. `_harbor_auth_code`
+   documents the same trap as fixed; this hand-rolled copy still had it.
+2. **`harbor_is_sysadmin` now has an EXPLICIT 412 arm**, behaviour-preserving. It collapsed 412/401/000
+   into "not a sysadmin" by falling through a 200-only test — the right OUTCOME for the wrong REASON,
+   and one "consistency fix" away from disaster: adding `412) return 0` by analogy with
+   `harbor_auth_verdict`'s new arm would make a **robot** take `22-harbor-robot.sh`'s *"Harbor says
+   you ARE a system administrator"* branch and build a system-level payload. Proven inert with a
+   DISCRIMINATING probe (200+sysadmin → 0; 412/401/000 → 1; 200+non-sysadmin → 1) — an earlier probe
+   returned rc=1 for every code because its stub body had no `sysadmin_flag`, and would have
+   "confirmed" the arm while testing nothing.
+3. **`CLAUDE.md`'s block was STALE ON FOUR COUNTS** in the always-loaded file — it still described the
+   PRE-#1220 state (412 falling to `*`, `errs` not incremented, `lib/harbor.sh` claiming 403, no test
+   covering 412). All false at HEAD. A session reading it would re-fix a fixed bug or widen an arm on
+   a false premise. Rewritten to state what is now true **and** what still is: 412 proves
+   authentication, **not** authorization to push.
+
+### Still open
+
+**The classifier extraction (option B):** share ONLY the status table
+(`accepted|rejected|inconclusive`), leaving each caller its own curl, CA policy, timeout and
+messages. That collapses the real drift risk with zero behaviour change — unlike the deletion. It
+needs the round's RED-proof, whose decisive case is: **https + no `HARBOR_CA_FILE` + a
+publicly-trusted oracle + a wrong password → `make env-validate` must exit 1**. Option A fails that
+case; B passes it. Note `test-env-validate.sh` has **zero** coverage of the auth `case` today, so
+whichever design ships would otherwise ship blind.
+
+⚠️ Also flagged: a **timeout reparenting** (the inline copy honours `CURL_MAX_TIME_SECONDS`, the
+library `HARBOR_PROBE_TIMEOUT_SECONDS`; both default to 10, so it is invisible except to the operator
+on a slow lab who set the documented one), and **B710/B715 may be the same defect filed twice**.

@@ -515,7 +515,21 @@ env_validate() {
           local cfg; cfg="$(mktemp)"; chmod 600 "$cfg"
           printf 'user = "%s:%s"\n' "$(esc_curlk "${HARBOR_USERNAME:-admin}")" "$(esc_curlk "${HARBOR_PASSWORD}")" > "$cfg"
           local acode
-          acode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${CURL_MAX_TIME_SECONDS:-10}" "${cafg[@]}" -K "$cfg" "$scheme://$HARBOR_URL/api/v2.0/users/current" 2>/dev/null || echo 000)"
+          # ⚠️ THE TRANSPORT STATUS IS LOAD-BEARING — DO NOT just fix the printed digits.
+          # `|| echo 000` was wrong (curl already prints 000 on a connect failure AND exits
+          # non-zero, so it APPENDED a second: `000000`). But dropping the rc entirely is WORSE.
+          # MEASURED against a threaded oracle that sends 200 headers then hangs mid-body
+          # (curl prints 200, exits 28):
+          #     `|| echo 000`     -> 200000 -> the `*)` arm -> "inconclusive"   (accidentally safe)
+          #     rc discarded      -> 200    -> the ACCEPTED arm -> "credentials accepted"  FALSE
+          #     rc preserved      -> 000    -> the `*)` arm -> "inconclusive"   (correct)
+          # This is B194, already fixed in lib/vcenter.sh and 98-verify-ingress.sh, and the CATEGORY
+          # is adjudicated in writing at 97-verify-ingress-rendered.sh: a probe asking "does this
+          # WORK?" must collapse a truncated response to 000, while one asking "is the route
+          # RENDERED?" keeps the code. This is the first kind. Same form as _harbor_auth_code.
+          acode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${CURL_MAX_TIME_SECONDS:-10}" "${cafg[@]}" -K "$cfg" "$scheme://$HARBOR_URL/api/v2.0/users/current" 2>/dev/null)" && arc=0 || arc=$?
+          [ "$arc" -eq 0 ] || acode=000
+          case "${acode:-}" in ''|*[!0-9]*) acode=000 ;; esac
           rm -f "$cfg"
           case "$acode" in
             # ⚠️ THIS IS A HAND-ROLLED COPY of lib/harbor.sh's probe and it drifted: 412 fell to the

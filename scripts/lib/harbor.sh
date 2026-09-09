@@ -97,7 +97,21 @@ harbor_last_code() { cat "${HARBOR_CODE_FILE}" 2>/dev/null || printf '?'; }
 harbor_is_sysadmin() {
   local body
   body="$(harbor_api_body GET "users/current")"
-  [ "$(harbor_last_code)" = "200" ] || return 1
+  # ⚠️ 412 -> NOT a sysadmin, DELIBERATELY, and do NOT "unify" this with harbor_auth_verdict's 412
+  # arm. There, 412 means AUTHENTICATED (a robot on a system-scoped endpoint) and maps to `accepted`.
+  # HERE the question is "are you a system administrator", and a robot is not one — so the SAME
+  # status must answer NO. Adding `412) return 0` by analogy would make a robot take
+  # 22-harbor-robot.sh's "Harbor says you ARE a system administrator" branch and build a
+  # system-level payload. The 200-only test below already yields the right answer; this arm makes it
+  # deliberate rather than accidental.
+  case "$(harbor_last_code)" in
+    412) return 1 ;;
+    200) ;;
+    # NAMED RESIDUAL: 401 (wrong credential) and 000 (the probe never ran) also collapse to
+    # "not a sysadmin" here. That conflation is the one this file condemns elsewhere
+    # (grep -n 'IS NOT A PERMISSIONS PROBLEM'); separating them is its own round.
+    *)   return 1 ;;
+  esac
   [ "$(printf '%s' "$body" | jq -r '.sysadmin_flag // false')" = "true" ]
 }
 
@@ -183,7 +197,10 @@ ensure_project() {
 # should run as) is fully authenticated and still does not get 200.
 # ⚠️ CORRECTED 2026-09-09: this comment said the robot code is 403. MEASURED on the live lab, it is
 # **412** ("get current user not available for security context: robot"); 403 was never observed
-# here and no test exercises 412 (two tests pin 403). The 403 arm is KEPT — in Harbor 403 never
+# here (two tests pin 403).
+# ⚠️ An earlier version of this line also said "no test exercises 412". That was FALSE the moment it
+# was written — the 412 arms and the tests that assert their VERDICT STRING landed in the SAME
+# commit. `test-harbor-auth-report.sh` exercises 412, including the ensure-arm chain. The 403 arm is KEPT — in Harbor 403 never
 # means "wrong password" — but 412 is the code this repo's own robots actually return. Treating "any non-200" as failure would
 # turn the least-privilege path into a hard stop -- a false RED introduced by a gate meant to help.
 # Only 401 means the credential is wrong; Harbor returns 403 for a permissions problem.

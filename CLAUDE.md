@@ -197,14 +197,22 @@ wrong every time. The credential was DEAD (`UNAUTHORIZED ... action: push`):
 | `crane auth login` | "logged in" | it only **writes `~/.docker/config.json`** — it validates nothing |
 | **`crane copy` (the real push)** | **UNAUTHORIZED** | the only one that discriminates |
 
-⚠️ **AND `make env-validate` IS A FIFTH NON-DISCRIMINATOR WHEN THE CREDENTIAL IS A ROBOT — measured
-on the live lab 2026-09-09.** `/api/v2.0/users/current` answers a `robot$…` with **HTTP 412**
-(*"get current user not available for security context: robot"*), which falls to the `*` arm →
-verdict `unchecked` → `errs` is NOT incremented → `02-env.sh:620` **exits 0**. So the sentence above
-("`make env-validate` gets it right in one command") holds for an **admin** credential and NOT for
-the robot the pipeline actually runs as. `lib/harbor.sh:180-185` still claims a robot gets **403**
-and two tests pin that; the live lab says 412 and **no test covers 412**. Filed as **B715** — do not
-"fix" it by widening an arm without a round.
+⚠️ **A ROBOT ANSWERS `/api/v2.0/users/current` WITH HTTP 412, NOT 403 — and 412 IS AUTHENTICATED.**
+Measured on the live lab with the three controls that make it safe to treat as a pass: a wrong robot
+credential, a nonexistent robot and an unauthenticated request **all return 401**. Source-confirmed
+at goharbor v2.15.2 (`src/server/v2.0/handler/user.go`): `RequireAuthenticated` runs FIRST, so 412 is
+unreachable without authentication.
+
+**FIXED in #1220 — do not re-derive this.** An earlier version of this block described the PRE-fix
+state (412 falling to the `*` arm, `errs` not incremented, no test covering 412). All of that is now
+false: `harbor_auth_verdict` and `harbor_auth_report` both carry a 412 arm, so does `02-env.sh`'s
+copy, and `test-harbor-auth-report.sh` exercises 412 with verdict-STRING assertions. The same
+unhandled status had ALSO been hard-stopping `make install-all` at `harbor-robot-ensure`
+(prerequisite 7) — one status, opposite wrong answers.
+
+⚠️ **STILL TRUE, and it is the part that matters:** 412 proves AUTHENTICATION, not authorization to
+**push**. `make env-validate` and `make harbor-auth-check` still go green on a robot that cannot
+push, so the table above stands — **only a real push discriminates.** See B710/B715.
 
 `make env-validate` gets it right in one command **for an ADMIN credential** (rc=1, `Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)`)
 because `lib/harbor.sh`'s `harbor_auth_report` already solved this — its own test asserts **401 fails,
