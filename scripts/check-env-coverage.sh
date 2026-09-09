@@ -202,6 +202,7 @@ done
 # unknown" — which silently meant BOTH real-lab scenarios could not complete `make gitops`.
 # ---------------------------------------------------------------------------
 acq_rc=0
+p2_examined=0    # THE ENFORCING PASS'S OWN counter — see the PASS 2b note below for why 2b's is not it
 # Markers that answer "how does the operator get this?" — a command/target, or an explicit class:
 #   how:/acquire:  a command or make target        auto/discover/generated  the repo supplies it
 #   choose/you set/toggle/password  you invent it   request/ask  you must ask the platform admin
@@ -213,6 +214,7 @@ while IFS= read -r line; do
   printf '%s' "$var" | grep -qE '^[A-Z][A-Z0-9_]{2,}$' || continue
   # an UNCOMMENTED line ships a real default -> nothing for the operator to obtain
   printf '%s' "$rest" | grep -qE '^[A-Z]' && continue
+  p2_examined=$((p2_examined + 1))
   # Walk UPWARD from the var, taking ONLY its own CONTIGUOUS comment block (stop at the first
   # non-comment line). A wider window would pick up a NEIGHBOURING block's marker and the gate would
   # never fire — which is exactly what it did on its first version.
@@ -234,6 +236,18 @@ while IFS= read -r line; do
   acq_rc=1
 done < <(grep -nE '^#[[:space:]]*[A-Z][A-Z0-9_]{2,}=' "$ENV_FILE")
 [ "$acq_rc" -eq 0 ] || rc=1
+# ⚠️ THE ENFORCING PASS NEEDS ITS OWN DENOMINATOR AND ITS OWN FLOOR. An implementation round proved
+# why: PASS 2b below has a DIFFERENT slot-finder (awk) from this loop's (grep), so mutating THIS
+# grep to match nothing left 2b happily printing "241 examined" while the pass that can actually
+# flag examined ZERO — and the suite stayed 10/10 green. A denominator that belongs to a different
+# loop does not merely fail to close the hole; it CAMOUFLAGES it behind a number that reads as this
+# pass's proof of work. Measured, and it is strictly worse than having no denominator at all.
+log_info "check-env-coverage PASS 2: ${p2_examined} commented slot(s) examined (enforcing)"
+if [ "$p2_examined" -lt 150 ]; then
+  log_error "check-env-coverage PASS 2: only ${p2_examined} slots examined (floor 150) — the ENFORCING pass went blind."
+  log_error "    Its driving grep or the slot regex broke; a shrunk scan is a quieter green, not a pass."
+  rc=1
+fi
 
 # ---------------------------------------------------------------------------------------------
 # INTEGRITY: no SPLICED variable-slot line.
@@ -329,10 +343,11 @@ done < <(awk -v mk="$(printf '%s' "$ACQ_MARKERS_REPORT" | tr '[:upper:]' '[:lowe
 # THE DENOMINATOR PASS 2 NEVER HAD. Until now the only count printed was PASS 1's, and the success
 # sentence below made PASS 1's claim — so a PASS-2 loop that stopped iterating (a changed slot
 # regex, a grep that matches nothing) was INDISTINGUISHABLE from a clean run.
-log_info "check-env-coverage PASS 2: ${pass2_examined} commented slot(s) examined, ${pass2_flagged} flagged (REPORT-ONLY, B716 stage 1)"
+log_info "check-env-coverage PASS 2b: ${pass2_examined} commented slot(s) examined, ${pass2_flagged} flagged (REPORT-ONLY, B716 stage 1)"
 if [ "$pass2_examined" -lt 200 ]; then
-  log_error "check-env-coverage PASS 2: only ${pass2_examined} slots examined — expected ~241."
-  log_error "  A silent shrink here reads exactly like a clean run. Fix the slot regex, do not lower this floor."
+  log_error "check-env-coverage PASS 2b: only ${pass2_examined} slots examined — expected ~241."
+  log_error "  Either the slot regex broke OR the awk itself failed — check stderr above; do not just"
+  log_error "  lower this floor. If you deliberately TRIMMED .env.example, lower it and say so in the commit."
   rc=1
 fi
 if [ "$pass2_flagged" -gt 0 ]; then
@@ -342,12 +357,22 @@ fi
 
 echo >&2
 if [ "$rc" -eq 0 ]; then
-  log_info "check-env-coverage: OK — every variable the scripts read has a SLOT in .env.example (PASS 1),"
-  log_info "  and PASS 2's acquisition-path check ran over ${pass2_examined} slots, flagging ${pass2_flagged} (report-only)."
+  # ⚠️ "operator-settable" IS LOAD-BEARING and was dropped in an earlier reword, which made this
+  # sentence FALSE: the scripts read ~475 distinct variables and ~192 of them (40%) have NO slot
+  # here, deliberately — that is what the PUBLISHED/INTERNAL exemption lists are for.
+  log_info "check-env-coverage: OK — every operator-settable variable the scripts read has a SLOT in .env.example (PASS 1),"
+  log_info "  PASS 2 checked ${p2_examined} slots for an acquisition path (enforcing), and PASS 2b flagged ${pass2_flagged} of ${pass2_examined} (report-only)."
 else
+  if [ -z "${missing// /}" ]; then
+    # rc=1 without a missing-variable list means a FLOOR or an integrity check fired, not PASS 1.
+    # Saying ".env.example is INCOMPLETE — " with an empty list sends the reader to document a
+    # variable that was never named. Pre-existing shape; the new floor added a fourth path into it.
+    log_error "check-env-coverage: FAILED — see the specific error(s) above (no missing variables were reported)."
+  else
   log_error "check-env-coverage: .env.example is INCOMPLETE —${missing}"
   log_error "  .env.example is the committed source of truth: a variable only the script knows about"
   log_error "  cannot be configured by an operator. Document it (with when-you-need-it + how-to-get-it),"
   log_error "  or — if it is internal/discovered — add it to the explicit exemption list in this script."
+  fi
 fi
 exit "$rc"

@@ -48,9 +48,10 @@ mkfixture() {  # mkfixture <extra-lines-file>
 }
 
 run() { REPO_ROOT="$T" bash "$SCRIPT_DIR/check-env-coverage.sh" 2>&1 | tr '\n' ' '; }
-flagged() { printf '%s' "$1" | sed -n 's/.*flagged (REPORT-ONLY.*//p' >/dev/null; \
-            printf '%s' "$1" | grep -oE '[0-9]+ flagged' | head -1 | grep -oE '^[0-9]+'; }
-has()  { printf '%s' "$2" | grep -c "$1"; }
+# ⚠️ SCOPED TO THE REPORT-ONLY LINE. A bare grep over the whole output cannot tell WHICH pass named
+# a variable, so a case could report ok on an ENFORCING-pass error. Harmless only by coincidence
+# today; at stage 3 (2b enforcing) both coincidences evaporate.
+has()  { printf '%s' "$2" | sed -n 's/.*no acquisition path stated[^:]*://p' | grep -c "$1"; }
 
 p=0; f=0
 ck(){ if [ "$2" = "$3" ]; then p=$((p+1)); printf '  ok    %s\n' "$1"
@@ -114,12 +115,42 @@ ck "a bare slot with nothing FAILS"         "$(has 'NOTHING_VAR' "$out")" "1"
 
 # ---- 5. THE DENOMINATOR, reconciled a SECOND way rather than self-reported ------------------------
 independent=$(grep -cE '^#[[:space:]]*[A-Z][A-Z0-9_]{2,}=' "$T/.env.example")
-ck "printed denominator == an independent count" "$(flagged "$(printf '%s' "$out" | grep -oE '[0-9]+ commented slot')" )" ""
-ck "  (independent count)"                  "$(printf '%s' "$out" | grep -oE '[0-9]+ commented slot' | grep -oE '^[0-9]+')" "$independent"
+# ⚠️ THIS LINE USED TO BE A TAUTOLOGY carrying the suite's most load-bearing label: it compared
+# `flagged("<N> commented slot")` -- which by construction returns "" -- against the literal "".
+# Proven un-failable by hardcoding the printed denominator to 999: the tautology reported ok while
+# the line below it failed. The label now sits on the check that does the work.
+ck "printed denominator == an INDEPENDENT count" \
+   "$(printf '%s' "$out" | grep -oE '[0-9]+ commented slot' | head -1 | grep -oE '^[0-9]+')" "$independent"
+
+# ---- 5b. AN UPPERCASE MARKER MUST STILL COUNT. Without this case, dropping tolower() from the two
+#          upward loops leaves the suite 10/10 GREEN while the real .env.example goes 21 -> 32
+#          flagged (11 false REDs) -- because every marker in every other fixture is lowercase, so
+#          nothing here can distinguish a lowered window from a raw one. Measured by the round.
+cat > "$T/x" <<'EOF'
+# HOW: run `make something` to get this
+# UPPER_MARKER_VAR=1
+EOF
+mkfixture "$T/x"; out="$(run)"
+ck "an UPPERCASE marker still covers its slot" "$(has 'UPPER_MARKER_VAR' "$out")" "0"
 
 # ---- 6. REPORT-ONLY: flags must NOT fail the build (stage 1 of 3) --------------------------------
 REPO_ROOT="$T" bash "$SCRIPT_DIR/check-env-coverage.sh" >/dev/null 2>&1; rc=$?
 ck "flags are REPORT-ONLY (rc stays 0)"     "$rc" "0"
+
+# ---- 7. THE 2b FLOOR IS THE ONE NEW WAY THIS GATE CAN FAIL, and it had no RED-proof: setting its
+#         threshold to 0 left the suite green.
+# ⚠️ THE FIXTURE SIZE IS LOAD-BEARING. My first attempt used 20 slots — below BOTH floors, so rc=1
+# came from the ENFORCING pass's floor (150) and the case could not tell which fired: disabling the
+# 2b floor still left it green. 175 sits ABOVE 150 and BELOW 200, so ONLY 2b's floor can fire, and
+# the message is asserted rather than the bare rc.
+: > "$T/.env.example"
+n=0; while [ "$n" -lt 175 ]; do printf '# how: x\n# TINY_%03d=1\n' "$n" >> "$T/.env.example"; n=$((n+1)); done
+out_floor="$(REPO_ROOT="$T" bash "$SCRIPT_DIR/check-env-coverage.sh" 2>&1)"; rc_floor=$?
+ck "a fixture below the 2b floor fails"      "$rc_floor" "1"
+ck "  ...and it is 2b's floor that fired"    "$(printf '%s' "$out_floor" | grep -c 'PASS 2b: only 175 slots')" "1"
+ck "  ...NOT the enforcing pass's floor"     "$(printf '%s' "$out_floor" | grep -c 'ENFORCING pass went blind')" "0"
+
+printf '\n  %s passed, %s failed\n' "$p" "$f" >/dev/null   # (tally printed below)
 
 printf '\n  %s passed, %s failed\n' "$p" "$f"
 [ "$f" -eq 0 ] || exit 1
