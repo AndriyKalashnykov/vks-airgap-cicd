@@ -255,13 +255,36 @@ fi
 
 # --- 4. External address ------------------------------------------------------
 echo >&2
-GW_TYPE="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" -o jsonpath='{.spec.type}' 2>/dev/null || echo '<unreadable>')"
+# ⚠️ A FAILED READ IS NOT A TYPE. `<unreadable>` used to flow straight into the
+# `[ "$GW_TYPE" != "LoadBalancer" ]` test below, which is TRUE for it — so a tenant who simply may
+# not read this Service was told "the gateway is not a LoadBalancer", with rc=1 and a remedy about
+# the wrong thing. That is a claim about the world made on the strength of a question nobody
+# answered, on the one surface RULE ZERO-A0 marks tenant-safe.
+# This mirrors the arm at :70-88, which already says "This is NOT evidence that Istio is absent"
+# for exactly the same reason; that arm exists because the mistake was made there first.
+_gw_err="$(mktemp)"
+GW_TYPE="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" -o jsonpath='{.spec.type}' 2>"$_gw_err")" && _gw_rc=0 || _gw_rc=$?
 GW_IP="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
-log_info "gateway Service type=${GW_TYPE} externalAddress=${GW_IP:-<none>}"
-if [ "$GW_TYPE" != "LoadBalancer" ] && [ -z "${INGRESS_LB_IP:-}" ]; then
-  log_warn "  the gateway is not a LoadBalancer and INGRESS_LB_IP is unset — the *.vks.local UIs"
-  log_warn "  will not be reachable. Ask the mesh admin for the address that fronts it, then set INGRESS_LB_IP."
+_gw_cls="$(classify_kube_failure "$_gw_err" 2>/dev/null || true)"
+rm -f "$_gw_err"
+
+if [ "${_gw_rc:-0}" -ne 0 ]; then
+  log_info "gateway Service type=<could not read> externalAddress=${GW_IP:-<none>}"
+  log_warn "  could NOT READ the gateway Service '${ISTIO_GATEWAY_SERVICE}' in"
+  log_warn "  '${ISTIO_GATEWAY_NAMESPACE}' (${_gw_cls:-unclassified}). That says NOTHING about its"
+  log_warn "  type or its address — it is not evidence that the gateway is misconfigured."
+  log_warn "  If you are a TENANT: this is normal when the mesh lives in a namespace you may not"
+  log_warn "  read. Ask the mesh admin for the address that fronts the gateway, then set"
+  log_warn "  INGRESS_LB_IP; you do not need read access to proceed."
+  log_warn "  If you EXPECTED to read it: re-run 'make vks-login', then this preflight."
   rc=1
+else
+  log_info "gateway Service type=${GW_TYPE} externalAddress=${GW_IP:-<none>}"
+  if [ "$GW_TYPE" != "LoadBalancer" ] && [ -z "${INGRESS_LB_IP:-}" ]; then
+    log_warn "  the gateway is not a LoadBalancer and INGRESS_LB_IP is unset — the *.vks.local UIs"
+    log_warn "  will not be reachable. Ask the mesh admin for the address that fronts it, then set INGRESS_LB_IP."
+    rc=1
+  fi
 fi
 
 echo >&2
