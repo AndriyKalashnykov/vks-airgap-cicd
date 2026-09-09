@@ -999,6 +999,49 @@ Control, same input, unrotted: `FAIL static-check-fast SKIPPED, but it has no if
 `skip static-check (paths-filter — legitimate…)` — a **false sentence from the merge gate itself**
 (RULE ZERO-V). No paths-filter decided anything; the job cannot run on a PR at all.
 
+### ✅ SHIPPED — D1 + D3 + **F** (the THIRD design; the first two were measured and refuted)
+
+A second round built **12 rot arms + 3 states this repo ACTUALLY SHIPPED** and scored the candidates:
+
+| design | quantified over | score | why it died |
+|---|---|---|---|
+| **(A)** *"an event-gated job belongs in NEITHER list"* | list membership | **4/11** | a **FAIL-OPEN** — the verdict script notes-but-does-not-**judge** an unlisted job, so a FAILED `static-check` went `note … OK`, reproducing that script's founding incident **by design** |
+| **(C)** *"the event-gated set in ci.yml == {static-check}"* (mine) | the **`if:` TEXT** — a proxy | **5/11** | blind to the same rot spelled with a **DIFF gate** (this repo's own documented restoration spelling), blind to a folded `if: >-`, and **RED on 2 of the 3 guard forms `static-check` has genuinely shipped** |
+| **(F)** `PR_FLOOR ⊆ UNCONDITIONAL` | the **POLICY** | **11/11, ZERO false-RED** | — |
+
+Every blind arm was the **same single edit**: a job moved OUT of `UNCONDITIONAL`. So F asserts *the
+move*. Growing `PR_FLOOR` is a **policy deletion** (*"this gate no longer runs on every PR"*), not
+bookkeeping — which is the whole difference from a list that rots.
+
+**RED-proven** on both spellings, each with F's OWN message; **no false-RED** on all four
+real/documented `if:` forms (`needs.changes` / `if: false` / `schedule` / hybrid).
+
+**D3's exploit is worth keeping:** *"a CONDITIONAL job's failure is not our business"* made `ci-pass`
+go **OK over a failed static-check** (positive control 1 → 0); the **old 25-case suite scored 25/0
+over it**, the new one catches it. It asserts the **message**, not `rc` — a *different* plausible
+mutation also exits non-zero, via the `ABSENT` arm, whose text instructs the very list edit that
+blinds the gate.
+
+⚠️ **My first exploit did not land** and I only caught it by demanding the positive control: I placed
+the mutation *downstream* of the `case` that handles `failure`, so it was never reached (MUTATED
+rc=1). The fixture would have looked worthless.
+
+#### 🔴 B574-a — a job NEUTERED IN PLACE is green everywhere 🔴 open
+
+`run: make static-check-fast` → `run: true` passes **every** assertion: `conclusion=success`,
+`nsteps ≥ 1`, lists untouched, `if:` untouched. Neither F nor anything else here sees it. The shape
+that would catch it is an **anchor assertion on the `run:` line** (`grep -c 'make static-check-fast'
+.github/workflows/ci.yml`). Not built — it is a new control and wants its own round.
+
+#### 🔴 B574-b — an unparseable job id is INVISIBLE, and it MISATTRIBUTES 🔴 open
+
+The guard's shared `awk` matches `^  [a-z][a-z0-9-]*:` only. GitHub job ids may carry uppercase and
+underscores, so `Nightly_E2E:` with an event `if:` is attributed to the **preceding parseable job**.
+Measured by the round: the guard then reports **`secrets` is event-gated** — and an operator
+following that message would exempt the repo's **security-scan** job from the policy. The fix is to
+**fail on a job header the awk cannot parse** rather than silently misattribute
+(`awk '/^jobs:/{j=1;next} j && /^  [^ ]+:/{print}'` vs `Y_JOBS`). Not built.
+
 ### The decomposition (a round's, and it is the useful part)
 
 | | defect | fix |
