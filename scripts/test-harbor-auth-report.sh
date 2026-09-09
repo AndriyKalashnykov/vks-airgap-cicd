@@ -188,5 +188,45 @@ rc=0; harbor_auth_ok || rc=$?
 check "auth_ok: no password -> NOT verified" 1 "$rc"
 export HARBOR_PASSWORD="$_p"
 
+# ⚠️ THE `check` HELPER ABOVE COMPARES WITH `-eq` (integers). The 412 cases below assert VERDICT
+# STRINGS -- deliberately, because an rc-only assertion is vacuous here -- so they need a string
+# comparator. Measured: `[ rejected -eq rejected ]` errors "integer expression expected" and the
+# case FAILS while printing two IDENTICAL values, which reads like a product bug and is not.
+checks() { # checks <label> <want> <got>
+  if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 — want=$2 got=$3"; fi
+}
+
+# ── HTTP 412: the ROBOT code this lab actually returns (B715) ────────────────────────────────────
+# ⚠️ AN rc-ONLY ASSERTION HERE IS VACUOUS, and the cases above are written that way: `harbor_auth_report`
+# returned 0 at 412 BEFORE this fix too (the `*)` inconclusive arm returns 0). A `check "412 -> 0"`
+# passes identically on the broken and the fixed tree. So assert the VERDICT STRING, which is the
+# thing that flips, and assert the CHAIN it feeds.
+#
+# WHY 412 IS A PASS, measured on the live lab with the controls that make it safe:
+#   real robot + real secret -> 412        real robot + WRONG secret -> 401
+#   nonexistent robot        -> 401        no credentials            -> 401
+# Source-confirmed (goharbor v2.15.2, src/server/v2.0/handler/user.go): RequireAuthenticated runs
+# FIRST, so 412 is unreachable without authentication.
+printf '412\n' > "$T/status"
+checks "412 -> verdict is ACCEPTED (not 'unchecked')" "accepted" "$(harbor_auth_verdict)"
+check "412 -> the message names it a ROBOT" 1 \
+      "$(harbor_auth_report 2>&1 | grep -c 'http 412 from /users/current')"
+
+# THE ANTI-FALSE-GREEN CONTROL, in the same run: a dead robot must still be REJECTED.
+printf '401\n' > "$T/status"
+checks "401 -> verdict is REJECTED (the control)" "rejected" "$(harbor_auth_verdict)"
+
+# THE CHAIN, and this is the case that matters most: the SAME unhandled string that made
+# env-validate exit 0 also made `harbor-robot-ensure` DIE -- it is prerequisite 7 of `install-all`,
+# and `unchecked:the probe did not complete` does NOT match its `unchecked:no*` arm, so it fell to
+# `*)` -> die. One status, opposite wrong answers. This drives the REAL verdict, not a stub:
+# test-harbor-robot-ensure.sh stubs it, so a case added THERE could not prove this fix.
+_arm() { case "$1" in accepted) printf 'skip' ;; rejected) printf 'die-rejected' ;;
+                      unchecked:no*) printf 'warn' ;; *) printf 'DIE' ;; esac; }
+printf '412\n' > "$T/status"
+checks "412 -> install-all's harbor-robot-ensure SKIPS (it used to DIE)" "skip" "$(_arm "$(harbor_auth_verdict)")"
+printf '401\n' > "$T/status"
+checks "401 -> harbor-robot-ensure still refuses (control)" "die-rejected" "$(_arm "$(harbor_auth_verdict)")"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
