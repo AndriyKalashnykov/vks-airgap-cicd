@@ -957,6 +957,68 @@ arm count is `02-env.sh` (9), `96-verify-gateway-image` (4), `08-install-argocd-
 that skips on an absent optional corpus is fine. Do not instrument all 31; that is the
 enumerated-list reflex the row already refuses.
 
+## 🔴 B574 — `ci-pass` goes **OK over a PR where 2 of 6 jobs ran**, and its guard's own error message TELLS you how to blind it 🔴 open
+
+Found by a round auditing the false *"paths-filter"* sentence; the sharpened version is mine, measured
+on `356b71c`. Both arms run, both reproducible (`VERDICT=` and `CI_YML=` are env-overridable at
+`test-ci-pass-verdict.sh:30-31`).
+
+`ci-pass` is the **sole required check**. `scripts/ci-pass-verdict.sh` judges from two hand-typed
+lists; its guard asserts *"CONDITIONAL == exactly the jobs carrying a job-level `if:`"* — **presence,
+never semantics**. So an **event** gate (`github.event_name == …`, which makes a job unreachable on a
+PR) is indistinguishable from a **diff** gate (`needs.changes.outputs.*`, which is a legitimate
+paths-filter skip).
+
+### The rot that matters is the PAIRED one — and the guard PRESCRIBES it
+
+| rot | guard |
+|---|---|
+| event-gate `static-check-fast`, lists untouched | **24 passed, 1 FAILED** — caught |
+| event-gate it **AND** move `UNCONDITIONAL` → `CONDITIONAL` | **25 passed, 0 failed — BLIND** |
+
+The second is what a person actually does, because the FIRST arm's failure message says
+*"ci.yml changed and this list did not"* — so they update the list. **The guard's error text is the
+instruction that blinds it.**
+
+Merge gate under the paired rot, PR shape, 2 of 6 jobs run — measured, verbatim:
+
+    ok    changes              own-steps=3
+    skip  static-check-fast    (paths-filter — legitimate, ran none of our steps)
+    ok    secrets              own-steps=4
+    skip  diagrams-check       (paths-filter — legitimate, ran none of our steps)
+    skip  static-check         (paths-filter — legitimate, ran none of our steps)
+    skip  docs-lint            (paths-filter — legitimate, ran none of our steps)
+    ci-pass-verdict: 6 job(s) judged — 2 ok, 4 legitimately skipped, 0 bad, 0 not-judged
+    ci-pass: OK
+
+Control, same input, unrotted: `FAIL static-check-fast SKIPPED, but it has no if: guard` → **REFUSED**.
+
+### ⚠️ AND IT IS ALREADY HALF-TRUE TODAY, with no rot at all
+
+`static-check` is event-gated **now**, so on **every PR** the merge gate prints
+`skip static-check (paths-filter — legitimate…)` — a **false sentence from the merge gate itself**
+(RULE ZERO-V). No paths-filter decided anything; the job cannot run on a PR at all.
+
+### The decomposition (a round's, and it is the useful part)
+
+| | defect | fix |
+|---|---|---|
+| **D1** | the false *"paths-filter"* sentence | a one-line message change, **no new list**: *"legitimately skipped — it carries a job-level `if:` guard, and ran none of our steps"* — true for all three shapes |
+| **D2** | the rot hole above | a **semantic** assertion in the GUARD (which already reads ci.yml) |
+| **D3** | nothing behavioural pins *"a FAILED static-check must refuse"* | measured: **all 11** static-check fixture lines are `skipped` or `success`. Add a schedule-shaped `static-check<TAB>failure<TAB>10` fixture asserting REFUSE **and** that it names static-check |
+
+⚠️ **The round's D2 wording is quantified over `UNCONDITIONAL` members** (*"every job in UNCONDITIONAL
+must be reachable on a pull_request event"*) — and the paired rot **removes** the job from
+`UNCONDITIONAL`, so it appears **vacuous against the arm that matters**. A counter-design (assert the
+**event-gated set in ci.yml** equals a one-entry allowlist `{static-check}`, so the assertion is
+quantified over the thing being rotted) is under review. **Do not implement either until that
+returns** — an earlier prescription in this same area, *(A) "belongs in neither list"*, was measured
+to be a **fail-open** that reproduces this script's founding incident.
+
+⚠️ **Known false-RED risk in the counter-design:** the **hybrid** `if:`
+(`github.event_name == 'schedule' || needs.changes.outputs.code == 'true'`) is documented at
+`ci.yml:155/184/195` as the **restoration path**, and it matches BOTH classifiers.
+
 ## 🔴 B564 — `ci-pass` REFUSES after `gh run rerun --failed`, because a partial attempt has a partial job list 🔴 open
 
 MEASURED 2026-09-08 on PR #1167: a raced `ci-pass` (it read `static-check-fast conclusion=none` while
