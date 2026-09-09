@@ -8273,7 +8273,7 @@ being a different one. Pin BOTH regressions in `test-classify-kube-failure.sh`: 
 timestamp AND `401` as the thread-id, each with a real memcache body. Related: B544 (the truncation
 that makes this reachable at all).
 
-## B550 — 🟡 ArgoCD is the ONLY trust anchor absent from BOTH `env-validate` AND `ca_status_report`
+## B550 — 🟡 BLOCKED on B486; the Done-when is REFUTED (round 3) — ArgoCD is the only trust anchor absent from BOTH `env-validate` AND `ca_status_report`
 
 Two rounds, 2026-09-07, after I filed a finding that was itself wrong (see B551).
 
@@ -8320,6 +8320,77 @@ expected and must not fail. WARN."* The `CA_STATUS_STRICT` mechanism (`Makefile:
 WARN-vs-BLOCK correctly and was simply never extended to ArgoCD. Its `rc=3` arm
 (`lib/tls.sh:539-542`) already prints exactly the message this lab needed: *"that certificate is NOT
 VALID FOR THIS ADDRESS … Use the DNS name the certificate was issued for, not an IP."*
+
+### ⛔ ROUND 3, 2026-09-09 — the Done-when and the WARN-under-STRICT design are BOTH REFUTED; ship D, and not yet
+
+**A — the row's own Done-when ("one line into `pairs=`") is REFUTED by the file it edits, 40 lines
+above the line it would add.** `lib/tls.sh:436-451` is a standing refutation of this exact design for
+a sibling anchor: *"⚠️ ADDING A PAIR IS NOT A ONE-LINER. A vCenter CA pair was designed and REFUTED
+2026-08-24"*, naming four obligations (call its `*_ca_default` at **both** entry points, keep it out
+of the blocking path, extend the B166 wiring gate, and the ALL-MATCH token). The Done-when discharges
+**none**. `test-ca-staleness-check.sh:212` even pre-registers the case: *"If a THIRD pair whose var
+ships COMMENTED ever lands, give it its own arm here."* `ARGOCD_CA_FILE` ships commented
+(`.env.example:503`) — it **is** that third pair.
+
+**B — "WARN-only under `CA_STATUS_STRICT`" covers 1 of 6 stale paths.** MEASURED: six
+`stale=$((stale + 1))` sites; **only `:525` is inside the STRICT guard**. The five verdict arms —
+`rc=1` (:552), **`rc=3` (:563)**, `rc=4` (:566), `rc=5` (:568), `*` (:570) — increment
+unconditionally. So the design fixes the case a *previous* round flagged and leaves the **measured**
+one fully blocking — and it is a no-op in `make ca-status`, which never sets STRICT.
+
+**C — "put it in `argocd-preflight` instead" is refuted by the Makefile.** `Makefile:804`:
+`preflight: … lab-preflight psa-check argocd-preflight`, and `23-argocd-preflight.sh:339` exits 1.
+Moving it there does not move it out of the blocking path; only making it a `note`/`warn` does.
+
+**Why blocking is disqualifying, measured.** An ArgoCD-shaped self-signed leaf (`O = Argo CD`, DNS
+SANs only, no IP SAN — the shape this lab actually serves) probed at an **IP** endpoint returns
+**rc=3** -> `stale++` (:563, unguarded) -> `ca_status_report` -> `24-lab-preflight.sh:259-260`
+`problems += _stale` -> `:271 exit "$problems"` -> `Makefile:804 preflight` -> `Makefile:1072`
+`install-all: preflight …` as **prereq 1 of 12**, while `gitops` — the only ArgoCD consumer — is
+prereq 11. And our own tooling writes that IP: `02-env.sh:164` and `09-argocd-address.sh:280` both
+`env_set ARGOCD_SERVER "$ip"`. So the blocking state is the DOCUMENTED path, not an exotic one.
+
+**And its remedy is an OPEN row.** The rc=3 text says *"use the DNS name the certificate was issued
+for, not an IP"* — which needs an A record, which **B486 exists to make a documented step**.
+`23-argocd-preflight.sh:295` states the governing rule verbatim: *"A PREFLIGHT MAY ONLY BLOCK ON WHAT
+THE OPERATOR CAN FIX RIGHT NOW"* — written after this identical shape shipped once.
+
+**D — PREFERRED: an ADVISORY ArgoCD CA line, OUTSIDE `pairs=`.** It must touch none of the three
+shared quantities — not `stale` (gates `install-all`), not `CA_STATUS_CHECKED`, not
+`CA_STATUS_MATCHED` (both runbooks pin `**Expect:** CA-STATUS: ALL-MATCH`, `scenario-1.md:788`,
+`scenario-2.md:508`). Print the same rc-derived diagnosis as a `note`, then `return 0`. Calling that
+"a `pairs=` entry" is what makes the one-liner look safe: `pairs=` is welded to a blocking exit code
+**and** to a walk-pinned token; ArgoCD needs neither.
+
+**SEQUENCING: do not land D until B486 lands.** Until then rc=3's remedy is unactionable, so advisory
+is the only honest register.
+
+**RIGHT-SIZE IT.** `ARGOCD_CA_FILE` has **zero production writers** (only test fixtures and a
+`walk-doc.sh` comment), so the pair does not build in the KinD e2e (`SKIP_DOTENV=1`), in the
+scenario-1 walk, or in the scenario-2 walk — it helps only hand-configured operators, and it gets
+**no regression test on any automated path**. Real (B551 was one such operator), but it is not "the
+report now covers ArgoCD as it covers Harbor."
+
+**⚠️ THE ROW ABOVE HAS DRIFTED — 5 of its 8 citations are stale, and one changed BEHAVIOUR.**
+`argocd_tls_opts` is at **`os.sh:2052`**, not `1895-1907` (+157), and its cell (*"nothing — returns 0
+in both cases"*) is **no longer true**: it now emits a detailed `log_warn` on set-but-missing (citing
+B553). It still `return 0`, so the reportability gap is real but **narrower** than the table claims.
+Also `tls.sh:461-462`->**482-483**, `488-497`->**511-520**, `539-542`->**560-563**,
+`argocd.sh:384-390`->**403**.
+
+**RED-PROOF D must produce** (behavioural, per `test-ca-staleness-check.sh:239-271` — count pairs
+EXAMINED, never a pair count, since `:215` records that a count "passes over a pair that never
+builds"): (1) coverage — set + a name the cert carries -> the line appears; mutate the block out ->
+it disappears; (2) **the decisive one** — set + an **IP** and a cert with no IP SAN -> the diagnosis
+prints **and** `ca_status_report` returns **0** and `make lab-preflight` exits **0**, asserting the
+specific message, not merely rc!=0; (3) `make ca-status` still prints `CA-STATUS: ALL-MATCH`;
+(4) STRICT + set-but-unfetched -> `make preflight` exits 0; (5) a stale **Harbor** CA still
+`stale++` and still fails `preflight`.
+
+**RESIDUAL:** rc=3 was measured at ONE operating point (one synthetic RSA-2048 cert, one OpenSSL,
+`openssl s_server`); the live `argocd-server` was not probed because the Supervisor token is expired
+and SSO locks out after 3 attempts. Whether rc=1 or rc=3 fires for a self-signed **leaf** is
+immaterial — both `stale++`, unguarded.
 
 ## B551 — ⛔ MY OWN REMEDIATION BROKE THE LAB, and the repo's own text prescribed it
 
@@ -8596,3 +8667,205 @@ emitter scans `$rows` and is blind to `$_lab_rows`); the ArgoCD cell's "see the 
 to *Harbor's* note; and `kube_token_expiry` had **zero** tests, so all four fixes were unguarded —
 `scripts/test-kube-token-expiry.sh` now pins 17 cases, each a measured defect from one of the rounds
 rather than a hypothetical, RED-proven by three separate mutations.
+
+## ✅ B714 — SHIPPED 2026-09-09: `make harbor-admin-password` SILENTLY DOWNGRADED a robot credential to full admin
+
+Three adversary rounds on `make creds`' operator-facing claims; this one is not about prose.
+
+`creds.sh` prints, to any operator whose `HARBOR_USERNAME` is a robot: *"it either leaves the working
+robot credential alone and exits 0, or refuses outright rather than downgrade a least-privilege
+credential to full admin."* **There was a third branch.**
+
+`28-harbor-admin-password.sh:78` was the file's **only** `harbor_username_is_robot` call, and it sat
+inside `if ! is_placeholder "${HARBOR_PASSWORD:-}"` (:44). **MEASURED:** `is_placeholder ''` returns
+**TRUE** — `''` is the FIRST pattern in its case (`lib/os.sh:1204`). So:
+
+    HARBOR_USERNAME=robot$vks-cicd  +  HARBOR_PASSWORD=   ->  every robot check SKIPPED
+                                                          ->  env_publish_all … HARBOR_USERNAME admin
+
+— the exact harm the die() message promises cannot happen, with no second net.
+
+**The state is DOCUMENTED, not exotic.** That file's own `:250-252` records that a mid-pair abort
+*"leaves the overlay holding HALF a credential pair, so the documented recovery
+(`make harbor-admin-password`) has the same structure"*. The operator most likely to run the command
+is the one most likely to be in the state that bypassed the guard.
+
+**FIXED** by hoisting a robot guard ABOVE the placeholder test. It cannot reuse the existing message
+(`early_verdict` is computed inside the block) and does not need to: with no password there is no
+verdict, and that absence is itself the reason to refuse.
+
+**RED-PROVEN** — `scripts/test-harbor-admin-robot-guard.sh`, 10 cases. Removing the guard fails
+exactly the 4 refusal assertions while BOTH controls stay green (a non-robot `admin` + empty password
+must still proceed — that is the command's entire purpose). ⚠️ The three `NO admin published`
+assertions **stayed green under the mutation** and are labelled in the file as NOT discriminating
+offline: without a reachable Supervisor the script dies before `env_publish_all`. They are a
+containment tripwire, not proof of containment.
+
+## 🔴 B715 — `make env-validate` EXITS 0 over the robot credential it is named as the way to check (HTTP 412) — and `lib/harbor.sh`'s 403 claim is STALE
+
+**SETTLED ON THE LIVE LAB 2026-09-09**, with the repo's own probe:
+
+    HARBOR_USERNAME is a robot? YES
+    /api/v2.0/users/current  -> HTTP 412
+    harbor_auth_verdict      -> unchecked:the probe did not complete
+
+412 falls to the `*` arm (`lib/harbor.sh:262`, `02-env.sh:527`), which does **not** increment `errs`,
+so `02-env.sh:620` exits **0**. `creds.sh:794` names `make env-validate` as *"To re-check
+credentials"*, and on the documented walk `HARBOR_USERNAME` **is** a robot by then (scenario-1 Step 9
+mints it at :865; Step 11 runs env-validate at :972).
+
+**A CONTRADICTION IN-TREE, now resolved by measurement.** `lib/harbor.sh:180-185` asserts *"403 IS A
+PASS … a PROJECT-SCOPED ROBOT … still gets 403 from /users/current"*, and **two tests pin 403**
+(`test-harbor-auth-report.sh:95,:160`). `creds.sh:1700-1703` records **412** from the live lab with
+controls. The live lab says **412**. So the harbor.sh comment and both tests describe an operating
+point that does not occur here, and the one that does is **untested**. ⚠️ An implementation round corrected my own published
+command: `grep -rn '412' scripts/test-*` returns **one** hit, a COMMENT at
+`test-creds-show.sh:707` — so "no test EXERCISES 412" is still true, but the row had shipped a
+reproducible command with a wrong stated result. It also over-claimed novelty: the 412 fact was
+already in-tree from **2026-09-06** in four places, and `23-mirror-verify.sh:128` already records
+the exact consequence. What is new here is only that CLAUDE.md said something false about it. The
+corpus still excludes the real case, so its green is evidence about a subset.
+
+**NOT FIXED — it needs an idea round**, because "is 412 authenticated?" is a design question, not a
+typo. The message (*"get current user not available for security context: robot"*) reads as Harbor
+RECOGNISING the principal, i.e. authenticated-but-wrong-endpoint, which is the same class as the
+existing 403 arm. But the honest alternative is a hard ERROR saying only `make mirror` discriminates.
+Do not pick one without a round; and fix all four homes together (`lib/harbor.sh:180-185`, `:398`,
+`creds.sh:1700`, the two tests) or they drift again.
+
+## 🔴 B716 — `check-env-coverage` PASS 2 is VACUOUS over 64% of its corpus, and reports OK
+
+Its own header says a wider window *"would pick up a NEIGHBOURING block's marker and the gate would
+never fire — which is exactly what it did on its first version"*. **It regressed to v1 behaviour.**
+The awk resets the block only on a NON-comment line, and `.env.example` is an unbroken run of `#`
+lines, so a variable's "own block" absorbs its neighbours'.
+
+**MEASURED INDEPENDENTLY (not taken from the round):** 241 commented slots examined ·
+**155/241 (64%)** have a window >20 lines · **102/241 (42%)** >50 · **max 247** lines
+(`VCENTER_CA_SHA256`, `.env.example:1845`) · under a per-variable window **57/241 (23%)** would fail
+today, and the gate reports **0**. `VKS_PASSWORD` (`.env.example:1923`) has **zero** own-block comment
+lines — the line above it is `# ARGOCD_CR_APPLY_INTERVAL=10` — and no marker of its own.
+
+**Done-when:** bound the window at the previous variable slot as well
+(`if ($0 ~ /^#[[:space:]]*[A-Z][A-Z0-9_]{2,}=/) { b = "" }`), RED-prove that `VKS_PASSWORD` then
+FAILS, and **TRIAGE the 57** — some legitimately inherit a `how:` from a SECTION header, which is an
+argument for allowing a section-scoped marker EXPLICITLY rather than by accident. Also drop the bare
+word `password` from `ACQ_MARKERS`: it matches any variable whose own NAME contains it.
+⚠️ Tightening a gate is a control change — idea round first.
+
+## ✅ B717 — SHIPPED 2026-09-09: the guest-node-SSH ENDPOINT arm bypassed `_kube_classify`, so a known cause was discarded
+
+**TWO INDEPENDENT ROUNDS converged on this**, with the same evidence. `creds.sh:2231-2234` classifies
+the node-address failure with a hand-rolled TWO-way `grep -qi 'forbidden'` — while its two SIBLING
+queries in the same block (`:2133`, `:2176`) call `_kube_classify`, whose **119** arm
+(`:1375-1377`) renders `<not read — Supervisor token EXPIRED …>`.
+
+On this run `_sup_timeout` returned **119 without dialling** and wrote `NOT ATTEMPTED: the Supervisor
+token EXPIRED at 2026-09-09T15:53Z` into the very stderr `:2233` greps — so the report **held the
+cause and printed `<could not read node addresses>` instead**. Worse, `:2307` prints *"The guest node
+SSH row is read live"* **unconditionally**, so the operator reads an ATTEMPT that provably did not
+happen and goes hunting node networking or RBAC.
+
+`_kube_classify`'s own comment says falling through to the unclassified arm *"is strictly worse … I
+measured that regression and it is why this arm exists"* — and this line reproduces it 30 lines away.
+
+**SHIPPED.** Routed through `_kube_classify` (which supplies the SENTENCE; the column keeps a SHORT
+token, because the Endpoint width is a max over all rows and the full token is ~54 chars) and the
+"read live" line is now conditional. ⚠️ **The fix introduced a defect caught only by re-reading the
+whole output as an operator:** a second note put the ~370-char renewal recipe on screen THREE times
+in one report. It now collapses to "same cause as the line above" — and the first collapse did NOT
+fire, because the two states differ only in their LABEL. Compare the CAUSE, not the string. ⚠️ A round also flagged the CLASS: `_kube_classify` is called at `:1510`,
+`:1528`, `:2133`, `:2176` but not here, so any future `_sup_timeout`-wrapped probe inherits the
+defect — consider a gate asserting every such call routes through it.
+
+## ✅ B718 — SHIPPED 2026-09-09: three UNSCOPED operator-facing claims in `make creds` (all measured FALSE-as-written)
+
+Filed together because the fix is one pass over `creds.sh`'s prose and each was measured:
+
+1. **`:794` "To re-check credentials: make env-validate"** — `env_validate` (`02-env.sh:387-628`) has
+   **0** hits for `supervisor_kubeconfig` and **0** for `ARGOCD|VCENTER|VCF_CLI|VKS_PASSWORD`. It
+   cannot re-check any of the four `Lab access` rows, and it is silent about the credential the
+   report has just declared dead. `Makefile:367`'s help is accurate and narrow — **creds.sh is the
+   only surface that generalises**, so move creds.sh to the Makefile's wording, not the reverse.
+2. **`:792` "The Reachable column BELOW is the live answer"** — `Reachable` is a column header only
+   at `:1649`, the SERVICES table. The `Lab access` table has four columns and no such column, and
+   its vCenter/SSO rows are deliberately never probed (`:1933-1939`, correctly — SSO locks out after
+   3 binds). The reader scans down for a verdict on the Supervisor row and finds none.
+3. **the table has no LEGEND.** `Reachable` measures the ENDPOINT only — Harbor's probe
+   (`lib/harbor.sh:452-462`) sends no `-u`, no `-K`, no `-H`; ArgoCD's is a bare TCP connect — and the
+   Username/Password cells are **echoed from `.env`** (`creds.sh:450`, `:459`), not read from the
+   system. `creds.sh:918-924` states this exactly — **in a comment**; no printed line ever tells the
+   operator. Four credential-shaped columns beside a green fifth read as one verdict.
+
+**Also measured:** `scenario-1.md:1149` promises the SSH row *"shows the secret name it read … when
+it succeeds"* — structurally unreachable. `_ssh_sec` reaches output only via `_ssh_state`, which
+prints only under `[ -z "$_ssh_pw" ]` (`:2402`), i.e. FAILURE. `creds.sh:2190-2191` defends dropping
+the name from the Endpoint column by saying it *"already appears in the note under the table"* —
+false on the success path, the only path that comment is about.
+
+**Also measured, in an ALWAYS-LOADED file:** `CLAUDE.md:199` and `:528` say env-validate returns
+**rc=2**; `02-env.sh:620` is the only exit path and it is `exit 1`.
+
+## 🟡 B719 — the backlog is 1.46 MB and THREE rows are 15% of it — do NOT bulk-prune it
+
+Recorded during a cleanup pass, 2026-09-09, because the obvious remedy is the dangerous one.
+
+**MEASURED:** `BACKLOG.md` is **1,460,620 bytes / 8,803 lines**; 68 detail sections hold 446,291 of
+them. Three rows dominate: **B213 (86,209 B)**, **B501-original (70,409 B)**, **B537-original
+(59,438 B)** — **216 KB, ~15% of the file**. For scale, this file was split out of `CLAUDE.md`
+when it was **85 KB**; one row is now larger than that.
+
+**⛔ DO NOT PRUNE IT TO SHRINK IT.** `configuration.md` §"PRUNING a doc DELETES THE CORRECTION and
+KEEPS THE TEXT IT CORRECTED" is exactly this file's shape: the stale CLAIM reads as durable prose
+and survives, while the CORRECTION reads as dated history and gets cut — so the file stops
+contradicting itself and starts being uniformly wrong. Measured there at a **71%** cut. The three
+big rows here are `(original)` sections whose whole purpose is to preserve a refuted design so it is
+not rebuilt; they are the LAST thing to delete.
+
+**What is safe, if size ever becomes a real cost:** it is not auto-loaded (`CLAUDE.md` says so), so
+the cost is paid only by a session that opens it. If that changes, the honest move is to **split by
+era into `BACKLOG-archive.md`** — moving whole rows, corrections attached — never to trim within a
+row. **Done-when:** nothing, unless a measured cost appears. Filed so the next session does not
+"tidy" it.
+
+**A THIRD FINDING, recorded not fixed — DANGLING CITATIONS.** 30 of 252 distinct `B<nnn>` ids
+cited across `*.sh` and `*.md` resolve to **no row in either form**. Some are legitimately
+**cross-repo** (B428/B436/B453/B454 live in `nested-vsphere-lab`, as `CLAUDE.md` records), so a naive
+gate would false-RED on those; the rest are real rot. ⚠️ **And note the probe matters more than the
+number:** a first pass reported B700–B713 as dangling because it looked only for `## <emoji> B<n> —`
+headings and this file ALSO carries `| **B<n>** |` index rows. Any gate here must accept BOTH forms
+and exempt the cross-repo set, which is why it is a **row and not a one-liner**.
+
+**Also fixed in the same pass:** the always-loaded handoff listed **B563** as *"Untouched and open"*
+while its own PR table said #1185 shipped it and the row read `✅ closed 2026-09-08`. And five new
+rows used the minority trailing-emoji heading form, which a `^## <emoji> B` grep misses (76 rows use
+the leading form); normalised.
+
+## ✅ B720 — SHIPPED 2026-09-09: a DNS fault was reported to the operator as a TRUST problem
+
+An idea round **REFUTED** the obvious remedy — building a `make dns-node-check` target — and the
+refutation is the durable half: `vks-trust-probe` **already is** that design (PSA-compliant pod,
+`imagePullPolicy: Always`, verdict read from the EVENT not the phase, `trap` cleanup, plus two
+things the proposal omitted — it derives the image from a running workload and copies the
+`harbor-pull` secret, so it measures the CREDENTIALED path). A DNS-only pod is worse, not cheaper:
+default `dnsPolicy: ClusterFirst` resolves via a CoreDNS pod that may sit on ANOTHER NODE, and the
+only shell-capable mirrored image lives IN Harbor, so probing the name under test needs the name
+under test. And such a gate's RED is **not demonstrable in KinD** — `HARBOR_URL` there is a bare LB
+IP with containerd pinned to it, so there is no name to fail to resolve.
+
+**The shippable unit was the CLASSIFIER.** `lookup … no such host` matched `*x509*|*"Failed"*`, so
+the operator was told *"an x509 line is a TRUST problem"* for a fault that has nothing to do with
+trust. Arm order is asserted (x509 BEFORE the DNS arm — an x509 line proves the address resolved);
+`i/o timeout` is deliberately **out** of the DNS arm, since on `dial tcp <ip>:443` it is routing.
+
+Two more from the same round: an **RBAC denial was reported as a timing problem** (a tenant's
+`ensure_namespace` failure was swallowed and surfaced as *"inconclusive — no pull event within the
+wait budget"*), and **that fix armed a footgun** — telling a tenant to pass `PROBE_NS` pointed
+`_cleanup` at a namespace THEY own, which it deleted unconditionally. Ownership is now recorded at
+assignment time.
+
+RED-proven by three separate mutations (`scripts/test-vks-trust-probe-classify.sh`, 20 cases), each
+failing exactly its own cases. ⚠️ One of my assertions was **vacuous** as first written and is
+recorded here so the shape is recognised: `NOT 'inconclusive'` stayed green under the mutation
+because the fixture pulled successfully; an EMPTY event list is the only fixture in which the old
+code prints the misleading line.

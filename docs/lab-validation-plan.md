@@ -489,7 +489,9 @@ make vks-trust-probe
 
 It compares the fingerprint AND forces a real `imagePullPolicy: Always` pull, and it states in its own output
 what it does **not** prove: a green cannot distinguish node CA-trust from containerd configured **insecure**
-for this registry — both produce an identical successful pull. **That distinction is the one thing here still
+for this registry — both produce an identical successful pull — **and it is not a DNS assertion either**, since
+`HARBOR_URL` may be a bare IP and a node resolver may answer from cache. Its DNS verdict is a FAILURE
+classifier: it names a `no such host` as DNS rather than mislabelling it a trust problem. **That distinction is the one thing here still
 worth lab time**, and it needs node access (`VCF_CLI_VSPHERE_PASSWORD`, or the `<cluster>-ssh-password`
 secret in the Supervisor's vSphere Namespace).
 

@@ -147,7 +147,8 @@ is unavailable to the audience that needs it most, and telling a tenant to run o
 
 **A TENANT WHOSE CREDENTIAL IS STALE CANNOT RECOVER IT — they must REQUEST a new one.** There is no
 self-service path, and no target will invent one. `make env-validate` is how they learn it is stale
-(rc=2, HTTP 401); the fix is a conversation with the platform team, not a command.
+(rc=1, HTTP 401 — but see the robot caveat below); the fix is a conversation with the platform
+team, not a command.
 
 ⚠️ **THE TABLE IS A PROHIBITION, NOT A LOOKUP LIST — and its EDGE is where every violation happens
 (BLOCKING).** The rule above reads as "here are the targets for these questions", so it is obeyed for
@@ -196,7 +197,16 @@ wrong every time. The credential was DEAD (`UNAUTHORIZED ... action: push`):
 | `crane auth login` | "logged in" | it only **writes `~/.docker/config.json`** — it validates nothing |
 | **`crane copy` (the real push)** | **UNAUTHORIZED** | the only one that discriminates |
 
-`make env-validate` gets it right in one command (rc=2, `Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)`)
+⚠️ **AND `make env-validate` IS A FIFTH NON-DISCRIMINATOR WHEN THE CREDENTIAL IS A ROBOT — measured
+on the live lab 2026-09-09.** `/api/v2.0/users/current` answers a `robot$…` with **HTTP 412**
+(*"get current user not available for security context: robot"*), which falls to the `*` arm →
+verdict `unchecked` → `errs` is NOT incremented → `02-env.sh:620` **exits 0**. So the sentence above
+("`make env-validate` gets it right in one command") holds for an **admin** credential and NOT for
+the robot the pipeline actually runs as. `lib/harbor.sh:180-185` still claims a robot gets **403**
+and two tests pin that; the live lab says 412 and **no test covers 412**. Filed as **B715** — do not
+"fix" it by widening an arm without a round.
+
+`make env-validate` gets it right in one command **for an ADMIN credential** (rc=1, `Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)`)
 because `lib/harbor.sh`'s `harbor_auth_report` already solved this — its own test asserts **401 fails,
 403 PASSES**. Use it. `GET /api/v2.0/users/current` is the endpoint that actually requires auth.
 
@@ -525,7 +535,8 @@ KinD stand-in is a convenience. Design for the tenant first.
    Telling a tenant to run one is a dead end dressed as an answer. See RULE ZERO-A0's table, which
    marks every target tenant-safe or SUPERVISOR-ONLY.
 2. **A tenant whose credential is stale CANNOT recover it.** There is no self-service path and no
-   target will invent one. `make env-validate` is how they LEARN it is stale (rc=2, HTTP 401); the
+   target will invent one. `make env-validate` is how they LEARN it is stale (rc=1, HTTP 401 — for an
+   ADMIN credential; it CANNOT judge a robot, see B715); the
    fix is a REQUEST to the platform team, not a command. Any "sync/recover" mechanism must say so
    plainly rather than fail obscurely.
 3. **Anything that needs more than `.env` must be a REQUEST, and must be named as one** — a Harbor
@@ -1123,11 +1134,14 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 - **B561's printer** and **B564 Stage 2** — both scoped, both explicitly gated on evidence that has
   not arrived (Stage 2 only if the lag recurs; on current incidence you would be building against
   one day's GitHub weather).
-- Untouched and open, in rough order of bite: **B563** (no running-image provenance assertion for our
-  own workloads on ANY path — the sibling of the breach fixed today), **B484** (a fail-open air-gap
+- Untouched and open, in rough order of bite: **B484** (a fail-open air-gap
   check where Forbidden reads as absent), **B498** (Kaniko is ARCHIVED and the maintained fork
   publishes no image), **B480** (the two Istio install paths silently ADOPT each other's objects),
   **B565**, **B523**.
+  ⚠️ **B563 was listed here and is CLOSED** — this section's own PR table two blocks up says #1185
+  shipped it, and the row reads `✅ closed 2026-09-08`. A handoff that contradicts both itself and
+  the backlog is the stale-status class this file warns about; corrected 2026-09-09. Verify a row
+  before briefing from it — the status is a CLAIM.
   ⚠️ B532 and B536 are **SHIPPED**, not pending — I nearly listed them here off memory; the row
   headings say so.
 
