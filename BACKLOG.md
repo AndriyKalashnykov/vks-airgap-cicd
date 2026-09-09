@@ -1822,10 +1822,26 @@ counted occurrences, not consumers.
 - **`ARGOCD_HOST` is absent from BOTH selector lists** (`os.sh:713` and `check-env-clobber.sh:106`)
   while 14 siblings are present, so a per-run override loses to an uncommented `.env` value. Latent
   today only because it ships commented.
+- **A PRE-EXISTING false provenance claim on `main`, independent of everything above.** The shipped
+  write branch logs *"correcting ARGOCD_SERVER `<value>` -> `<ip>` (we wrote the previous value)"*
+  whenever `ARGOCD_SERVER` is non-empty and differs from the IP. On the write branch that includes
+  the **`.env.example` placeholder**, which we did NOT write — the repo ships it. Honest form is two
+  branches: *replacing the placeholder* vs *correcting a value we wrote*. RULE ZERO-V, one branch to
+  fix, and it is on `main` today.
 - **`_render` in `test-argocd-address-classify.sh` does not neutralise `ARGOCD_HOST`.** `SKIP_DOTENV=1`
   blocks `.env` but not an exported shell variable, and the operator most likely to have it exported
   is the one following `09`'s own remedy. Add `ARGOCD_HOST=` to the fixture prefix regardless of what
   happens to this row.
+
+⚠️ **If this row is ever re-opened, two fix SHAPES were already measured-correct and one was
+measured-WRONG — do not re-derive them.** A `_shown` variable (the address in effect after the
+guard) driving the display/classifier, with `_eff` left as the write-DECISION, is correct in both
+the name and IP-literal cells. Reassigning `_eff` itself is **wrong**: `:367` is nested inside the
+`:337` IP arm, so it only misfires when `ARGOCD_HOST` holds an IP literal — a cell nothing
+validates against. And ownership CANNOT be derived from `argocd_effective_addr`: called on all four
+write-branch states it returns the identical string, so its return carries zero bits about which
+case you are in. A sibling predicate in `lib/argocd.sh` is the right home, not a second copy of one
+clause in `09`.
 
 ⚠️ **An idea round (2026-09-08) says: do NOT close this, and do NOT implement its Done-when.**
 
