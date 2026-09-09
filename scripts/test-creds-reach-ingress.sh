@@ -184,20 +184,41 @@ ck "dead endpoint -> silent" \
 # error page; curl --resolve to .134: 200 x9, each app serving its own marker. The LAB was healthy
 # and the REPORT was wrong.
 #
-# `localhost` resolves to 127.0.0.1 everywhere, so pointing _ing elsewhere is a genuine stale
-# condition needing no stub and no network.
-# ⚠️ REAL RESOLVER, stub OFF PATH — like the DNS case below. The stub is `exit 0` with NO OUTPUT,
-# which is deliberate (it isolates the route arm), but this case needs an actual ADDRESS to compare.
-# Under the stub it correctly falls through to the route probe, which is the right behaviour and the
-# wrong test.
+# ⚠️ "`localhost` resolves to 127.0.0.1 everywhere" IS FALSE, and these two cases used to rely on it
+# via the REAL resolver. MEASURED on a GitHub runner: `localhost` comes back IPv6, so comparing it to
+# `_ing=127.0.0.1` reported `stale DNS` and the CONTROL failed -- green on this box, red there, for
+# weeks. Worse, on an IPv6-only answer `stale DNS` is arguably CORRECT, so the product was not even
+# wrong; the test's assumption about the host was.
+#
+# They now use a DETERMINISTIC stub. The default stub two blocks up is `exit 0` with NO OUTPUT (it
+# isolates the route arm), which is why the real resolver was reached for -- this one PRINTS an
+# address, so the arm can be exercised without asking the host anything.
+#
+# ⚠️ WHAT THIS GREEN NO LONGER LICENSES, said plainly because a stub always costs something: NO case
+# now asserts that REAL `getent hosts` output parses to a bare address. The two comparing cases use a
+# synthetic stub; line ~229 runs the real parse but never asserts on it (a name-shaped `_ing` skips
+# the compare); the unresolvable case produces no output at all. If real getent output ever parsed to
+# something other than a bare address, creds.sh would invent `stale DNS` on a healthy operator box
+# and nothing here would go red. That coverage WAS the environment-dependent thing, so the trade is
+# right -- but it is a trade, not a free win.
+#
+# ⚠️ AND TWO CASES BELOW REMAIN ENVIRONMENT-DEPENDENT BY NECESSITY (~229, ~233): both need the
+# resolver to FAIL on an RFC-reserved TLD (.test / .invalid), which a printing stub cannot express.
+# A wildcard resolver, a captive portal or a search domain would make them resolve and both would
+# fail. Accepted and named rather than hidden.
+mkdir -p "$T/bin4"
+# shellcheck disable=SC2016  # single quotes REQUIRED: "$2" is the STUB's positional, not ours.
+printf '#!/bin/sh\nprintf "127.0.0.1       %%s\\n" "$2"\n' > "$T/bin4/getent"
+chmod +x "$T/bin4/getent"
 ck "resolves to a DIFFERENT address than the ingress -> stale DNS" \
-   "$(PATH="$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=203.0.113.9 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "stale DNS"
+   "$(PATH="$T/bin4:$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=203.0.113.9 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "stale DNS"
 # THE CONTROL. If a MATCHING address also read `stale DNS`, the check would flag every healthy host
 # and the state would be worthless — a verdict that cannot be false is not a verdict.
 ck "resolves to the ingress itself -> NOT stale (falls through to the route probe)" \
-   "$(PATH="$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=127.0.0.1 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "silent"
+   "$(PATH="$T/bin4:$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=127.0.0.1 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "silent"
 
-# ⚠️ THE CASE ABOVE USES THE REAL RESOLVER, AND THAT MADE IT ENVIRONMENT-DEPENDENT: it passed on
+# ⚠️ THE CASE ABOVE **USED** THE REAL RESOLVER (until this change), AND THAT MADE IT
+# ENVIRONMENT-DEPENDENT: it passed on
 # this box and FAILED on a GitHub runner, where `localhost` resolves `::1` FIRST. It was invisible
 # for weeks because the fast set does not run per-PR (B571) and the weekly was already red for an
 # unrelated reason (B573) -- two layers of masking over a real operator-facing bug.
