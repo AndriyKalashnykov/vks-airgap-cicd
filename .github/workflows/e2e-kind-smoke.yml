@@ -81,7 +81,7 @@ jobs:
           crane version
 
       # Create the KinD cluster + cloud-provider-kind LoadBalancer (05-kind-up.sh).
-      # Writes the discovered KUBECONFIG/context to the gitignored .env.kind overlay.
+      # Writes the discovered KUBECONFIG/context to the gitignored .env.state overlay.
       - name: make kind-up
         run: make kind-up
 

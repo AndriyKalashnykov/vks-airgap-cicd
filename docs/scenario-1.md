@@ -478,7 +478,7 @@ A non-zero exit from `make argocd-address` says which of the two things is missi
 
 | key | default | how to get the value |
 |---|---|---|
-| `ARGOCD_SERVER` | *(unset — probes skip)* | the `argocd-server` EXTERNAL-IP. Display and probes only. |
+| `ARGOCD_SERVER` | **written for you by `make argocd-address`** (step 5) — the `argocd-server` LB IP | Normally leave it alone. It is **not** display-only: the `argocd login` above, `make fetch-argocd-ca`, and `make gitops`'s `api` path all dial it. Override it only with a **name the certificate carries** — an IP cannot verify (DNS SANs only, no IP SAN, as noted above), which is why that login needs `--insecure`. |
 | `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | what `make fetch-supervisor-ca` wrote. Set it only if you moved it. |
 
 </details>

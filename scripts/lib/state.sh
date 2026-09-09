@@ -159,6 +159,12 @@ state_archive() {
 # nothing to contradict: the overlay IS how we learn which cluster to talk to.
 state_check() {
   local f; f="$(state_file)"
+  # ⚠️ RESET FIRST, not merely set below. This flag is EXPORTED, so a stale 1 inherited from a
+  # parent process would make a child refuse a legacy sink it is entitled to read. It is
+  # MISMATCH-specific on purpose: `return 1` below also means "file absent", and refusing the
+  # legacy sink in THAT case destroys the back-compat path where .env.kind holds the only copy
+  # of a generated password (measured).
+  export _VKS_STATE_MISMATCH=0
   [ -f "$f" ] || return 1
 
   local stamped_server
