@@ -20,6 +20,11 @@
 #     containerd config, which needs node access this probe deliberately does not take.
 #   - A cached image does not weaken it: `Always` still re-resolves the manifest over TLS. But the
 #     reported duration WILL be short in that case, so do not read speed as "no pull happened".
+#   - A green does NOT prove the node resolved a NAME. On the KinD stand-in there is no name to
+#     resolve at all: `state_set HARBOR_URL "$LB_IP"` (06-install-harbor.sh:304) stores a bare IP,
+#     and each node's containerd is pinned to it (`server = "https://<ip>"`, :256). On a real lab a
+#     node resolver may also answer from cache. What a green proves is that the node REACHED
+#     Harbor. The DNS verdict below is therefore a FAILURE classifier, never a success assertion.
 #
 # It NEVER authenticates to vCenter. vSphere SSO locks the account permanently after 3 failed binds
 # (docs/matrix-standing-rules.md F.2), and nothing here is worth that.
@@ -35,10 +40,18 @@ load_env
 HARBOR_CA_FILE="${HARBOR_CA_FILE:-./secrets/harbor-ca.crt}"
 # The image is DERIVED from a running workload, not hardcoded: the point is to pull something this
 # cluster genuinely has in Harbor. An enumerated tag would rot on the next pipeline run.
-PROBE_NS="${PROBE_NS:-vks-trust-probe-$$}"
+# WHOSE NAMESPACE IS IT? A tenant is told below to re-run with PROBE_NS=<one they own>, and that
+# advice ARMS the cleanup: `_cleanup` deletes whatever PROBE_NS names. So record, at assignment
+# time, whether WE invented it -- an operator-supplied namespace is never deleted, however the run
+# ends. Deriving this later from the name cannot work (PROBE_NS=vks-trust-probe-mine is legal).
+if [ -n "${PROBE_NS:-}" ]; then _ns_operator=1; else _ns_operator=0; PROBE_NS="vks-trust-probe-$$"; fi
 PROBE_IMAGE="${PROBE_IMAGE:-}"
 
-_cleanup() { [ -n "${_ns_made:-}" ] && kubectl delete ns "$PROBE_NS" --wait=false >/dev/null 2>&1; }
+_cleanup() {
+  [ "${_ns_operator}" = 0 ] && [ -n "${_ns_made:-}" ] \
+    && kubectl delete ns "$PROBE_NS" --wait=false >/dev/null 2>&1
+  return 0   # a trap must never decide the script's exit status
+}
 trap _cleanup EXIT
 
 _fp() { openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//' | tr -d ': ' | tr '[:upper:]' '[:lower:]'; }
@@ -100,7 +113,17 @@ if [ -z "$PROBE_IMAGE" ]; then
 fi
 echo "     image: ${PROBE_IMAGE}  (from namespace ${_probe_src_ns:-?})"
 
-ensure_namespace "$PROBE_NS" >/dev/null 2>&1 && _ns_made=1
+# A tenant typically cannot create a namespace. The failure used to be swallowed: every later
+# `kubectl apply -n "$PROBE_NS"` failed silently and the verdict was "inconclusive - no pull event
+# was recorded within the wait budget" -- an RBAC DENIAL reported as a TIMING problem. The skip is
+# legitimate because the fallback is real and named; a skip that hides is not.
+if ! ensure_namespace "$PROBE_NS" >/dev/null 2>&1; then
+  echo "     SKIP - could not create namespace ${PROBE_NS}."
+  echo "            On a tenant kubeconfig this is RBAC, not a lab fault. Re-run against a"
+  echo "            namespace you already own:  make vks-trust-probe PROBE_NS=<your-namespace>"
+  exit 0
+fi
+[ "${_ns_operator}" = 0 ] && _ns_made=1
 # VKS enforces PSA `restricted` by default, so the probe pod is restricted-COMPLIANT rather than
 # relabelling the namespace. A probe that needs the policy weakened to run is measuring the wrong box.
 kubectl -n "${_probe_src_ns}" get secret harbor-pull -o yaml 2>/dev/null \
@@ -132,10 +155,32 @@ done
 # event is what names the registry round-trip.
 _ev="$(kubectl -n "$PROBE_NS" get events --sort-by=.lastTimestamp 2>/dev/null | grep -iE 'pulled|failed|x509' | tail -3 || true)"
 printf '%s\n' "$_ev" | sed 's/^/     /'
+# ARM ORDER IS LOAD-BEARING, and it is not alphabetical taste:
+#   - x509 BEFORE the DNS arm. An x509 line proves the address RESOLVED and TLS was attempted, so
+#     it is the more informative verdict even when a stale `no such host` shares the 3-event window.
+#   - both BEFORE the generic `*"Failed"*`, which used to swallow them: a kubelet DNS failure reads
+#     `Failed to pull image "...": ... lookup <host> on 10.96.0.10:53: no such host`, so it matched
+#     `*"Failed"*` and the operator was told "an x509 line is a TRUST problem" for a DNS fault.
+# `i/o timeout` is deliberately NOT in the DNS arm: on `dial tcp <ip>:443` it is routing, not
+# resolution, and naming it DNS would re-commit the defect. `: lookup ` is the Go resolver's own
+# prefix, so a resolver TIMEOUT still lands here rather than in the generic arm.
+_harbor_name="$(registry_hostport "${HARBOR_URL:-}")"; _harbor_name="${_harbor_name%:*}"
 case "$_ev" in
-  *"Successfully pulled"*) echo "     => the node completed a TLS handshake with Harbor and pulled. Node<->Harbor WORKS." ;;
-  *x509*|*"Failed"*)       echo "     => the pull FAILED. Read the event above: an x509 line is a TRUST problem." ;;
-  *)                       echo "     => inconclusive - no pull event was recorded within the wait budget." ;;
+  *"Successfully pulled"*)
+    echo "     => the node reached Harbor, completed TLS and pulled. Node<->Harbor WORKS."
+    echo "        (This is NOT a DNS assertion - see this script's header.)" ;;
+  *x509*)
+    echo "     => the pull FAILED on TRUST (x509). The address RESOLVED and TLS was attempted, so"
+    echo "        this is a CA problem, not DNS. Read the event above." ;;
+  *"no such host"*|*"server misbehaving"*|*": lookup "*)
+    echo "     => the node could NOT RESOLVE ${_harbor_name:-the Harbor host}. This is DNS, not trust."
+    echo "        The A record is published where the JUMP BOX resolves it but NOT where the guest"
+    echo "        NODES do - they are different resolvers, and that asymmetry is the whole failure."
+    echo "        Run 'make show-dns-records' and publish the record to BOTH networks." ;;
+  *"Failed"*)
+    echo "     => the pull FAILED. Read the event above for the cause." ;;
+  *)
+    echo "     => inconclusive - no pull event was recorded within the wait budget." ;;
 esac
 case "$_ev" in
   *FailedToRetrieveImagePullSecret*)
