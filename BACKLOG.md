@@ -357,7 +357,7 @@ Fixed both ends: `e2e-kind` names `INGRESS_CONTROLLER=istio` explicitly, and the
 mode is now a parameter; the two skip arms had **zero** coverage), with a positive control that a
 clean tree emits `ASSERTED` — without it the token is decoration.
 
-## 🔴 B563 — NO running-image provenance assertion exists for our own WORKLOADS, on any path 🔴 open
+## ✅ B563 — a running-image provenance assertion now exists for our own WORKLOADS ✅ closed 2026-09-08
 
 From B482's round, and it is wider than B482. `grep -rl containerStatuses` finds only
 `96-verify-gateway-image.sh`, `99-verify.sh`, `vks-trust-probe.sh`, `lib/istio.sh` and their test.
@@ -388,6 +388,26 @@ The round answered the design question and the answer is NARROWER than the row i
   un-gated by a typo. That is the pattern for "images we deliberately do not own".
 - **Wire it after `verify`, NOT after `install-all`.** After install-all the workload pods may not
   have been created yet, so the assertion would measure an empty set and pass vacuously.
+
+### ✅ SHIPPED #1185 — `scripts/97-verify-workload-images.sh`, wired, tested, and VERIFIED-not-assumed
+
+The row still said `🔴 open` after the work landed. Checked against the code on `1201d2c`, not
+against the row:
+
+| the round prescribed | what shipped |
+|---|---|
+| scope to `ci` + `tekton-pipelines` + `tekton-pipelines-resolvers` | ✅ — **plus** `gitea`, `headlamp`, `traefik`, with the vacuity argument written into the script's header: those are **mirrored third-party** images, the same class as tekton, and `headlamp` is a second instance of the exact shape the gate exists for |
+| reuse `96-verify-gateway-image.sh`'s two-tier `.image` / `.imageID` predicate | ✅ — factored into `scripts/lib/podimages.sh` and **both** scripts call it. Doing so found the SAME lookalike-registry false-pass already shipped in 96 |
+| reuse `49-psa-check.sh`'s `NS_SPEC` shape with an ownership column | ✅ — `NS_SPEC`, every row `\|ours`, `die` on an unrecognised value |
+| wire it **after `verify`**, not after `install-all` | ✅ — `Makefile:989`, in the e2e chain, `… verify verify-workload-images verify-ingress` |
+
+Also has a machine-readable `workload-image-verdict:` token, an `INCOMPLETE` arm, and an **offline**
+test over pod-JSON fixtures: `make test-workload-images` → **15 passed, 0 failed** (measured on
+`1201d2c`, so this is not a claim about the day it merged).
+
+⚠️ **The row's own caveat still stands and is NOT closed by this**: kaniko's `.image` is the
+DESTINATION, so a run-time pod-image check is structurally blind to a public `FROM`. That half is
+`check-selfbuilt` + the `hostscan` gate ([[B568]]).
 
 ⚠️ A caveat inherited from [[B482]]'s round and worth repeating here: kaniko's `.image` is the
 DESTINATION, not the base — so a run-time pod-image check is **structurally blind to a public
