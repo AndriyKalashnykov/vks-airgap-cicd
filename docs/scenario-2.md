@@ -375,28 +375,39 @@ deploys nothing while reporting success**:
 
 Now wire the repo and run the pipeline.
 
-## 0c. Remove any stale KinD overlay
+## 0c. Check whose state overlay this box is carrying
 
-If this box has ever run the local KinD flow, it left a state overlay behind. That file is sourced
-*after* `.env`, so it WINS — a leftover one would silently redirect everything you are about to do
-at a kind cluster that is not there. Delete it **before you start**:
+If this box has ever pointed at a *different* cluster, it left a state overlay behind. That file is
+sourced *after* `.env`, so its values WIN. Check whose it is **before you start**:
 
 ```bash
 make state-show       # WHOSE state is this? (prints the cluster it was written for; redacts secrets)
-make kind-down        # safe on ANY box: it removes only state the KinD flow stamped as its own
 ```
 
-The state overlay is **`.env.state`** (not `.env.kind` — that was renamed; a legacy `.env.kind` is still
-read, and `make state-migrate` moves it). It is **stamped with the cluster it was written for**: if it
-belongs to a *different* cluster it is **archived, not deleted** — it may hold the only copy of that
-cluster's generated passwords. `make kind-down` removes it **only if the KinD flow wrote it**.
+**Expect** one of three answers, and only the third needs you to do anything:
 
+| `state-show` says | what happens | you do |
+|---|---|---|
+| no overlay | nothing to go wrong | continue |
+| written for **this** cluster | its values are used — that is the point of the file | continue |
+| written for a **different** cluster | it is **REFUSED** (not silently used): every address and password it published is simply MISSING from `make creds`, which then shows `<needs ingress>` and `<not read>` rows | move it aside: `mv .env.state .env.state.other-cluster` |
+
+The overlay is **`.env.state`** (not `.env.kind` — that was renamed; a legacy `.env.kind` is still read,
+and `make state-migrate` moves it). Nothing in this repo ever `rm`s it: a file it did not write is left
+alone, and one it did write is **archived** under `.env.state.stale-<timestamp>`, because it may hold the
+only copy of a cluster's generated passwords.
+
+> ⚠️ **There is no restore command yet.** If an overlay for a cluster you still use gets archived, its
+> values are on disk in `.env.state.stale-*` but nothing reads them back — and `INGRESS_LB_IP` and
+> `INGRESS_CONTROLLER` have **no discovery path** (only the installer writes them), so they cannot be
+> re-derived. Keep the archive until you have re-run the install.
+>
 > **Do not delete it again later.** On VKS `make install-gitea` (inside `make platform`)
 > *writes* the state overlay (`.env.state`) to publish the Gitea **LoadBalancer** address it just discovered
 > (`GITEA_ARGOCD_URL`) — the address ArgoCD's repo-server clones from. That file is how the value
 > reaches `make gitops`, which runs as a separate process. Removing it between `make platform` and
 > `make gitops` throws the address away, and `make gitops` will refuse to build a repoURL ArgoCD
-> cannot reach. (The name is a leftover from when only the KinD flow discovered anything.)
+> cannot reach. (The name is a leftover from when only one flow discovered anything.)
 
 ## 1. Finish your .env
 

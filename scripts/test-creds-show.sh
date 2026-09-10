@@ -1131,10 +1131,22 @@ if printf '%s' "$out" | grep -q 'port-forward'; then
 else
   bad "STATE 11: the refused note names no working remedy; a fix that repairs the CLAIM and breaks the ACTION is not a fix"
 fi
-if printf '%s' "$out" | grep -qE 'note:.*(make verify-ingress|make install-ingress)'; then
-  bad "STATE 11: the note prescribes verify-ingress (hard-dies on the missing variable) or install-ingress (installs a mesh into a disclaimed cluster)"
+# ⚠️ THE `note:` ANCHOR WENT VACUOUS — the SECOND time this case lost its grip (see :1142 for the
+# first). It required the forbidden command to appear on a line matching `note:`, and the line that
+# actually carried it was the `no URL in this report for:` block, which is not a note. MEASURED
+# 2026-09-10 on a reproduced refusal: guard-pattern hits 0, `make install-ingress` hits 1, suite
+# 99/99 GREEN over output that prescribed it. The prohibition is written in creds.sh:1953 and the
+# violation shipped 91 lines above it.
+#
+# ANCHOR ON THE WHOLE REPORT. There is no state in which either command is a correct remedy here, so
+# the assertion needs no line context — and a context-free assertion cannot be dodged by moving the
+# text to a differently-shaped line, which is exactly how it was dodged twice.
+_forbidden="$(printf '%s' "$out" | grep -cE 'make (verify|install)-ingress' || true)"
+case "$_forbidden" in ''|*[!0-9]*) _forbidden=0 ;; esac
+if [ "$_forbidden" -gt 0 ]; then
+  bad "STATE 11: the report prescribes verify-ingress (hard-dies on the missing variable) or install-ingress (installs a mesh into a disclaimed cluster) — $_forbidden occurrence(s), anywhere in the report"
 else
-  ok "STATE 11: and it prescribes neither a command that cannot run nor one that installs a mesh"
+  ok "STATE 11: and NOWHERE in the report does it prescribe a command that cannot run or one that installs a mesh"
 fi
 # THE FOURTH FALSE CLAIM. Under a refusal the password WAS published -- for another cluster -- so
 # "check the state overlay" sent the operator to read a FOREIGN credential out of the file the

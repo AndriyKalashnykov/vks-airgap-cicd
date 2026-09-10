@@ -120,8 +120,23 @@ elif [ -f "$env_kind" ] && [ "$ENGINE_ASKABLE" = 0 ]; then
   log_warn "  may hold the ONLY copy of a RUNNING cluster's generated passwords. If you are certain"
   log_warn "  the cluster is gone, remove it by hand:  rm -f $env_kind"
 elif [ -f "$env_kind" ]; then
-  log_info "removing the KinD state overlay $env_kind"
-  run rm -f "$env_kind"
+  # ⚠️ ARCHIVE, NEVER `rm`. This was the ONE path that broke lib/state.sh:144's promise ("Never `rm`:
+  # the passwords in it may still be the only copy for a cluster that is still running"), and the two
+  # arms above are the evidence that the promise was already understood here.
+  #
+  # THE STAMP PROVES CREATION, NOT AUTHORSHIP. `VKS_STATE_KIND=1` proves the KinD flow CREATED this
+  # sink; it does NOT prove the KinD flow wrote every value now in it. `state_stamp` has exactly two
+  # callers — 05-kind-up.sh:222 and a manual `make state-stamp` — so NOTHING re-stamps a sink when the
+  # LAB path writes into it. An operator who ran the KinD e2e and then went back to the lab has lab
+  # values (state_set is unconditional; only READS are stamp-checked) sitting inside a still-KinD-
+  # stamped sink. This branch used to delete them with no archive and no way back.
+  #
+  # The protection was ASYMMETRIC: state_claim_kind (05-kind-up.sh:134) stops KinD writing into the
+  # LAB's sink, and nothing stopped kind-down deleting the LAB's values out of KIND's sink.
+  #
+  # `run` is DRY_RUN-aware (lib/os.sh); calling state_archive bare would MOVE the file under DRY_RUN=1.
+  log_info "archiving the KinD state overlay $env_kind"
+  run state_archive "kind-down: the KinD cluster is gone, but nothing re-stamps this sink when the LAB path writes into it"
 fi
 
 # Remove ONLY the kubeconfig THIS FLOW WROTE. `05-kind-up.sh` records it as KIND_KUBECONFIG.
