@@ -9415,6 +9415,36 @@ B52's copy of the claim is corrected the same way.
 ⚠️ **Do NOT reopen B52's sweep.** It is refuted, and the `<<<` empty-value hazard independently
 justifies not sweeping. This row is about the CLAIM, not the sites.
 
+### ⚠️ CORRECTED the same day — I measured the WRONG PRODUCER SHAPE, and it changes the verdict
+
+The rates above used an **external** producer (`head -c N /dev/zero | tr`). **The 374 `| grep -q`
+sites in this repo do not look like that.** Measured shapes: `printf '%s' "$out"` (140), `"$o"` (39),
+`"$OUT"` (22) — i.e. the `printf` **builtin** piping a captured variable.
+
+Re-measured, ONE harness, ONE size, ONE pinning, with a positive control so the instrument is not
+the variable:
+
+| producer, 8,000 B, 150 trials, `taskset -c 0` | rc=141 |
+|---|---|
+| external (`head -c \| tr`) — the positive control | **146 / 150** |
+| **the corpus shape** (`printf '%s' "$var"`) | **0 / 150** |
+| the corpus shape at **200,000 B** | **0 / 150** |
+
+**So the SIZE THRESHOLD is still false** (146/150 at 8 KB refutes ">32KB"), **but the control's
+CONCLUSION is sound for a reason it does not state**: those sites do not SIGPIPE at all, at any size
+measured, because of the producer shape — not because they are under 32 KB, and not because the
+variables are small (200 KB was clean).
+
+**REVISED Done-when:** correct the two SENTENCES to say the discriminator is the **producer shape**
+(an external command in the pipeline can take SIGPIPE; a `printf` builtin piping a variable did not,
+0/150 up to 200 KB here), and drop the size threshold. **Do NOT** widen the gate to those 374 sites —
+that is a sweep this measurement gives no reason to run.
+
+⚠️ Scope, stated so this is not over-read: one box, GNU grep 3.11, bash builtin, one pinning. The
+builtin's 0/150 is an OBSERVATION, not a proof of immunity — a different shell, a larger pipe
+consumer, or a `printf` forced external would need re-measuring. What IS established: the two arms
+diverge completely under identical conditions, so the stated mechanism cannot be the operative one.
+
 **Provenance:** measured by me (rates above, one box/one grep build/one pinning — an observation,
 never a mechanism, per `gates.md` §"ONE OPERATING POINT"); the refutation of the threshold framing
 is already recorded in `rules/shell/coding-style.md`. Surfaced as an out-of-scope find by
