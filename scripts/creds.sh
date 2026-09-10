@@ -159,6 +159,17 @@ export CREDS_NO_PROBE="$_no_probe_snapshot"   # child scripts (argocd-password.s
 # output -- and the mask message names the accepted value verbatim, so it is self-correcting.
 if [ -t 1 ] || [ "$_show_secrets_snapshot" = "1" ]; then _reveal=1; else _reveal=0; fi
 
+# ANSI, GATED ON A REAL TERMINAL — and deliberately NOT on $_reveal, which SHOW_SECRETS=1 can force
+# on for a pipe. Escape codes in a captured report are corruption: walk-doc.sh runs every statement
+# through a PIPE (creds.sh:147), the walk artifacts are read by humans and greps, and this repo's
+# own test suite matches literal substrings of this banner. Piped => empty strings => byte-identical
+# output to today. NO_COLOR is honoured (no-color.org); TERM=dumb too.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  _RED=$(printf '\033[31m'); _BOLD=$(printf '\033[1m'); _RST=$(printf '\033[0m')
+else
+  _RED=""; _BOLD=""; _RST=""
+fi
+
 # _mask <secret> — apply ONLY to values that are REAL secrets.
 # ⚠️ MASK THE VALUES, NOT THE COLUMN (B182 F4). Four things that appear in the Password column are
 # NOT secrets and MUST stay legible: the `<no login; …>` notes, the `_unset_pw` placeholders, the
@@ -191,6 +202,16 @@ _settle_note() { harbor_settle_note "${1:-        }" 2>&1; }
 
 # --- resolve URLs ---------------------------------------------------------------------
 # Harbor keeps its OWN LB (not behind the ingress); http when HARBOR_INSECURE=1 (KinD).
+# ⚠️ DECLARED BEFORE THE FIRST MARKER SITE, WHICH IS THE WHOLE POINT. My first attempt declared
+# these beside `_argo_tls_flag` (~60 lines BELOW the Harbor marker), so the init ran AFTER the arm
+# and wiped it: MEASURED markers=2, note=0 -- the original bug, reproduced by its own fix.
+# SEPARATE FROM `_argo_tls_flag` on purpose: that flag is the ArgoCD bare-IP discriminator and
+# BACKLOG B486 says "do not fix that heuristic; its reasoning is recorded and correct". This is
+# plumbing only -- a flag answering "does ANY row carry a cert marker", which is what the note needs.
+_tls_note_needed=0
+_harbor_marked=0
+_argocd_bare=""
+
 harbor_scheme="https"; [ "${HARBOR_INSECURE:-0}" = "1" ] && harbor_scheme="http"
 harbor_url="${harbor_scheme}://${HARBOR_URL:-harbor.vks.local}"
 # Harbor's cert is SELF-SIGNED too (minted with an IP SAN by 06-install-harbor.sh), so a browser warns —
@@ -199,6 +220,16 @@ harbor_url="${harbor_scheme}://${HARBOR_URL:-harbor.vks.local}"
 # cert is trusted and ArgoCD's is not. Found by reading the REAL post-install table, not a simulated one.
 if [ "${HARBOR_INSECURE:-0}" != "1" ] && [ -n "${HARBOR_CA_FILE:-}" ]; then
   harbor_url="${harbor_url} (untrusted cert)"
+  # ⚠️ ARMED HERE, IN CALLER SCOPE. The note below used to key on `_argo_tls_flag`, which ONLY
+  # ArgoCD sets -- so these two Harbor cells could carry a marker while the note explaining it was
+  # absent. MEASURED 2026-09-10 (`ARGOCD_SERVER=<a name> make creds`): markers=2, note=0, and the
+  # table-wide Reachable legend gone with it. `.env.example` ships HARBOR_CA_FILE uncommented, so
+  # this arm is the DEFAULT state, not an edge case.
+  # A shared print-and-arm emitter was PRESCRIBED and REFUTED: every marker site would have to
+  # CAPTURE its output, and capture is a subshell, so the flag would be discarded at all of them
+  # (`f(){ X=1; printf m; }; V="$(f)"` leaves X=0). These are plain string appends; a flag set
+  # beside them needs no emitter and cannot be lost.
+  _tls_note_needed=1; _harbor_marked=1
 fi
 # GITEA / TEKTON / THE APPS ARE ONLY REACHABLE AT *.vks.local IF THE INGRESS EXISTS.
 # The ingress is OPTIONAL in this repo (`make verify` proves the whole GitOps loop over a port-forward,
@@ -323,11 +354,18 @@ if [ -n "${ARGOCD_SERVER:-}" ]; then
     *)                  argocd_url="${argo_scheme}://${ARGOCD_SERVER}" ;;
   esac
   _argo_note="$(_argo_tls_note "$argocd_url")"
-  if [ -n "$_argo_note" ]; then argocd_url="${argocd_url}${_argo_note}"; _argo_tls_flag=1; fi
+  if [ -n "$_argo_note" ]; then _argocd_bare="$argocd_url"; argocd_url="${argocd_url}${_argo_note}"; _argo_tls_flag=1; _tls_note_needed=1; fi
 elif [ -n "${ARGOCD_LB_IP:-}" ]; then
   # KinD publishes this (07-install-argocd.sh). It is a DEFAULT — it applies only when the
   # operator has not said otherwise.
   argocd_url="${argo_scheme}://${ARGOCD_LB_IP} (untrusted cert)"
+  # This branch appended the marker and armed NOTHING -- the orphan, on the KinD path.
+  # ⚠️ IT ALSO HAS TO ARM THE ArgoCD ADVICE, or the marker prints with no explanation -- the
+  # ORIGINAL bug, one level down, which a round caught here after I fixed it everywhere else.
+  # This is the bare-IP case BY CONSTRUCTION (ARGOCD_LB_IP is an IP the KinD flow published), so
+  # setting the flag here does not touch the `_argo_tls_note` heuristic B486 freezes.
+  # 07-install-argocd.sh mints no SAN, so the cert is argocd-server's own DNS-only one.
+  _tls_note_needed=1; _argo_tls_flag=1; _argocd_bare="${argo_scheme}://${ARGOCD_LB_IP}"
 else
   # DISCOVER IT before giving up. MEASURED 2026-08-05: this printed `<not set>` and a footnote telling
   # the operator to "set ARGOCD_SERVER in .env" — while `kubectl -n <ns> get svc argocd-server` returned
@@ -358,7 +396,7 @@ else
     # ONE parenthetical, not two. `(discovered) (--insecure; see note)` reads as a stutter and
     # cost 24 columns in a table already measured at 171 chars with one data row.
     _argo_note="$(_argo_tls_note "${argo_scheme}://${_argo_ip}")"
-    if [ -n "$_argo_note" ]; then argocd_url="${argo_scheme}://${_argo_ip} (discovered; --insecure — see note)"; _argo_tls_flag=1
+    if [ -n "$_argo_note" ]; then _argocd_bare="${argo_scheme}://${_argo_ip}"; argocd_url="${argo_scheme}://${_argo_ip} (discovered; --insecure — see note)"; _argo_tls_flag=1; _tls_note_needed=1
     else                          argocd_url="${argo_scheme}://${_argo_ip} (discovered)"; fi
   else
     # A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell short; the instruction goes in a footnote.
@@ -575,7 +613,22 @@ else
   # carried one, it went stale by 203 lines, and it was independently mis-cited THREE times in
   # one session, twice by reviewers who then prescribed a fix that would have died rc=127 here); `kube_token_expiry` comes from lib/os.sh, is offline, and answers the one question
   # that decides which of the two sentences is true.
-  if [ "$_have_sink" = 1 ]; then
+  # ⚠️ rc=124 IS NOT "THE TOKEN EXPIRED" -- IT IS *MY OWN* CAP, AND CONFLATING THEM PRINTS A LIE.
+  # MEASURED 2026-09-10 against a HANGING Supervisor (expired token + unroutable API server):
+  #     timeout 3  argocd-password.sh --wait 0 --raw  -> rc=124, no output
+  #     timeout 40 (identical inputs)                 -> rc=0,   the value
+  #     make argocd-password (UNCAPPED)               -> rc=0,   the value, 10s
+  # The cap at :537 is ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s while the child's ladder is two
+  # candidates x ${CREDS_K8S_TIMEOUT:-10}s, which this file never shrinks -- so the parent's WHOLE
+  # budget is smaller than ONE of the child's calls. Falling through to the EXPIRED arm sets
+  # `_argo_pw_expired=1`, and the banner then claims "the ArgoCD row is read BY this report, not by
+  # a second command" while that second command RETURNS IT. Refuted by vks-adversary 2026-09-10 and
+  # reproduced here. A green run cannot reach this: a REACHABLE Supervisor rejects fast (rc=3), so
+  # only a HANGING one exceeds the cap -- and lab-down is exactly when the banner also says
+  # "the recorded ingress did not answer either".
+  if [ "${_argo_rc:-0}" = 124 ]; then
+    argo_pw="<not read — MY OWN ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s cap expired, not the token; run: make argocd-password (uncapped)>"
+  elif [ "$_have_sink" = 1 ]; then
     # ⚠️ REUSE :116's PROBE, do not re-run it. Byte-identical inputs, but each call reads the clock
     # independently (lib/os.sh's `date -u +%s`), so a token expiring BETWEEN the two reads yielded
     # `<not read>` + `_argo_pw_expired=1` with NO banner and no explanation anywhere in the report.
@@ -779,14 +832,31 @@ if [ "${_SUP_DEAD:-0}" = 1 ]; then
   # F5: the old headline said "every <not read> below needs it" and MEASURED to ZERO referents in
   # a reachable state, while nine unrelated `<not read — …>` variants compete for the reader's eye.
   # State the fact, do not send them hunting for a marker.
-  printf '\n  \u26a0\ufe0f  Supervisor token EXPIRED %s — values that depend on it could not be read.\n' "${_SUP_DEAD_AT:-?}"
+  # ⚠️ THE CODES WRAP THE WHOLE LINE, never a fragment: test-creds-show matches the literal
+  # substring 'Supervisor token EXPIRED', and a code inserted mid-phrase would break that match
+  # on a tty while passing when piped -- green in CI, broken for the human.
+  printf '\n  %s\u26a0\ufe0f  Supervisor token EXPIRED %s — values that depend on it could not be read.%s\n' \
+    "${_BOLD}${_RED}" "${_SUP_DEAD_AT:-?}" "${_RST}"
   # BEFORE the command, never after: it is the reason NOT to run it yet.
   if [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; then
     printf '     FIRST: the recorded ingress did not answer either — check the lab is UP before spending\n'
     printf '     an SSO attempt. Three failures lock the vCenter account PERMANENTLY.\n'
   fi
+  # ⚠️ TWO DEPENDENT STEPS, NUMBERED — NOT A LIST OF ALTERNATIVES. `make argocd-password` reads the
+  # SAME Supervisor token this banner has just declared dead, so offering it alongside the renew
+  # command read as "either of these". MEASURED 2026-09-10: the operator ran it and got
+  # `Error 3` plus four WARN lines -- sent there BY this report. The dependency is now in the text,
+  # and step 2 says what it needs and that it fails without it.
+  # ⚠️ ONE ACTION, NOT TWO. An earlier version listed `make argocd-password` as a second step. It is
+  # REDUNDANT: :537 of this file already runs `argocd-password.sh --wait 0 --raw`, so the ArgoCD row
+  # is read BY this report. Renew, re-run, done. Worse, the command it named is the one that had
+  # just failed the operator -- the report sent them to it, it exited 3, and the fix was to renew,
+  # which the same banner already said. Numbering the two steps made the DEPENDENCY honest but left
+  # the redundancy in place.
   printf '     %s\n' "$(_renew_how)"
-  [ "${_argo_pw_expired:-0}" = 1 ] && printf '     then, for the ArgoCD row: make argocd-password\n'
+  if [ "${_argo_pw_expired:-0}" = 1 ]; then
+    printf '     then re-run make creds — the ArgoCD row is read BY this report, not by a second command.\n'
+  fi
 fi
 printf '\n  Context\n'
 case "$_prov" in
@@ -828,33 +898,24 @@ case "$_prov" in
   # make it VARY, not to delete it. Unstamped (the normal real-lab state) is neutral; stamped-and-
   # contradicted names BOTH servers, so it is a fact the reader can check rather than a mood.
   STORED)     if [ -z "$_stamp" ]; then
+                # ⚠️ I CUT THREE OF THESE FOUR LINES AND A ROUND REFUTED IT, WITH MEASUREMENTS.
+                # "Reachable is probed live" is PROVENANCE (this cell did not come from .env); the
+                # legend's "Reachable = the address answered" is SCOPE (address only, not auth) and
+                # carries a Username/Password disclaimer this block never makes. Different
+                # predicates that share a word. And `(valid until <ts>)` on the headlamp row is an
+                # EXPIRY -- it does not say the token was MINTED THIS RUN, which is why two runs
+                # print different tokens and why nothing stores it.
+                #
+                # WHAT WAS ACTUALLY WRONG is the clause the operator reacted to, twice. The FIRST
+                # complaint is recorded verbatim at test-creds-show.sh:282 -- "what is this shit",
+                # over a fully-serving lab -- against the sentence THIS one replaced. That fix
+                # REWORDED the alarm and kept it, so the same defect returned in new words.
+                # "— normal, but unverified here" fires on EVERY real lab ALWAYS (nothing on that
+                # path calls state_stamp), so it cannot vary, carries no information, and reads as
+                # an alarm beside nine `serving` rows. The REASON survives; the alarm does not.
                 printf '    values below : your .env + install-time discovery. Reachable is probed live,\n'
                 printf '                   and the headlamp token is MINTED fresh on every run.\n'
-                # "BELOW" was unscoped: `Reachable` is a column on the SERVICES table only. The
-                # `Lab access` table has four columns and none of them is Reachable, and its
-                # vCenter/SSO rows are deliberately NEVER probed (SSO locks out after 3 binds). A
-                # reader scanning down for a verdict on those rows finds none and reads the absence
-                # as "nothing wrong with that one".
-                # ⚠️ DO NOT CUT THIS. I did, and test-creds-show caught it. It reads like
-                # mechanism, but it is the REASON provenance is STORED rather than DISCOVERED, and
-                # the assertion guarding it records an operator complaint plus the re-wording that
-                # fixed it ("carries no cluster stamp" was OUR jargon; this phrasing is already the
-                # improved one). The ROW TEST cuts lines the reader cannot act on -- not the one
-                # sentence that explains the state they are in.
-                printf '                   Nothing records which cluster they came from — normal, but unverified here.\n'
-                # ⚠️ SCOPED, because the unqualified word was FALSE. MEASURED: `env_validate`
-                # (02-env.sh) has ZERO references to `supervisor_kubeconfig` and ZERO to
-                # ARGOCD/VCENTER/VCF_CLI/VKS_PASSWORD, so it cannot re-check ANY of the four
-                # `Lab access` rows below -- including the credential this report may have just
-                # declared dead. Makefile:367's help was already accurate and narrow; this line is
-                # moved to it rather than the reverse. And it CANNOT judge a robot at all: B715.
-                # ⚠️ THE OLD TEXT HERE SAID env-validate "cannot judge a robot$ credential — see B715".
-                # It shipped, and then B715's fix made it FALSE: 412 now maps to `accepted`, and on
-                # this lab `make env-validate` returns rc=0 with "Harbor credentials accepted
-                # (HTTP 412)". It also cited an internal backlog id at an operator who has only this
-                # repo. Both gone. What it re-checks is stated once, plainly.
-                # KEPT, on ONE line: not mechanism -- it changes what a reader concludes from a
-                # green env-validate (B715: it cannot judge a robot's PUSH right).
+                printf '                   Nothing records which cluster they came from — normal for a real lab.\n'
                 printf '                   re-check: make env-validate  (it cannot prove a robot can PUSH)\n'
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
@@ -1935,25 +1996,71 @@ fi
 # `(discovered; --insecure — see note)` -- silently stopped matching it. MEASURED: the note count
 # went to 0 while the cell still said "see note", i.e. a citation resolving to NOTHING, which reads
 # as sourced and is worse than no marker at all. Display text is not a control channel.
-case "${_argo_tls_flag:-0}" in
-  1)
-    # ⚠️ THE LEGEND IS UNCONDITIONAL, AND IT IS THE POINT. Four credential-shaped columns beside a
-    # green fifth read as ONE verdict. They are not: `Reachable` probes the ADDRESS only -- Harbor's
-    # probe sends no -u/-K/-H, ArgoCD's is a bare TCP connect, the ingress rows are a `curl -H Host:`
-    # -- and Username/Password are ECHOED from .env / the install-time overlay, never read back from
-    # the system. This file already said so, exactly, IN A COMMENT; a round measured that no PRINTED
-    # line ever told the operator. And the discriminator matters: `secrets/` is gitignored operator
-    # state nothing cleans up, so a robot pair survives every lab re-cut and reads valid to any proxy
-    # check -- only a real push discriminates (CLAUDE.md, "THREE HARBOR AUTH CHECKS THAT DO NOT
-    # DISCRIMINATE"), and `make env-validate` cannot judge a robot at all (B715).
-    printf '\n  Reachable = the address answered. Username/Password are AS CONFIGURED, not tested.\n'
-    printf '\n  untrusted cert: browser -> click through; curl/CLI -> --insecure.\n'
-    # CUT: "ArgoCD is at a bare IP and its cert has no IP SAN, so nothing can verify it there."
-    # TRUE (measured: DNS SANs only, zero IP SANs) and pure mechanism -- the line above already
-    # tells the reader what to DO about an untrusted cert, and the WHY changes no action.
-    # ⚠️ this line carried the case arm's `;;` -- removing it naively breaks the script.
-    ;;
-esac
+# ⚠️ THE LEGEND IS TABLE-WIDE, SO IT IS PRINTED TABLE-WIDE. It used to sit inside
+# `case "${_argo_tls_flag:-0}" in 1)` -- an ArgoCD-only flag -- so a column definition for the
+# WHOLE table vanished whenever ArgoCD happened to be at a name. Four credential-shaped columns
+# beside a green fifth read as ONE verdict. They are not: `Reachable` probes the ADDRESS only --
+# Harbor's probe sends no -u/-K/-H, ArgoCD's is a bare TCP connect, the ingress rows are a
+# `curl -H Host:` -- and Username/Password are ECHOED from .env / the install-time overlay, never
+# read back. Only a real push discriminates (CLAUDE.md, "THREE HARBOR AUTH CHECKS THAT DO NOT
+# DISCRIMINATE"); `make env-validate` cannot judge a robot at all (B715).
+printf '\n  Reachable = the address answered. Username/Password are AS CONFIGURED, not tested.\n'
+
+# ⚠️ THE CERT NOTE KEYS ON "DID ANY ROW CARRY A MARKER", NOT ON ArgoCD.
+# And it is now PER TARGET, because one sentence cannot be right for both. MEASURED on the lab:
+#   Harbor  --cacert <the CA we already hold>  -> rc=0 http=200   (no CA, no -k -> rc=60)
+#   ArgoCD  SANs are DNS-only, NO IP SAN, so a bare IP can NEVER verify -> --insecure or nothing
+# The old blanket line said "curl/CLI -> --insecure" for both, i.e. it told the operator to turn
+# verification OFF for the one endpoint we can verify.
+if [ "${_tls_note_needed:-0}" = 1 ]; then
+  printf '\n  untrusted cert — what to do, per target:\n'
+  printf '    browser: click through on the marked rows above.\n'
+  # ⚠️ BUILT FROM THE SOURCE, NEVER FROM `harbor_url` -- that variable CONTAINS the marker, so
+  # `curl … $harbor_url` would emit `… https://host (untrusted cert)`, where `(` opens a subshell
+  # and the pasted line is broken. Gated on the CA existing AND an endpoint being configured, so
+  # this is advice attached to a FINDING rather than to a category (gates.md).
+  # ⚠️ THE `elif` USED TO NAME THE CA FOR ANY FAILURE OF A 3-WAY AND. MEASURED: with the CA on
+  # disk and HARBOR_URL unset it printed "the CA is not on disk" -- FALSE -- and prescribed
+  # `make fetch-harbor-ca`, which takes HARBOR_URL as its first argument and exits rc=1 without it.
+  # That is the ORDINARY post-lab-re-cut tenant state: `.env.example` ships HARBOR_CA_FILE
+  # uncommented while HARBOR_URL is a commented selector, and secrets/ survives every re-cut.
+  # ⚠️ AND "it VERIFIES" WAS AN OUTCOME CLAIM NOTHING CHECKED. `[ -s ]` proves NON-EMPTY, not
+  # usable: measured, a 31-byte non-PEM file passed it and `curl --cacert` then returned rc=77
+  # (CURLE_SSL_CACERT_BADFILE) where the system store returned 200 -- and `[ -s <directory> ]` is
+  # TRUE. It also cannot know the CA is the one that SIGNED this Harbor (a stale CA survives a
+  # re-cut). So the voice is CONDITIONAL. The measuring version is lib/tls.sh's
+  # `ca_verifies_endpoint`, which creds.sh does not source and which is a live probe that would
+  # have to be gated on CREDS_NO_PROBE -- named here so the stronger fix is findable.
+  # ⚠️ TESTS `_ca_abs`, not HARBOR_CA_FILE: the value is REPO_ROOT-relative but `[ -s ]` resolves
+  # against the CWD, so a run from elsewhere reported "not on disk" for a CA that was there.
+  if [ "${_harbor_marked:-0}" = 1 ] && [ -n "${HARBOR_URL:-}" ]; then
+    case "${HARBOR_CA_FILE:-}" in
+      /*) _ca_abs="${HARBOR_CA_FILE}" ;;
+      "") _ca_abs="" ;;
+      *)  _ca_abs="${REPO_ROOT}/${HARBOR_CA_FILE#./}" ;;
+    esac
+    if [ -n "$_ca_abs" ] && [ -f "$_ca_abs" ] && [ -r "$_ca_abs" ] && [ -s "$_ca_abs" ]; then
+      printf '    - Harbor: if that CA is the one that signed it, this verifies —\n      curl --cacert %s %s://%s\n' \
+        "$_ca_abs" "$harbor_scheme" "${HARBOR_URL}"
+    else
+      printf '    - Harbor: no readable CA at %s — run make fetch-harbor-ca, then curl --cacert <it>.\n' \
+        "${_ca_abs:-<HARBOR_CA_FILE unset>}"
+    fi
+  elif [ "${_harbor_marked:-0}" = 1 ]; then
+    printf '    - Harbor: HARBOR_URL is not set, so this report cannot name the endpoint to verify.\n'
+  fi
+  # ⚠️ DOES NOT BEGIN WITH `ArgoCD`. test-creds-show.sh:322 builds its B168 line with
+  # `grep -i '^[[:space:]]*ArgoCD'` and NO `head -1`, so it concatenates every anchored match --
+  # a footer line starting `ArgoCD` that contains `--insecure` would fire that assertion. That
+  # test is hardened in the same change; this wording does not depend on the hardening landing.
+  # ⚠️ `--insecure` ONLY on the bare-IP path (_argo_tls_flag), never with an explicit name: #745
+  # and B168 forbid offering it when the operator supplied a NAME the cert can match.
+  if [ "${_argo_tls_flag:-0}" = 1 ]; then
+    printf '    - ArgoCD (browse/read only): curl --insecure %s — a self-signed ArgoCD cert\n' "$_argocd_bare"
+    printf '      typically carries DNS names only, so a bare IP cannot verify. argocd login and the\n'
+    printf '      WRITE path need a NAME the cert carries plus ARGOCD_CA_FILE — see docs/scenario-2.md.\n'
+  fi
+fi
 
 # --- footnote: WHAT IS NOT REAL YET, and whose job it is to fix ------------------------
 #

@@ -291,6 +291,48 @@ if printf '%s' "$out" | grep -qiE 'which cluster they came from|carries no clust
 else
   bad "...but the human is not told WHY. The token alone is not the deliverable."
 fi
+# ── the cert note must never be ORPHANED, and the legend is TABLE-WIDE ────────────────────────────
+# ⚠️ THIS WHOLE MECHANISM SHIPPED UNTESTED. A round measured the suite's assertion count UNCHANGED
+# across the diff that introduced it (165 -> 165) with ZERO greps for any of its strings -- so the
+# green said nothing about it, and the author's own ordering defect (the flag DECLARED below the site
+# that ARMS it, so the init wiped it: markers rendered, note absent) would have shipped silently.
+# RED-PROOF, and it is free: move `_tls_note_needed=0` back below the Harbor marker site in creds.sh
+# and the first case here goes red.
+#
+# KEYED ON THE PROPERTY, not on the note's wording: "a row carries a cert marker" => "the note
+# printed". The marker text may be reworded; the invariant may not.
+_note_case() {   # <label> <env-body> <sink-body>
+  local out marked note
+  out="$(render_with_env "$2" "$3")"
+  # count MARKED TABLE ROWS only. The note's own heading contains the same words, so a naive
+  # `grep -c 'untrusted cert'` inflates by one whenever the note prints and can never discriminate.
+  marked="$(printf '%s' "$out" | grep -cE '^  [A-Za-z].*\(untrusted cert' || true)"
+  note="$(printf '%s' "$out" | grep -c 'what to do, per target' || true)"
+  if [ "$marked" -gt 0 ] && [ "$note" -lt 1 ]; then
+    bad "$1: $marked row(s) carry a cert marker and the note is ABSENT — an orphaned marker"
+  elif [ "$marked" -gt 0 ]; then
+    ok "$1: $marked marked row(s), and the note that explains them printed"
+  else
+    ok "$1: no row carries a marker (nothing to explain)"
+  fi
+  # the legend defines the TABLE's own columns; it must not depend on any one row's TLS shape
+  if printf '%s' "$out" | grep -q 'Reachable = the address answered'; then
+    ok "$1: ...and the table-wide Reachable legend printed"
+  else
+    bad "$1: ...but the table-wide Reachable legend is MISSING (it used to hang off an ArgoCD flag)"
+  fi
+}
+# Harbor marked, ArgoCD at a NAME -> the old code printed NEITHER line for these two marked rows.
+_note_case "note/harbor-only" 'HARBOR_URL=10.0.0.1
+HARBOR_PASSWORD=x
+HARBOR_CA_FILE=./secrets/harbor-ca.crt
+ARGOCD_SERVER=argocd.example.test
+' ''
+# the KinD shape: ArgoCD marked via ARGOCD_LB_IP, which armed the note but not the ArgoCD advice.
+_note_case "note/kind-argocd" 'HARBOR_PASSWORD=x
+' 'ARGOCD_LB_IP=10.0.0.2
+'
+
 # The banner must NOT re-acquire an alarm it cannot justify. This is the RED-proof for the change:
 # re-adding the old sentence turns this red, so nobody can quietly restore it.
 if printf '%s' "$out" | grep -qi 'no longer exists'; then
@@ -319,7 +361,13 @@ else
 fi
 # The two things #745 says must never reach an operator, asserted on the ArgoCD line specifically so
 # a bare IP elsewhere in the summary cannot mask a regression here.
-_argoline="$(printf '%s' "$out" | grep -i '^[[:space:]]*ArgoCD' || true)"
+# ⚠️ `head -1` AND A TRAILING SPACE, matching this file's other ArgoCD extractor. Without them this
+# concatenates EVERY anchored match, so any FOOTER line beginning `ArgoCD` is swept into the
+# B168 assertion below and fires `bad` on a `--insecure` that is not in the table at all. The
+# sweep is already happening -- `creds.sh` prints `  ArgoCD: this password is CURRENT...` -- and
+# it stays green only because that line happens to carry neither trigger word. Measured
+# 2026-09-10: the unhardened pattern captured 2 lines and WOULD have fired.
+_argoline="$(printf '%s' "$out" | grep -iE '^[[:space:]]*ArgoCD ' | head -1 || true)"
 case "$_argoline" in
   *--insecure*) bad "the ArgoCD line still offers --insecure despite an explicit ARGOCD_SERVER" ;;
   *)            ok "...and the ArgoCD line does NOT offer --insecure" ;;
@@ -1587,12 +1635,16 @@ _sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-or-empty> [
 # are now a BANNER at the very top, printed only when something is wrong, and every affected cell
 # reads exactly `<not read>` -- so no per-row string can serve as a marker any more.
 #
+# ⚠️ THE MARKER IS THE *PROPERTY*, NOT THE SENTENCE. It moved once already: the banner now
+# presents the renew and the ArgoCD follow-up as TWO NUMBERED DEPENDENT STEPS, because the flat
+# list read as alternatives and an operator ran step 2 first and got Error 3. Any future re-word
+# must keep a substring emitted ONLY when `_argo_pw_expired=1` -- that flag is the observable.
 # creds/* EXPIRED therefore pins the BANNER. The site-2 row cannot: the banner fires for site 1 too,
 # and this row exists to reach the `:496` ArgoCD dispatch site. Its marker is the banner's
 # ArgoCD FOLLOW-UP line, which is emitted only when `_argo_pw_expired=1` -- set by that site's
 # EXPIRED arm and nowhere else. That flag IS the observable; the cell text no longer is.
 _sso_rows='creds/site1|creds||Supervisor token EXPIRED|has NOT expired|Expiry is unreadable
-creds/site2-sink|creds|VKS_STATE_KIND=1|then, for the ArgoCD row: make argocd-password|not read — the Supervisor token is still valid|run: make argocd-password
+creds/site2-sink|creds|VKS_STATE_KIND=1|read BY this report|not read — the Supervisor token is still valid|run: make argocd-password
 argocd-password|argocd-password||EXPIRED at|has NOT expired|no readable expiry'
 
 # ⚠️ ASSERT THE PROPERTY, NOT AN EXACT COUNT. EXPIRED must name the command AT LEAST once (measured:

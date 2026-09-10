@@ -45,6 +45,11 @@ cd "$REPO_ROOT"
 # a target RETIRED on purpose (app-test.sh:137 dies "app-build is retired ... Use 'make app-verify'")
 # and absent from the Makefile (0 hits, any form). Six dead copy-paste lines, invisible for as long
 # as the gate has existed, because the pathspec said `README.md` — root only — and `docs/*.md`.
+# ⚠️ THIS PATHSPEC HAS A SECOND HOME: test-gate-vacuity.sh's `assert_starved` line for this gate
+# hand-copies these literals to starve the corpus. WIDEN ONE, WIDEN BOTH. Measured cost of not
+# doing so: 'apps/*/*/README.md' was added here on 2026-09-09 and the declaration was not, so the
+# starvation left 40 docs in place, the gate examined 36 commands, and the harness reported this
+# gate VACUOUS -- a FALSE RED whose cheapest-looking remedy is to weaken the ACCUSED gate.
 docs=$(git ls-files --cached --others --exclude-standard 'README.md' 'docs/*.md' 'apps/*/*/README.md' \
         | grep -v '^docs/reviews/' || true)
 # WRONG POLARITY until 2026-07-19: this exited 0 when the doc list was empty, so a broken pathspec

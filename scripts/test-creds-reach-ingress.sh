@@ -165,8 +165,32 @@ ck "with NO sentinel the same row probes normally (the short-circuit is not alwa
 # The short-circuits must still win, or the probe would run where the report promised it would not.
 ck "CREDS_NO_PROBE=1 short-circuits"  \
    "$(eval "$_fn"; CREDS_NO_PROBE=1 _ing=1.2.3.4 _ing_live=1 _reach_ingress h.local)" "not probed"
-ck "no ingress -> no ingress"         \
-   "$(eval "$_fn"; CREDS_NO_PROBE=0 _ing='' _ing_live=1 _reach_ingress h.local)"        "no ingress"
+# ⚠️ EXPECTATION UPDATED 2026-09-10 -- THE PRODUCT SIDE IS THE CORRECT ONE.
+# #1241 changed this cell from `no ingress` to `-` deliberately (creds.sh, "NOT 'no ingress'"):
+# the legend defines the column as "Reachable = the address answered", and `no ingress` answered a
+# DIFFERENT question while merely restating the URL cell, which already says `<needs ingress>`.
+# MEASURED then: the cell read `no ingress` on NINE rows while all nine answered HTTP 200.
+# That PR did not update this assertion, so `main` shipped RED at its own tip (b6d214b) -- the
+# FIFTH prose-pinned assertion to break in one day. The case NAME now states the PROPERTY, so a
+# future re-word of the cell does not silently re-point what this case is about.
+ck "no ingress recorded -> the column makes NO reachability claim" \
+   "$(eval "$_fn"; CREDS_NO_PROBE=0 _ing='' _ing_live=1 _reach_ingress h.local)"        "-"
+
+# ⚠️ THE PAIR. `-` is honest ONLY because the URL cell independently says `<needs ingress>` under
+# the IDENTICAL `[ -n "$_ing" ]` test (creds.sh: `ingress_url`). Nothing asserted that coupling, so
+# a reword of `ingress_url` that emitted a URL anyway would leave `-` as an information-free cell
+# with every gate still green. Asserting the two arms as a pair is what makes the `-` case mean
+# something. Prescribed by adversary-bash-git-cli 2026-09-10.
+_fn_url="$(_extract ingress_url)"
+case "$_fn_url" in
+  *'<needs ingress>'*) : ;;
+  *) echo "FATAL: ingress_url extracted but does not contain '<needs ingress>' — reshaped."
+     echo "       Fix the extraction; do NOT let this test pass over a fragment."; exit 1 ;;
+esac
+ck "...and the URL cell EXPLAINS it (the coupled arm)" \
+   "$(eval "$_fn_url"; _ing='' ingress_url h.local)"                                  "<needs ingress>"
+ck "...while a recorded ingress yields a real URL (the other direction)" \
+   "$(eval "$_fn_url"; _ing=1.2.3.4 ingress_url h.local)"                           "http://h.local"
 ck "LB not live -> silent (never a per-host verdict)" \
    "$(eval "$_fn"; CREDS_NO_PROBE=0 _ing=1.2.3.4 _ing_live=0 _reach_ingress h.local)" "silent"
 # An empty host cannot name a vhost; sending `Host: ` would earn a 404 and INVENT a "no route".
