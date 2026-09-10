@@ -9491,20 +9491,16 @@ highest-value finding is about something already shipped.
 **MEASURED 2026-09-10** on a fixture holding an ordinary `/etc/hosts`. `98-uninstall-all.sh:332`
 prints, for the operator to paste:
 
-```sh
-sudo sed -i '/vks.local/d' /etc/hosts
-```
+    sudo sed -i '/vks.local/d' /etc/hosts
 
 Against `127.0.0.1 localhost gitea.vks.local` it deletes **the whole line** — removing `localhost`
 from `/etc/hosts`. It also takes `10.0.0.1 myserver.example.com stale.vks.local` with it.
 
-```
-before                                            after `sed '/vks.local/d'`
-127.0.0.1 localhost gitea.vks.local               127.0.1.1 thisbox
-127.0.1.1 thisbox                                 (both other lines GONE)
-10.0.0.1 myserver.example.com stale.vks.local
-192.168.99.9 javawebapp.vks.local
-```
+    before                                            after `sed '/vks.local/d'`
+    127.0.0.1 localhost gitea.vks.local               127.0.1.1 thisbox
+    127.0.1.1 thisbox                                 (both other lines GONE)
+    10.0.0.1 myserver.example.com stale.vks.local
+    192.168.99.9 javawebapp.vks.local
 
 **Root cause, shared with the sibling already fixed:** a **line-level** operation on a file whose
 lines carry MULTIPLE names. A `*.vks.local` alias routinely shares a line with `localhost` or a real
