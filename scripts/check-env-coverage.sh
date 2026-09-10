@@ -320,20 +320,54 @@ done < <(awk -v mk="$(printf '%s' "$ACQ_MARKERS_REPORT" | tr '[:upper:]' '[:lowe
   function is_slot(s) { return s ~ /^#[[:space:]]*[A-Z][A-Z0-9_][A-Z0-9_]+=/ }
   function is_cmt(s)  { return s ~ /^#/ }
   END {
+    # D2: THE CANONICAL SLOT IS THE **LAST** SLOT-SHAPED LINE FOR THAT NAME IN ITS COMMENT REGION.
+    # An idea round measured that NINE lines here are PROSE that happens to be slot-shaped, e.g.
+    #     # CAPACITY_PREFLIGHT=0 disables that check entirely. Set it only to ...
+    # Each is (a) enumerated as a variable, inflating the denominator, and (b) a WALL truncating the
+    # real slot window below the `# how:` above it. BUNDLE_TARBALL was flagged at its PROSE line
+    # while its real slot was fine -- a phantom finding.
+    #
+    # THE OBVIOUS FIX IS REFUTED. "A real slot has nothing after the = ; prose has trailing words"
+    # was MEASURED against ground truth: of 32 slot-shaped lines with trailing content, 23 are REAL
+    # SLOTS and only 9 are prose -- trailing comments, values with spaces (PROBE_SLEEPS=0 1 2 4 8),
+    # quoted values, and <SET-IN-.env -- minted by ...> placeholders. It would have silently dropped
+    # 23 REAL variables from the denominator, including VKS_PASSWORD, VCENTER_PASSWORD, VKS_USERNAME,
+    # SUPERVISOR_HOST and VKS_NAMESPACE -- the tenant-critical set RULE ZERO-B says arrives via .env
+    # -- while the suite stayed 13/13 GREEN and the floor still cleared. Quieter, greener, blind.
+    #
+    # D2 needs NO guess about prose syntax: within one contiguous comment region, the LAST line
+    # naming a variable is its slot; earlier ones are prose about it. Measured 9/9 prose caught,
+    # 0 false positives, and the two LEGITIMATE HARBOR_PROBE_TIMEOUT_SECONDS slots both survive
+    # because they sit in different regions.
+    # PASS A -- mark the canonical line for every (region, name). Done ONCE, up front, because the
+    # answer is needed in TWO places and computing it in only one is what made the first attempt a
+    # half-fix: it removed the phantom ENUMERATION and left the WALL, so CAPACITY_PREFLIGHT was no
+    # longer reported at its prose line and its real slot was STILL flagged, its `# how:` still
+    # unreachable. MEASURED: 5 of the 7 expected removals did not happen.
     for (i = 1; i <= NR; i++) {
       if (!is_slot(line[i])) continue
       v = line[i]; sub(/^#[[:space:]]*/, "", v); sub(/=.*/, "", v)
       if (v !~ /^[A-Z][A-Z0-9_][A-Z0-9_]+$/) continue
+      r0 = i; while (r0 - 1 >= 1 && is_cmt(line[r0 - 1])) r0--
+      last[r0 SUBSEP v] = i
+    }
+    for (key in last) canonical[last[key]] = 1
+
+    for (i = 1; i <= NR; i++) {
+      if (!is_slot(line[i])) continue
+      if (!(i in canonical)) continue           # this line is PROSE about a variable, not its slot
+      v = line[i]; sub(/^#[[:space:]]*/, "", v); sub(/=.*/, "", v)
+      if (v !~ /^[A-Z][A-Z0-9_][A-Z0-9_]+$/) continue
       w = tolower(line[i])                      # the SLOT LINE ITSELF: `<SET-IN-.env>` lives here
-      for (k = i - 1; k >= 1; k--) {            # (a) own contiguous NON-SLOT comments
-        if (!is_cmt(line[k]) || is_slot(line[k])) break
+      for (k = i - 1; k >= 1; k--) {            # (a) own contiguous comments, PROSE INCLUDED
+        if (!is_cmt(line[k]) || (k in canonical)) break
         w = w "\n" tolower(line[k])
       }
       rs = i                                    # (b) first slot of this maximal run
-      while (rs - 1 >= 1 && is_slot(line[rs - 1])) rs--
+      while (rs - 1 >= 1 && (rs - 1) in canonical) rs--
       if (rs != i)
         for (k = rs - 1; k >= 1; k--) {
-          if (!is_cmt(line[k]) || is_slot(line[k])) break
+          if (!is_cmt(line[k]) || (k in canonical)) break
           w = w "\n" tolower(line[k])
         }
       printf "%d\t%s\t%s\n", i, v, (w ~ mk ? "ok" : "FLAG")
@@ -344,15 +378,22 @@ done < <(awk -v mk="$(printf '%s' "$ACQ_MARKERS_REPORT" | tr '[:upper:]' '[:lowe
 # sentence below made PASS 1's claim — so a PASS-2 loop that stopped iterating (a changed slot
 # regex, a grep that matches nothing) was INDISTINGUISHABLE from a clean run.
 log_info "check-env-coverage PASS 2b: ${pass2_examined} commented slot(s) examined, ${pass2_flagged} flagged (REPORT-ONLY, B716 stage 1)"
-if [ "$pass2_examined" -lt 200 ]; then
-  log_error "check-env-coverage PASS 2b: only ${pass2_examined} slots examined — expected ~241."
+# FLOOR RAISED 200 -> 225 WITH THE D2 CHANGE. The old floor was set against 241; D2 correctly stops
+# counting 9 PROSE lines as variables, so the honest expectation is ~232 and a 200 floor now leaves a
+# 32-slot hole. An idea round measured that the REFUTED syntax discriminator dropped the denominator
+# to 209 — which CLEARED the 200 floor while silently losing 23 REAL variables including
+# VKS_PASSWORD and VCENTER_PASSWORD. A floor that a broken predicate can clear is not a floor.
+if [ "$pass2_examined" -lt 225 ]; then
+  log_error "check-env-coverage PASS 2b: only ${pass2_examined} slots examined — expected ~232 (D2: prose lines are not slots)."
   log_error "  Either the slot regex broke OR the awk itself failed — check stderr above; do not just"
   log_error "  lower this floor. If you deliberately TRIMMED .env.example, lower it and say so in the commit."
   rc=1
 fi
 if [ "$pass2_flagged" -gt 0 ]; then
   log_warn "  no acquisition path stated (report-only — NOT failing the build):${pass2_names}"
-  log_warn "  Stage 2 triages these; some may need a marker, others a wider marker vocabulary."
+  log_warn "  These are a VOCABULARY miss, not a coverage hole: an idea round measured that the"
+  log_warn "  remedy is satisfiable by typing the word 'default', so this must NOT become enforcing."
+  log_warn "  The un-gameable signal is an EMPTY own block -- see B716 stage 3."
 fi
 
 echo >&2

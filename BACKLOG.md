@@ -8845,6 +8845,29 @@ Do not pick one without a round; and fix all four homes together (`lib/harbor.sh
 
 ## 🟡 B716 — STAGE 1 of 3 SHIPPED 2026-09-09 (report-only + a denominator): PASS 2's window is UNBOUNDED, and my original prescribed fix was a MASS FALSE-RED
 
+**⚠️ 2026-09-10 (LATER) — MY OWN MEASUREMENT BELOW WAS REFUTED BY ITS IDEA ROUND. READ THIS FIRST.**
+The conclusion (stage 3 must not ship as specified) SURVIVES; my numbers and my mechanism did not.
+
+- **"all documented — min 5 / median ~50 / max 138" was a SELF-REFUTING INSTRUMENT.** Those are the
+  UNBOUNDED look-above. The OWN-BLOCK figures are **min 0, median 2, max 40**, and **3 of 21 have
+  ZERO own prose** (verified independently: `ARGOCD_MANAGER_NS`, `CREDS_KUBE_TIMEOUT_SECONDS`,
+  `VKS_CLUSTER_DELETE_POLL_SECONDS`).
+- **"19 of 21 have a marker above the wall, 0 have none anywhere" is a VACUOUS METRIC.** Markers sit
+  on **20% of every line in the file**, so a marker exists above essentially EVERY slot. *"0 have
+  none anywhere"* was the tell, not the reassurance.
+- **The wall mechanism is real but explains 5 of 21, not 19.** And the prose count is **9**, not 14.
+- **The obvious fix is REFUTED.** *"A real slot has nothing after the `=`"* would have DROPPED **23
+  REAL variables** — `VKS_PASSWORD`, `VCENTER_PASSWORD`, `VKS_USERNAME`, `SUPERVISOR_HOST`,
+  `VKS_NAMESPACE` among them — while the suite stayed **13/13 GREEN** and the floor still cleared.
+- **SHIPPED INSTEAD: D2** — the canonical slot is the LAST slot-shaped line for that name in its
+  comment region. No guess about prose syntax. **232 examined / 14 flagged**, reproducing the
+  round's numbers from an independent implementation. ⚠️ My first attempt applied D2 to ENUMERATION
+  only and left the WALL, so 5 of 7 expected removals did not happen; the wall test must key on
+  canonical too. RED-proven, and the case that fails is the right one.
+- **STILL TRUE and now the actionable part:** 2 genuinely undocumented vars (`VKS_CLUSTER_DELETE_*`)
+  which gate a DESTRUCTIVE Supervisor-only target. That empty-own-block predicate is un-gameable and
+  is what stage 3 should enforce — NOT the marker test, whose remedy is typing one word.
+
 **⚠️ 2026-09-10 — STAGE 2 MEASURED, AND ITS PREMISE IS LARGELY WRONG. STAGE 3 MUST NOT SHIP AS
 SPECIFIED.** The row assumes the 21 survivors need triage — *"some may need a marker, others a wider
 marker vocabulary"*. Measured against the file: **they are already documented, and the gate cannot
