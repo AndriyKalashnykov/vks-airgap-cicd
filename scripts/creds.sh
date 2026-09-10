@@ -915,7 +915,19 @@ case "$_prov" in
                 # an alarm beside nine `serving` rows. The REASON survives; the alarm does not.
                 printf '    values below : your .env + install-time discovery. Reachable is probed live,\n'
                 printf '                   and the headlamp token is MINTED fresh on every run.\n'
-                printf '                   Nothing records which cluster they came from — normal for a real lab.\n'
+                # ⚠️ CUT 2026-09-10: "Nothing records which cluster they came from — normal for a
+                # real lab." The operator asked what it was FOR, twice, and it has no answer: it is
+                # UNACTIONABLE BY CONSTRUCTION. If nothing recorded the cluster, no command can
+                # recover it -- `make state-show`, which the stamped-MISMATCH arm points at, has
+                # nothing to show -- and the one case that IS detectable (a stamp contradicting the
+                # live cluster) already has its own loud arm above. So it raised a doubt and
+                # dismissed it in the same clause, on every run, forever, on a healthy box.
+                # A round argued for KEEPING it as "the REASON provenance is STORED". Measured
+                # against the arms themselves, that reason is already carried by the FIRST line:
+                #   DISCOVERED -> "read from the cluster you are talking to now"
+                #   STORED     -> "your .env + install-time discovery. ..."
+                # The arms discriminate without it. test-creds-show now asserts THAT property
+                # (the human line must DIFFER between arms) instead of grepping this sentence.
                 printf '                   re-check: make env-validate  (it cannot prove a robot can PUSH)\n'
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
