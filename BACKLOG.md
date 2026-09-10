@@ -2018,6 +2018,15 @@ radius is far lower than the row implies:** `ISTIO_INSTALL_METHOD` has **0 refer
 opts in via `.env.example:986` reaches it. **Stale residuals, do not work them as written:** the
 VKS-3.7 tripwire was **DELETED** (`:108-123` is now a comment explaining why), and
 `scripts/lib/vks-package.sh` **does not exist** — it is `scripts/vks-package.sh`, so the
+**⚠️ 2026-09-10 — RE-LOCATED, AND THE RESIDUAL IS REFUTED. Third stale claim on this row.** The two
+`apply -f -` sites are `scripts/vks-package.sh:276` and `:316`, and **both discard STDOUT
+(`>/dev/null`), not stderr** — a different claim from the one filed. MEASURED with `set -euo
+pipefail` on a deliberately-invalid apply: **rc=1** and **164 bytes on stderr**, so the failure is
+neither silent nor survivable. The script sets `set -euo pipefail` at `:33`, and `:99` records that
+its classifier path routes stderr to a FILE on purpose (*"stderr goes to $_PKG_ERR (a FILE), not
+/dev/null"*) — the author had already reasoned about exactly this. **Nothing to fix; residual
+CLOSED.** What survives of B484 is only the DISCLOSED fail-open at
+`43-install-istio-package.sh:139-146`, blast radius opt-in only.
 "`apply -f -` discards stderr" residual must be re-located before it can be worked.
 ⚠️ The round ALSO hypothesised a second, silent fail-open and **measured it FALSE**:
 `registry_hostport ""` returns `:443`, which is non-empty, so it reaches the `*)` arm and **dies** —
