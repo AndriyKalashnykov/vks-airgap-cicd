@@ -9339,3 +9339,43 @@ Found while gating #1236; **neither is caused by that diff** — proven in a thr
 
 **Done when:** both are green on a clean `main` **and** on a box carrying `.env`/`.env.state`, or each
 is documented in-file as an accepted environment dependency with the measurement above.
+
+## 🔴 B725 — the SECOND instance of the fabricated-credential class: `HARBOR_PASSWORD` is generated with NO discriminator at all, and it is in `required=`
+
+`02-env.sh:90`, inside `make env-populate` — the step `docs/scenario-2.md:796` puts at Step 2 for a
+**tenant**:
+
+    if is_placeholder "${HARBOR_PASSWORD:-}"; then h_pw="$(gen_password)"; env_set HARBOR_PASSWORD "$h_pw"; …
+
+**There is no guard of any kind.** MEASURED in all three states an idea round exercised (default
+tenant, `VKS_AUTH_METHOD=vcf`, and `VKS_NAMESPACE` set): `+ HARBOR_PASSWORD (generated — OVERRIDE for
+a real lab)` every time.
+
+**Why it is worse than the ArgoCD instance fixed by the ArgoCD change:** `HARBOR_PASSWORD` **is** in
+`required=` (`02-env.sh:236`), so the fabricated value makes **`make env-check` GREEN** — and
+`env-check` runs inside `make preflight`, the command RULE ZERO-A0 tells every operator to start
+with. A tenant with no real Harbor credential gets a passing presence gate.
+
+**And the file already knows.** `02-env.sh:91-92`, immediately below the line, reads:
+*"⚠️ AND ON A REAL LAB IT MUST NOT BE GENERATED AT ALL. This line said 'KinD only; real lab sets its
+own' and then generated it on a real lab anyway — **nothing enforced the comment**."* The comment
+describes this defect and the defect is still there — the same shape as the ArgoCD one, whose comment
+said *"a fabricated credential is indistinguishable from a real one, which is why nobody caught it"*
+three lines above a guard with that exact failure mode.
+
+⚠️ **ONE MITIGATION, and it is why this is not the same severity:** unlike ArgoCD, a fabricated Harbor
+password **has a downstream 401 to catch it** — `make env-validate` probes Harbor auth and fails
+(measured elsewhere: `harbor_auth_verdict` → `rejected`, rc=1, for an ADMIN credential with a CA).
+Nothing validates `ARGOCD_ADMIN_PASSWORD` at all (`argocd-auth-check` is **not** in `preflight`).
+So this one is loud eventually; the ArgoCD one was silent forever.
+
+⚠️ **DO NOT BUNDLE IT WITH THE ArgoCD FIX, and the ArgoCD change deliberately did not.** Deleting Harbor's
+generation turns `env-check` **RED before `kind-up`**, which is a real behaviour change on the local
+flow, not a wording fix. It needs its own idea round to decide the shape — candidates: generate only
+when the state stamp proves the rig (⚠️ but see the ArgoCD change: that stamp is unavailable at `env-populate`
+time, so the same refutation may apply); or keep generating but never `env_set` it; or make
+`env-check` distinguish "set" from "set by us".
+
+**Done when:** `make env-populate` on a tenant box does not write a Harbor credential the lab has
+never heard of, `make env-check` cannot go green on a fabricated one, and both directions are
+RED-proven with a control that must still generate.

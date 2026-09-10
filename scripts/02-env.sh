@@ -81,7 +81,8 @@ env_populate() {
 
   echo "== GENERATE (secrets for the components we install — minted only if unset) =="
   # Gitea is ALWAYS ours → always safe to generate.
-  local g_admin g_ci h_pw a_pw made=0
+  # a_pw is GONE with the ArgoCD generate-arm below -- do not re-add it.
+  local g_admin g_ci h_pw made=0
   if is_placeholder "${GITEA_ADMIN_PASSWORD:-}"; then g_admin="$(gen_password)"; env_set GITEA_ADMIN_PASSWORD "$g_admin"; echo "  + GITEA_ADMIN_PASSWORD  (generated)"; made=1; fi
   if is_placeholder "${GITEA_CI_PASSWORD:-}";    then g_ci="$(gen_password)";    env_set GITEA_CI_PASSWORD    "$g_ci";    echo "  + GITEA_CI_PASSWORD     (generated)"; made=1; fi
   # Harbor/ArgoCD passwords: a throwaway default that works out-of-the-box for the local
@@ -98,15 +99,28 @@ env_populate() {
   # A fabricated credential is indistinguishable from a real one, which is why nobody caught it.
   # VKS_NAMESPACE is the discriminator: `.env.example:1027` ships it COMMENTED, so it is empty on
   # KinD (generate, as before) and set from Step 2 on a real lab (never invent).
-  if is_placeholder "${ARGOCD_ADMIN_PASSWORD:-}"; then
-    if [ -n "${VKS_NAMESPACE:-}" ]; then
-      echo "  - ARGOCD_ADMIN_PASSWORD (NOT generated: VKS_NAMESPACE is set, so ArgoCD is lab-provided —"
-      echo "                           inventing one here would be printed as fact by 'make creds-show')"
-    else
-      a_pw="$(gen_password)"; env_set ARGOCD_ADMIN_PASSWORD "$a_pw"
-      echo "  + ARGOCD_ADMIN_PASSWORD (generated — KinD only; real lab reads it with 'make argocd-password')"; made=1
-    fi
-  fi
+  # ⚠️ NEVER GENERATED, AND THE DISCRIMINATOR THAT USED TO GUARD IT WAS ANTI-CORRELATED WITH A REAL LAB.
+  # ArgoCD's password is set BY ArgoCD, so inventing one writes a credential nothing honours into .env
+  # — and `make creds` then prints it as fact. The comment above already said a fabricated credential
+  # is indistinguishable from a real one; the guard it described had the same failure mode.
+  #
+  # MEASURED: `[ -n "$VKS_NAMESPACE" ]` generated with VKS_NAMESPACE unset (the default tenant shape)
+  # AND with VKS_AUTH_METHOD=vcf explicitly set — i.e. on a lab the operator had DECLARED real.
+  # `.env.example:1517` ships VKS_NAMESPACE commented for everyone; :239-243 of THIS file argues it
+  # must NOT be required on the vcf path; docs/scenario-2.md:421 lists only kubeconfig for a tenant.
+  # A runbook-following tenant therefore never has it set here.
+  #
+  # ⚠️ RE-KEYING IT ON `VKS_STATE_KIND` WAS ALSO REFUTED — do not "restore" it that way. state_claim_kind
+  # (05-kind-up.sh:134) and the mint (:201) are in the SAME script, so on the success path
+  # ARGOCD_ADMIN_PASSWORD is already set and `is_placeholder` is FALSE: the block is skipped before any
+  # discriminator runs. Its true-arm would be reachable only after a kind-up that CRASHED between the
+  # two lines. A discriminator whose true-arm needs a crash is not a discriminator — it just reads like
+  # live KinD support and invites the fabrication back.
+  #
+  # Deleting it is safe (full census): the var is in NO `required=` list (:236), 07-install-argocd.sh:163
+  # treats it as OPTIONAL (unset ⇒ ArgoCD keeps its own), argocd-password.sh reads the CLUSTER first, and
+  # 05-kind-up.sh:201 mints one into .env.state for KinD independently of this step.
+  echo "  - ARGOCD_ADMIN_PASSWORD (never generated — ArgoCD sets its own; read it with 'make argocd-password')"
   [ "$made" = 1 ] || echo "  (all already set — nothing generated)"
 
   echo

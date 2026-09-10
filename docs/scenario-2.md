@@ -793,7 +793,7 @@ Catch a wrong value in **seconds** instead of 20 minutes into the mirror. As a t
 most of these values, so this is exactly where a typo or a stale endpoint shows up:
 
 ```bash
-make env-populate   # mints the Gitea secrets; it CANNOT discover a Supervisor-hosted Harbor/ArgoCD from your GUEST kubeconfig (you set those above) — skip it if you set everything by hand
+make env-populate   # mints the Gitea secrets AND a Harbor password you MUST override (see B725); it CANNOT discover a Supervisor-hosted Harbor/ArgoCD from your GUEST kubeconfig (you set those above) — skip it if you set everything by hand
 make env-check      # presence gate: is every required value set? (fast, no network)
 make env-validate   # validity gate: does KUBECONFIG reach the cluster, and does Harbor really authenticate?
 ```

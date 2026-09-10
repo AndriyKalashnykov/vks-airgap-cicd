@@ -245,8 +245,20 @@ if command -v kubectl >/dev/null 2>&1; then
     if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
       log_warn "ARGOCD_ADMIN_PASSWORD is set, but the cluster still has argocd-initial-admin-secret"
       log_warn "  -> your value was NEVER APPLIED (an install with SKIP_DOTENV=1 does not read .env)."
-      log_warn "  -> printing the password that ACTUALLY works. To pin your own:"
-      log_warn "     make install-argocd   (or: make e2e-kind E2E_SKIP_DOTENV=0)"
+      log_warn "  -> printing the password that ACTUALLY works."
+      # ⚠️ THE REMEDY IS RIG-SCOPED; THE DIAGNOSIS ABOVE IS NOT. Both commands below PROVISION LOCAL
+      # TEST INFRASTRUCTURE — Makefile:922 describes `install-argocd` verbatim as "Install ArgoCD into
+      # KinD", and it applies manifests to whatever $KUBECONFIG names. This arm is reachable on a REAL
+      # lab (argocd-server creates argocd-initial-admin-secret at runtime and nothing deletes it), so
+      # unguarded it pointed a tenant at a KinD installer aimed at their own cluster.
+      # Same shape and same fix as lib/harbor.sh:153, which gates its KinD-only remedy on this stamp.
+      if [ "${VKS_STATE_KIND:-0}" = 1 ]; then
+        log_warn "  -> to pin your own: make install-argocd   (or: make e2e-kind E2E_SKIP_DOTENV=0)"
+      else
+        log_warn "  -> ArgoCD here is lab-provided: your ARGOCD_ADMIN_PASSWORD was never applied and"
+        log_warn "     nothing here can apply it. Unset it in .env. To CHANGE the password, use the"
+        log_warn "     ArgoCD CLI against the instance: argocd account update-password"
+      fi
     fi
     # ⚠️ THIS IS THE *INITIAL* PASSWORD. ArgoCD does NOT delete the secret when the password is
     # changed, and scenario-1 Step 5 tells the reader to run `argocd account update-password`
@@ -333,6 +345,10 @@ log_error "No ArgoCD 'admin' password is available locally for this context."
 log_error "  Looked for argocd-initial-admin-secret in ns/${ARGOCD_NAMESPACE} via: $(_candidates | tr '\n' ' ')"
 log_error "  • real VKS: the initial secret is created by the ArgoCD instance — 'make argocd-password'"
 log_error "    waits for it. If it is genuinely gone, someone has rotated the password."
+# ⚠️ Same rig-scoping as the arm above: this line prescribes a LOCAL-INFRA installer, so it prints only
+# when the stamp proves we are on the rig. Unguarded it let an operator ARM the conflict arm by hand.
+if [ "${VKS_STATE_KIND:-0}" = 1 ]; then
 log_error "  • KinD: set ARGOCD_ADMIN_PASSWORD in .env and re-run 'make install-argocd' for a known"
 log_error "    login, or ensure the cluster is up so the generated 'argocd-initial-admin-secret' is readable."
+fi
 exit 3
