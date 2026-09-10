@@ -9491,20 +9491,16 @@ highest-value finding is about something already shipped.
 **MEASURED 2026-09-10** on a fixture holding an ordinary `/etc/hosts`. `98-uninstall-all.sh:332`
 prints, for the operator to paste:
 
-```sh
-sudo sed -i '/vks.local/d' /etc/hosts
-```
+    sudo sed -i '/vks.local/d' /etc/hosts
 
 Against `127.0.0.1 localhost gitea.vks.local` it deletes **the whole line** — removing `localhost`
 from `/etc/hosts`. It also takes `10.0.0.1 myserver.example.com stale.vks.local` with it.
 
-```
-before                                            after `sed '/vks.local/d'`
-127.0.0.1 localhost gitea.vks.local               127.0.1.1 thisbox
-127.0.1.1 thisbox                                 (both other lines GONE)
-10.0.0.1 myserver.example.com stale.vks.local
-192.168.99.9 javawebapp.vks.local
-```
+    before                                            after `sed '/vks.local/d'`
+    127.0.0.1 localhost gitea.vks.local               127.0.1.1 thisbox
+    127.0.1.1 thisbox                                 (both other lines GONE)
+    10.0.0.1 myserver.example.com stale.vks.local
+    192.168.99.9 javawebapp.vks.local
 
 **Root cause, shared with the sibling already fixed:** a **line-level** operation on a file whose
 lines carry MULTIPLE names. A `*.vks.local` alias routinely shares a line with `localhost` or a real
@@ -9540,16 +9536,14 @@ not a pipe, or `grep -q` + `pipefail` reports a false CLEAN over a present defec
 
 **The damage is 6x what I wrote.** My fixture had 4 lines; the round's had 7. Measured, GNU sed 4.9:
 
-```
-BEFORE (7 lines)                                 AFTER  sed -i '/vks.local/d'
-127.0.0.1 localhost gitea.vks.local              ::1 ip6-localhost ip6-loopback
-10.0.0.1 myserver.example.com stale.vks.local    ^^^ THAT IS THE ENTIRE REMAINING FILE
-192.168.1.7<TAB>tabbed.vks.local
-fe80::1 v6.vks.local
-192.168.1.9 two.vks.local also.vks.local
-::1 ip6-localhost ip6-loopback
-10.0.0.2 pureapp.vks.local
-```
+    BEFORE (7 lines)                                 AFTER  sed -i '/vks.local/d'
+    127.0.0.1 localhost gitea.vks.local              ::1 ip6-localhost ip6-loopback
+    10.0.0.1 myserver.example.com stale.vks.local    ^^^ THAT IS THE ENTIRE REMAINING FILE
+    192.168.1.7<TAB>tabbed.vks.local
+    fe80::1 v6.vks.local
+    192.168.1.9 two.vks.local also.vks.local
+    ::1 ip6-localhost ip6-loopback
+    10.0.0.2 pureapp.vks.local
 
 It removes **6 of 7 lines** — every IPv4 line, including the whole `127.0.0.1 localhost` definition.
 Nothing attributes a broken files-first `localhost` lookup to a teardown run days earlier.
