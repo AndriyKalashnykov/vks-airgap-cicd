@@ -121,7 +121,7 @@ EOF
 
 # THE FLOOR. The denominator below is only meaningful if it is non-zero: "0 scanned" and "0
 # vulnerabilities" are indistinguishable in the OK line, and the OK line is what a reader believes.
-[ "$scanned" -gt 0 ] || die "trivy-fs: scanned 0 app artifact(s) - refusing to report a CLEAN scan over nothing. Either the app registry is unreadable or no app produced an artifact (did 'make app-build' run?)."
+[ "$scanned" -gt 0 ] || die "trivy-fs: scanned 0 app artifact(s) - refusing to report a CLEAN scan over nothing. Either the app registry is unreadable, or no app produced an artifact -- trivy-fs builds what it scans inside each app's builder image, so check that image first."
 
 # Print the denominator: a scanner that cannot say how many artifacts it looked at cannot be trusted.
 if [ "$rc" -eq 0 ]; then

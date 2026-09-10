@@ -30,7 +30,6 @@ honest check, because it is what the air-gapped build actually runs:
 
 ```sh
 make app-test  APP=pythonwebapp
-make app-build APP=pythonwebapp
 make app-run   APP=pythonwebapp
 ```
 

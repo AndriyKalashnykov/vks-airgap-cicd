@@ -30,7 +30,6 @@ honest check, because it is what the air-gapped build actually runs:
 
 ```sh
 make app-test  APP=gowebapp
-make app-build APP=gowebapp
 make app-run   APP=gowebapp
 ```
 
