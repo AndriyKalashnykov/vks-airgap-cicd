@@ -646,8 +646,9 @@ fi
 
 # Whose state is it? The KinD flow STAMPS the sink (VKS_STATE_KIND=1); a real lab's does not.
 if [ "$_sink_refused" = 1 ]; then
-  _flow="undetermined — a state overlay exists but was REFUSED (stamped for another cluster), so
-                   nothing in it is in play here"
+  # The reason is stated once, in the `state overlay:` entry. Repeating it here was the third
+  # telling of one fact -- fourth counting the stderr block.
+  _flow="undetermined (the state overlay was refused)"
 elif [ "$_have_sink" = 1 ] && grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null; then
   _flow="KinD stand-in"
 elif [ "$_have_sink" = 1 ]; then
@@ -834,6 +835,12 @@ case "$_prov" in
                 # vCenter/SSO rows are deliberately NEVER probed (SSO locks out after 3 binds). A
                 # reader scanning down for a verdict on those rows finds none and reads the absence
                 # as "nothing wrong with that one".
+                # ⚠️ DO NOT CUT THIS. I did, and test-creds-show caught it. It reads like
+                # mechanism, but it is the REASON provenance is STORED rather than DISCOVERED, and
+                # the assertion guarding it records an operator complaint plus the re-wording that
+                # fixed it ("carries no cluster stamp" was OUR jargon; this phrasing is already the
+                # improved one). The ROW TEST cuts lines the reader cannot act on -- not the one
+                # sentence that explains the state they are in.
                 printf '                   Nothing records which cluster they came from — normal, but unverified here.\n'
                 # ⚠️ SCOPED, because the unqualified word was FALSE. MEASURED: `env_validate`
                 # (02-env.sh) has ZERO references to `supervisor_kubeconfig` and ZERO to
@@ -846,8 +853,9 @@ case "$_prov" in
                 # this lab `make env-validate` returns rc=0 with "Harbor credentials accepted
                 # (HTTP 412)". It also cited an internal backlog id at an operator who has only this
                 # repo. Both gone. What it re-checks is stated once, plainly.
-                printf '                   re-check: make env-validate  (Harbor login + KUBECONFIG only —\n'
-                printf '                   it cannot tell whether a robot credential can PUSH)\n'
+                # KEPT, on ONE line: not mechanism -- it changes what a reader concludes from a
+                # green env-validate (B715: it cannot judge a robot's PUSH right).
+                printf '                   re-check: make env-validate  (it cannot prove a robot can PUSH)\n'
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
                 printf '                   passwords below belong to that one, not to the cluster you are talking to.\n'
@@ -856,19 +864,26 @@ case "$_prov" in
                 printf '                   Inspect it with: make state-show   |   re-check: make env-validate\n'
               fi ;;
   *)          if [ "$_env_populated" = 1 ]; then
-                printf '    values below : from YOUR .env — the values you supplied. This report cannot\n'
-                printf '                   confirm they are still current. Check: make env-validate\n'
+                # ⚠️ NOT ALL OF THEM: Reachable is probed live and the headlamp token is minted
+                # fresh every run, so a blanket "the values you supplied" is false about exactly
+                # the two cells a reader acts on.
+                printf '    values below : your .env — except Reachable (probed live) and the headlamp\n'
+                printf '                   token (minted each run).  re-check: make env-validate\n'
               else
                 printf '    values below : PLACEHOLDERS from .env.example — nothing is installed yet\n'
               fi ;;
 esac
 if [ "$_sink_refused" = 1 ]; then
-  printf '    state overlay: %s — REFUSED\n' "$_sink"
-  printf '                   It is stamped for a DIFFERENT cluster, so none of its LB IPs, CA paths\n'
-  printf '                   or passwords are in play here. Anything an installer published is\n'
-  printf '                   therefore MISSING from this report, which is NOT the same as absent\n'
-  printf '                   from the cluster. The ERROR block above names which cluster it belongs\n'
-  printf '                   to; inspect it with: make state-show\n'
+  # ⚠️ THE OLD TEXT CITED THE stderr ERROR BLOCK ("names which cluster it belongs to"). load_env
+  # writes that through _log, i.e. to STDERR, while this report is STDOUT -- measured 6 lines on
+  # stderr against 67 on stdout, so on any piped run (walk-doc.sh pipes every statement) the
+  # citation resolved to nothing. It also said "a DIFFERENT cluster" without ever naming it.
+  # Name it here, once. Both values are already in scope.
+  printf '    state overlay: %s — REFUSED\n' "$(basename "$_sink")"
+  printf '                   written for %s, you selected %s.\n' "${_stamp:-<unstamped>}" "${_live_srv:-<unknown>}"
+  printf '                   Every address and password an installer published is MISSING FROM THIS\n'
+  printf '                   REPORT — which is not the same as absent from the cluster.\n'
+  printf '                   whose: make state-show\n'
 elif [ "$_have_sink" != 1 ]; then
   printf '    values below : nothing has been installed yet\n'
 fi
@@ -1025,7 +1040,12 @@ _probe_tcp() {                    # <host> <port> -> 0 if something answers, non
 # above, so this costs nothing on the happy path.
 _reach_ingress() {
   [ "${_no_probe_snapshot:-${CREDS_NO_PROBE:-0}}" = 1 ] && { printf 'not probed'; return; }
-  [ -n "${_ing:-}" ] || { printf 'no ingress';  return; }
+  # ⚠️ NOT 'no ingress'. The legend below defines this column as "Reachable = the address
+  # answered", and `no ingress` answers a DIFFERENT question -- it restates the URL cell, which
+  # already says `<needs ingress>`. MEASURED 2026-09-10: this cell read `no ingress` on NINE rows
+  # while all nine answered HTTP 200 through 192.168.101.134. The address was missing from the
+  # REPORT (a refused overlay), not from the cluster.
+  [ -n "${_ing:-}" ] || { printf -- '-';  return; }
   if [ "${_ing_live:-0}" != 1 ]; then printf 'silent'; return; fi
   # A previous row already proved the LB does not complete an HTTP request (see _route_dead above).
   # `LB up` is the SAME thing this function says when it has no host to name: the TCP probe passed
@@ -1820,14 +1840,14 @@ fi
 # that box `.env` carried INGRESS_CONTROLLER=istio, so the prescription would have helm-installed over
 # a live mesh. A refusal erases the ADDRESS; it is not evidence about the cluster.
 if [ -n "${_un_ing:-}" ]; then
-  printf '\n  no URL in this report for: %s\n' "$_un_ing"
-  printf '    That is a fact about THIS REPORT, not about the cluster — no ingress address\n'
+  # ⚠️ DO NOT RE-LIST THE SERVICE NAMES. The table above already marks every one of them
+  # `<needs ingress>`; printing the nine names again, plus a fourth telling of why, spent 5 lines
+  # to deliver ONE new thing -- the port-forward. Point at the marker instead.
+  printf '\n  no URL for the rows marked <needs ingress> — a fact about THIS REPORT, not the cluster.\n'
   if [ "$_sink_refused" = 1 ]; then
-    printf '    is configured here: a state overlay exists but was REFUSED as another cluster'"'"'s,\n'
-    printf '    so the address it published is not in play.  WHOSE: make state-show\n'
-    printf '    now: kubectl -n <ns> port-forward svc/<svc> 8080:<port>\n'
+    printf '    now: kubectl -n <ns> port-forward svc/<svc> 8080:<port>   (why: the Context block above)\n'
   else
-    printf '    is configured here.  URL: make install-ingress   |   now: kubectl -n <ns> port-forward svc/<svc> 8080:<port>\n'
+    printf '    URL: make install-ingress   |   now: kubectl -n <ns> port-forward svc/<svc> 8080:<port>\n'
   fi
 fi
 if [ -n "${_un_oth:-}" ]; then
@@ -1857,9 +1877,11 @@ fi
 # ---- notes the TABLE CELLS point at. A cell may carry a short marker; the sentence lives here.
 # A marker that says "see note" with no note is a citation that resolves to nothing -- worse than no
 # marker at all, because it reads as sourced.
-if [ "${_headlamp_note:-0}" = 1 ]; then
-  printf '\n  Headlamp: if the token screen comes straight back, the token expired — copy a fresh one above.\n'
-fi
+# CUT (the whole if/fi): "Headlamp: if the token screen comes straight back, the token expired --
+# copy a fresh one above." The token cell already carries `(valid until <ts>)`, so this warned
+# about something that had not happened and told the reader to re-copy a value already on screen.
+# ROW TEST: no action. `_headlamp_note` is now unread -- if a real Headlamp remedy is ever needed,
+# write it from the cell's marker, not from a guess about what the browser did.
 # WHY the Harbor admin password is missing, and what to ACTUALLY do about it. Printed only when the
 # cell did not resolve, so a healthy run stays quiet.
 #
@@ -1885,7 +1907,9 @@ fi
 # runs it, gets rc=0 and two INFO lines, and still has no password. Say what is true of BOTH arms.
 if [ -n "${_h_admin_why:-}" ]; then
   case "${_h_admin_why}" in
-    *"Supervisor token expired"*) printf '\n  Harbor admin password NOT read (see the banner above).\n' ;;
+    # "see the banner above" pointed ~40 lines up. Name the cause here; the NEXT line already
+    # carries the only thing a reader acts on (harbor-admin-password will not help, and why).
+    *"Supervisor token expired"*) printf '\n  Harbor admin password NOT read (the Supervisor token expired).\n' ;;
     *) printf '\n  Harbor admin password NOT read: %s\n' "$_h_admin_why" ;;
   esac
   # No backticks: shellcheck reads them as command substitution inside a single-quoted printf
@@ -1924,7 +1948,11 @@ case "${_argo_tls_flag:-0}" in
     # DISCRIMINATE"), and `make env-validate` cannot judge a robot at all (B715).
     printf '\n  Reachable = the address answered. Username/Password are AS CONFIGURED, not tested.\n'
     printf '\n  untrusted cert: browser -> click through; curl/CLI -> --insecure.\n'
-    printf '  ArgoCD is at a bare IP and its cert has no IP SAN, so nothing can verify it there.\n' ;;
+    # CUT: "ArgoCD is at a bare IP and its cert has no IP SAN, so nothing can verify it there."
+    # TRUE (measured: DNS SANs only, zero IP SANs) and pure mechanism -- the line above already
+    # tells the reader what to DO about an untrusted cert, and the WHY changes no action.
+    # ⚠️ this line carried the case arm's `;;` -- removing it naively breaks the script.
+    ;;
 esac
 
 # --- footnote: WHAT IS NOT REAL YET, and whose job it is to fix ------------------------
@@ -2427,7 +2455,7 @@ EOF
 # publishes no node-SSH secret"), `<unreachable>` and `<stale CA>` — every one of them a statement
 # about the lab, and scenario-1.md:1102 documents that intent ("never a blank that would read as
 # this cluster has none"). A reader applying the absolute would discount an actionable lab fact.
-printf '\n  Lab access — from your .env. <not set> = this report lacks it, not the lab.\n'
+printf '\n  Lab access. <not set> = this report lacks it, not the lab.\n'
 # ⚠️ "read live" IS A CLAIM, and it used to print unconditionally -- including on the run where
 # `_sup_timeout` returned 119 WITHOUT DIALLING. Paired with `<could not read node addresses>` it told
 # the operator the live cluster HAD been asked and had no readable addresses (a lab/RBAC fact) when
@@ -2515,7 +2543,12 @@ if [ -z "${VCENTER_HOST:-}" ] && [ -z "${VCENTER_USERNAME:-}" ] && [ -z "${VCENT
 fi
 
 printf '\n  ⚠️ vCenter SSO locks out PERMANENTLY after 3 failed attempts. This report never\n'
-printf '     authenticates, so nothing here spends one. If a value is rejected: STOP, ask the lab owner.\n'
+# ⚠️ SCOPED TO vCENTER, because unscoped it is FALSE: this report makes authenticated Kubernetes
+# API calls and MINTS a credential (`kubectl create token` for the headlamp row). The consequence
+# was always sound -- it never binds to vCenter SSO -- but "never authenticates" reads as "makes no
+# authenticated calls at all".
+printf '     authenticates TO vCENTER, so nothing here spends one. If a value is rejected: STOP,\n'
+printf '     ask the lab owner.\n'
 # ⚠️ NOT DERIVED, and it no longer pretends to be (impl round, MED). The previous version looped over
 # a HARDCODED 7-element literal counting its own elements — MEASURED: injecting an 8th row still
 # printed 7. It tracked neither the rows, nor .env.example, nor the scenario docs, and reading as

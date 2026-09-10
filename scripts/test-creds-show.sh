@@ -500,7 +500,10 @@ if printf '%s' "$out" | grep -q 'None of them exists'; then
 else
   ok "B161: it does NOT claim the values are non-existent placeholders"
 fi
-if printf '%s' "$out" | grep -qi 'from YOUR .env'; then
+# Anchored on the values-below line naming .env as the SOURCE, not on the exact phrasing.
+# Scoped deliberately: a bare /\.env/ would also match the PLACEHOLDER arm's '.env.example',
+# which is the very state this case exists to distinguish from a populated one.
+if printf '%s' "$out" | grep -qE 'values below *: *your \.env'; then
   ok "B161: it names the real SOURCE (.env) instead of asserting freshness"
 else
   bad "B161: it does not name .env as the source" "source is the only question answerable offline"
@@ -1105,7 +1108,13 @@ if printf '%s' "$out" | grep -q 'values-provenance: DEFAULT'; then
 else
   bad "STATE 11: provenance is '$(printf '%s' "$out" | grep -m1 'values-provenance:' || echo NONE)'; a refused overlay is, for provenance, NO overlay"
 fi
-if printf '%s' "$out" | grep -q 'flow *: *undetermined — a state overlay exists but was REFUSED'; then
+# ⚠️ ANCHORED ON THE VERDICT, NOT THE PROSE. This pinned the whole sentence
+# ("undetermined — a state overlay exists but was REFUSED"), so shortening that line -- which was
+# the THIRD telling of one fact in the same report -- failed a case whose stated intent ("the flow
+# line does not claim the refused overlay's flow") was still satisfied. The word `undetermined` IS
+# the verdict; it still discriminates, because the defect this guards is flow claiming a CONCRETE
+# flow (`real lab` / `KinD stand-in`), and neither of those matches.
+if printf '%s' "$out" | grep -qE 'flow *: *undetermined'; then
   ok "STATE 11: and the flow line does not claim the refused overlay's flow"
 else
   bad "STATE 11: flow says '$(printf '%s' "$out" | grep -m1 'flow ' || echo NONE)' — computed from a file that is not in scope"

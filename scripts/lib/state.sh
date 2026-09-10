@@ -202,12 +202,21 @@ state_check() {
   [ -n "$want" ] || return 0                 # cannot tell -> do not guess
   [ "$want" = "$stamped_server" ] && return 0
 
-  log_error "state: $(basename "$f") was written for a DIFFERENT cluster."
-  log_error "    stamped for : ${stamped_server}"
-  log_error "    you selected: ${want}  (KUBECONFIG=${_VKS_EXPLICIT_KUBECONFIG})"
-  log_error "  NOT sourcing it — its LB IPs, CA paths and passwords belong to the other cluster, and a"
-  log_error "  stale value here is indistinguishable from a deliberate override."
-  log_error "  Leaving the file ALONE. Inspect it with 'make state-show'."
+  # ⚠️ WARN, NOT ERROR, AND THREE LINES INSTEAD OF SIX.
+  #
+  # SEVERITY: nothing here fails. state_check returns 1, load_env skips the sourcing, and every
+  # caller continues -- `make creds` exits 0 by design. Six ERROR lines for a handled condition,
+  # at the top of every run, is how an operator learns to scroll past ERROR.
+  #
+  # LENGTH: the rationale ("a stale value here is indistinguishable from a deliberate override")
+  # is WHY the code does this -- it belongs in this comment, not in the operator's terminal. What
+  # they need is which cluster it belongs to, which one they picked, and that nothing was lost.
+  # MEASURED 2026-09-10: in the refused state this one fact was told FOUR times across ~14 lines
+  # (here, the Context state-overlay entry, the flow entry, and the no-URL note) in a 67-line
+  # report carrying 18 lines of actual value.
+  log_warn "state: $(basename "$f") belongs to a DIFFERENT cluster — NOT sourcing it."
+  log_warn "  written for ${stamped_server}, you selected ${want}"
+  log_warn "  Nothing is lost — the file is left alone. Inspect it with 'make state-show'."
   # DELIBERATELY NOT state_archive HERE. state_check runs inside load_env, i.e. on EVERY script,
   # including read-only ones. Archiving from a READ path means a single
   #     KUBECONFIG=/tmp/other make creds-show
