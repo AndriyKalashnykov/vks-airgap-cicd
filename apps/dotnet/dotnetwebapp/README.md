@@ -30,7 +30,6 @@ honest check, because it is what the air-gapped build actually runs:
 
 ```sh
 make app-test  APP=dotnetwebapp
-make app-build APP=dotnetwebapp
 make app-run   APP=dotnetwebapp
 ```
 

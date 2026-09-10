@@ -226,7 +226,9 @@ _su() {  # $1 = value for _VKS_STATE_SOURCED ('' = unset); echoes "<rc> <keys-le
       . scripts/lib/os.sh >/dev/null 2>&1; . scripts/lib/state.sh >/dev/null 2>&1
       [ -n "'"$1"'" ] && export _VKS_STATE_SOURCED='"$1"'
       state_unset FOO' ) >/dev/null 2>&1 && _r=0 || _r=$?
-  printf '%s %s' "$_r" "$(grep -c '^FOO=' "$TD/.env.state" 2>/dev/null || printf 0)"
+  # `|| true`, NOT `|| printf 0`: grep -c prints its count AND exits 1 on zero, so a value-emitting
+  # fallback yields "0\n0". This passed only because the `read` below truncates at the newline.
+  printf '%s %s' "$_r" "$(grep -c '^FOO=' "$TD/.env.state" 2>/dev/null || true)"
 }
 read -r _r _left <<<"$(_su 1)"
 if [ "$_r" = 0 ] && [ "$_left" = 0 ]; then ok "STATE_SOURCED=1: the key IS removed (normal path intact)"

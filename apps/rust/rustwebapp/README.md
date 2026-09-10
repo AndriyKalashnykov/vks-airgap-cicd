@@ -30,7 +30,6 @@ honest check, because it is what the air-gapped build actually runs:
 
 ```sh
 make app-test  APP=rustwebapp
-make app-build APP=rustwebapp
 make app-run   APP=rustwebapp
 ```
 

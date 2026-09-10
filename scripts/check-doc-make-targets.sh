@@ -39,7 +39,13 @@ cd "$REPO_ROOT"
 # empty input, grep exits 1, `pipefail` promotes it, and `set -e` kills this gate SILENTLY at rc=1 —
 # so the die never prints and the blindness the guard exists to announce is announced by nothing.
 # Found 2026-07-19 by an adversary, ONE DAY after the guard was added, in the exact case it targets.
-docs=$(git ls-files --cached --others --exclude-standard 'README.md' 'docs/*.md' \
+# ⚠️ THE PER-APP READMEs WERE MISSING FROM THIS CORPUS, and they are the most operator-facing docs
+# in the tree: each one is the landing page for one app and each hands the reader a copy-paste block.
+# MEASURED 2026-09-09 when the corpus was widened: all SIX advertised `make app-build APP=<name>`,
+# a target RETIRED on purpose (app-test.sh:137 dies "app-build is retired ... Use 'make app-verify'")
+# and absent from the Makefile (0 hits, any form). Six dead copy-paste lines, invisible for as long
+# as the gate has existed, because the pathspec said `README.md` — root only — and `docs/*.md`.
+docs=$(git ls-files --cached --others --exclude-standard 'README.md' 'docs/*.md' 'apps/*/*/README.md' \
         | grep -v '^docs/reviews/' || true)
 # WRONG POLARITY until 2026-07-19: this exited 0 when the doc list was empty, so a broken pathspec
 # was indistinguishable from a clean repo. An empty operator-doc set is not a valid state here.

@@ -307,7 +307,19 @@ log_info "  (1 CP + 2 best-effort-small workers). Yours varies with host load an
 # forever. `make vks-cluster-status` used to burn its FULL wait (measured: 1807s) before saying so;
 # since B92 its waiting form reads the endpoint ONCE up front and refuses in 0s instead.
 #
-# THE CAUSE IS A REUSED NAME, and that is measured, not inferred. Five incarnations of the SAME name
+# ⚠️ THE CAUSE IS CONTESTED — do not quote the paragraph below without this line (B523, and its own
+# "DO NOT CORRECT THE HEADER YET" caveat). An adversary-k8s round refuted the causal attribution with
+# live reads: `secrets/*.kubeconfig` is an accidental 13-entry allocation ledger showing THIRTEEN
+# never-before-used names and ELEVEN of them on the SAME .132, so the name does not select the
+# address; and the allocator QUARANTINES a just-freed VIP (gc2 took .134 while .132 sat free and
+# genuinely released, IPPool allocated=6 == 6 live LB svcs). Under that reading the predecessor's
+# address is READ BACK, and the name is the lookup KEY, not the cause. The experiment below excluded
+# "lab freshness" and nothing else, so it does not discriminate between the two. What keeps the row
+# open is one unknown: whether incarnations #2..#5 all followed an IMMEDIATE delete-recreate.
+# The OBSERVATION and the REMEDY are unaffected either way — a never-used name is immune to both.
+#
+# The originally recorded reasoning, kept because deleting it would delete the evidence:
+# Five incarnations of the SAME name
 # in the same vSphere Namespace: #1 (on a lab where the name was new) agreed and went Ready in
 # 3m45s; #2..#5 each advertised the PREVIOUS incarnation's LB IP and never converged. Then the
 # discriminating experiment, on the SAME already-used lab with NO rebuild: a cluster created under a
@@ -339,10 +351,13 @@ _cp_endpoint_check() {
       log_error "  LoadBalancer holds ${lb}. spec.controlPlaneEndpoint is set by the platform and is"
       log_error "  NOT revisited, so this cluster will NEVER become Ready — it would fail the full"
       log_error "  wait (~30 min) instead of failing here."
-      log_error "  CAUSE (measured): the name '${VKS_CLUSTER_NAME}' has been used in namespace"
-      log_error "  '${VKS_NAMESPACE}' before. The advertised address is the PREVIOUS incarnation's."
-      log_error "  FIX: create it under a NAME THAT HAS NEVER BEEN USED here — measured to agree on"
-      log_error "  the first read, on an already-used lab, with no rebuild:"
+      log_error "  CAUSE: not established. The advertised address is one a PREDECESSOR held; what"
+      log_error "  is not settled is whether the trigger is the reused NAME or a just-deleted"
+      log_error "  predecessor (this check reads only the two fields above — it does not, and cannot,"
+      log_error "  look up whether this name was used before)."
+      log_error "  FIX: create it under a NAME THAT HAS NEVER BEEN USED here. Measured to agree on"
+      log_error "  the first read, on an already-used lab, with no rebuild — and it is immune under"
+      log_error "  BOTH explanations, which is why it is the remedy even though the cause is open:"
       log_error "      make vks-cluster-create VKS_CLUSTER_NAME=<a-new-name>"
       log_error "  Do NOT delete and recreate under the same name: that reproduced it 4 times running."
       log_error "  CAPTURE FIRST if you want the platform team to see it (deleting destroys it):"

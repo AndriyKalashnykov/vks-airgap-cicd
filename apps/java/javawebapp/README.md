@@ -30,7 +30,6 @@ honest check, because it is what the air-gapped build actually runs:
 
 ```sh
 make app-test  APP=javawebapp
-make app-build APP=javawebapp
 make app-run   APP=javawebapp
 ```
 

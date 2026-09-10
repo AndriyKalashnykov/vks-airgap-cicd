@@ -186,7 +186,7 @@ else bad "C4 consented version change was blocked (rc=$rc): $(tail -3 <<< "$out"
 if [ -s "$STUB/applied.yaml" ] \
    && [ "$(grep -c 'vks-airgap-cicd.local/owned-by: vks-airgap-cicd' "$STUB/applied.yaml")" -eq 3 ]; then
   ok "C5 all THREE applied objects carry owned-by (SA, ClusterRoleBinding, PackageInstall)"
-else bad "C5 expected 3 owned-by labels in the applied manifest, got $(grep -c 'owned-by' "$STUB/applied.yaml" 2>/dev/null || echo 0)"; fi
+else bad "C5 expected 3 owned-by labels in the applied manifest, got $(grep -c 'owned-by' "$STUB/applied.yaml" 2>/dev/null || true)"; fi
 
 echo "── uninstall: never delete a cluster-scoped object BY NAME ────────────────"
 
