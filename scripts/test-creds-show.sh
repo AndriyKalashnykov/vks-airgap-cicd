@@ -1596,7 +1596,7 @@ _sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-or-empty> [
 # ArgoCD FOLLOW-UP line, which is emitted only when `_argo_pw_expired=1` -- set by that site's
 # EXPIRED arm and nowhere else. That flag IS the observable; the cell text no longer is.
 _sso_rows='creds/site1|creds||Supervisor token EXPIRED|has NOT expired|Expiry is unreadable
-creds/site2-sink|creds|VKS_STATE_KIND=1|2. THEN: make argocd-password|not read — the Supervisor token is still valid|run: make argocd-password
+creds/site2-sink|creds|VKS_STATE_KIND=1|read BY this report|not read — the Supervisor token is still valid|run: make argocd-password
 argocd-password|argocd-password||EXPIRED at|has NOT expired|no readable expiry'
 
 # ⚠️ ASSERT THE PROPERTY, NOT AN EXACT COUNT. EXPIRED must name the command AT LEAST once (measured:

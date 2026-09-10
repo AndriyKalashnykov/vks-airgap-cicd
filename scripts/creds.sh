@@ -805,11 +805,15 @@ if [ "${_SUP_DEAD:-0}" = 1 ]; then
   # command read as "either of these". MEASURED 2026-09-10: the operator ran it and got
   # `Error 3` plus four WARN lines -- sent there BY this report. The dependency is now in the text,
   # and step 2 says what it needs and that it fails without it.
+  # ⚠️ ONE ACTION, NOT TWO. An earlier version listed `make argocd-password` as a second step. It is
+  # REDUNDANT: :537 of this file already runs `argocd-password.sh --wait 0 --raw`, so the ArgoCD row
+  # is read BY this report. Renew, re-run, done. Worse, the command it named is the one that had
+  # just failed the operator -- the report sent them to it, it exited 3, and the fix was to renew,
+  # which the same banner already said. Numbering the two steps made the DEPENDENCY honest but left
+  # the redundancy in place.
+  printf '     %s\n' "$(_renew_how)"
   if [ "${_argo_pw_expired:-0}" = 1 ]; then
-    printf '     1. %s\n' "$(_renew_how)"
-    printf '     2. THEN: make argocd-password   (reads the token from step 1 — it FAILS without it)\n'
-  else
-    printf '     %s\n' "$(_renew_how)"
+    printf '     then re-run make creds — the ArgoCD row is read BY this report, not by a second command.\n'
   fi
 fi
 printf '\n  Context\n'
