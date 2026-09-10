@@ -9379,3 +9379,44 @@ time, so the same refutation may apply); or keep generating but never `env_set` 
 **Done when:** `make env-populate` on a tenant box does not write a Harbor credential the lab has
 never heard of, `make env-check` cannot go green on a fabricated one, and both directions are
 RED-proven with a control that must still generate.
+
+## 🔴 B726 — a CONTROL states a SIZE THRESHOLD about itself that is measurably FALSE, and B52 repeats it
+
+`scripts/check-grep-q-pipe.sh:37-38` says, in the scope note it prints its own verdict against:
+
+> grep buffers hunting a line terminator and thereby drains the producer. Risk needs **>32KB AND
+> multiline** (82KB multiline: 120/120). ~70 such sites remain and **NONE qualifies**, so they are
+> [out of scope].
+
+**MEASURED 2026-09-10, GNU grep 3.11, `taskset -c 0`, 200 trials per size, producer
+`{ printf 'MATCH\n'; head -c N /dev/zero | tr '\0' x; printf '\n'; } | grep -q MATCH` under
+`set -o pipefail`:**
+
+| producer | rc=141 |
+|---|---|
+| **8,000 B** | **195 / 200** |
+| 30,000 B | 196 / 200 |
+
+Both are **below** the stated 32KB floor. An independent round measured the same refutation on a
+different producer shape and got **2/300 at 8,013 B** — two orders of magnitude apart, which is the
+finding underneath the finding: **the RATE is producer-shape-dependent and is not a mechanism.**
+What is established is only that the SIZE THRESHOLD is false. Do not quote either rate.
+
+**WHY IT MATTERS AND WHY IT IS NOT A SWEEP.** The damage is not a live bug — it is the SENTENCE. It
+is what a future reader cites to wave through a bounded-but-LARGE producer (a captured HTTP body, a
+log, `$(kubectl -o yaml)` held in a var), which is exactly the case `rules/shell/coding-style.md`
+names. The ~70 sites hold short variable NAMES, so their real exposure is ~0 — but for the right
+reason, not the stated one.
+
+**Done when:** the two sentences state the mechanism as *exposure = bytes still owed AFTER the
+match; these sites hold short variable names, so exposure is ~0* and carry no size threshold; and
+B52's copy of the claim is corrected the same way.
+
+⚠️ **Do NOT reopen B52's sweep.** It is refuted, and the `<<<` empty-value hazard independently
+justifies not sweeping. This row is about the CLAIM, not the sites.
+
+**Provenance:** measured by me (rates above, one box/one grep build/one pinning — an observation,
+never a mechanism, per `gates.md` §"ONE OPERATING POINT"); the refutation of the threshold framing
+is already recorded in `rules/shell/coding-style.md`. Surfaced as an out-of-scope find by
+adversary-bash-git-cli while reviewing an unrelated diff — this repo's recurring pattern that the
+highest-value finding is about something already shipped.
