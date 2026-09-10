@@ -398,6 +398,65 @@ harbor_credential_settle() {
   die "Harbor rejected the credential this install just submitted."
 }
 
+# ── harbor_push_report <curl-ca-args...> — RBAC-ONLY, WARN-ONLY, three outcomes ──────────────────
+# B710: `harbor-auth-check` PROMISED it fails on "a credential that cannot push" and only ever
+# checked AUTHENTICATION. This closes the measurable half of that gap and NOTHING MORE.
+#
+# ⚠️ IT IS RBAC-ONLY AND SAYS SO. An idea round traced goharbor v2.15.2 and found THREE things that
+# let a credential hold a `push` grant and still be refused at push time -- read-only mode, per-
+# project QUOTA, and IMMUTABLE TAG RULES (the likely one here: `make mirror` re-pushes the SAME tags
+# every run) -- and listed more middlewares it did not enumerate, so three is a FLOOR. Only a real
+# push proves push. Promising more is exactly what B710 filed.
+#
+# ⚠️ WHY THIS ENDPOINT AND NOT /service/token. The round REFUTED the token-claim probe: it returns
+# HTTP 200 for a real robot, a BOGUS password and NO credentials alike, so a wrong password and a
+# pull-only robot are the SAME BYTES -- a rotated secret would be reported as "ask your platform
+# team for push permission". MEASURED on the live lab, all three arms:
+#     robot          -> 200 + [... {"action":"push","resource":"repository"} ...]
+#     wrong password -> 401                      <- the discrimination /service/token cannot make
+#     /users/current -> 412 (robot)              <- and this endpoint does NOT take that path
+# `GetCurrentUserPermissions` calls RequireAuthenticated then sctx.Can(); it never casts to
+# *local.SecurityContext, which is what makes /users/current 412 for a robot.
+#
+# ⚠️ NEVER GATES. It runs only when authentication already SUCCEEDED, and it returns 0 always. A
+# hard fail here would stop the documented install for a tenant whose credential is fine: an absent
+# project, a swallowed lookup error and a wrong service name are all indistinguishable from "no
+# permission" at the client, and the repo already REVERTED a prescribed prereq for that reason.
+harbor_push_report() {
+  local note_p='           ' warn_p='  note     ' proj="${HARBOR_INFRA_PROJECT:-cicd}" cfg body code pid
+  cfg="$(mktemp)"; chmod 600 "$cfg"
+  printf 'user = "%s:%s"\n' "$(esc_curlk "${HARBOR_USERNAME:-admin}")" "$(esc_curlk "${HARBOR_PASSWORD}")" > "$cfg"
+  # 1. project NAME -> NUMERIC id. NamespaceParse does strconv.ParseInt, so a name yields an EMPTY
+  #    policy list and a 200 -- i.e. it would look exactly like "no permission". Resolve it first.
+  body="$(curl -sS --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" "$@" -K "$cfg" \
+            "$(harbor_scheme)://${HARBOR_URL}/api/v2.0/projects/${proj}" 2>/dev/null)" || body=""
+  pid="$(printf '%s' "$body" | sed -n 's/.*"project_id":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)"
+  if [ -z "$pid" ]; then
+    rm -f "$cfg"
+    printf '%scould not resolve project %s to an id — push capability NOT checked (this is not a verdict on it).\n' "$note_p" "$proj" >&2
+    return 0
+  fi
+  body="$(curl -sS -w '\n%{http_code}' --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" "$@" -K "$cfg" \
+            "$(harbor_scheme)://${HARBOR_URL}/api/v2.0/users/current/permissions?scope=/project/${pid}&relative=true" 2>/dev/null)" || body=""
+  rm -f "$cfg"
+  code="$(printf '%s' "$body" | tail -1)"
+  case "$code" in
+    200) : ;;
+    *)   printf '%spush capability NOT checked (http %s) — this is NOT a verdict on the credential.\n' "$note_p" "${code:-000}" >&2
+         return 0 ;;
+  esac
+  # THE CLAIM IS THE CONTENT, NOT THE STATUS -- the status is 200 in every arm that gets this far.
+  if printf '%s' "$body" | grep -q '"action":"push","resource":"repository"'; then
+    return 0                                   # silent: nothing for the operator to do
+  fi
+  printf '%s%s can authenticate but has NO push permission on project %s (RBAC).\n' "$warn_p" "${HARBOR_USERNAME:-admin}" "$proj" >&2
+  printf '%s  ...or that project does not exist yet — the two are indistinguishable here, which is\n' "$note_p" >&2
+  # No backticks: shellcheck reads them as command substitution inside a single-quoted printf
+  # (SC2016), and they are pure decoration in terminal output. This repo records that rule already.
+  printf '%s  why this is a note and not a failure. make mirror is the authoritative check.\n' "$note_p" >&2
+  return 0
+}
+
 harbor_auth_report() {
   local ok_p='  ok       ' bad_p='  PROBLEM  ' note_p='           '
   [ -n "${HARBOR_URL:-}" ] || return 0                      # reachable_report already said so
@@ -425,9 +484,13 @@ harbor_auth_report() {
   local acode; acode="$(_harbor_auth_code "${cafg[@]}")"
 
   case "$acode" in
-    200) printf '%sHarbor accepts %s (http 200)\n' "$ok_p" "${HARBOR_USERNAME:-admin}" >&2; return 0 ;;
+    200) printf '%sHarbor accepts %s (http 200)\n' "$ok_p" "${HARBOR_USERNAME:-admin}" >&2
+         harbor_push_report "${cafg[@]}"; return 0 ;;
     412) printf '%sHarbor accepts %s (http 412 from /users/current — a ROBOT, authenticated; that endpoint is system-scoped)\n' \
-           "$ok_p" "${HARBOR_USERNAME:-admin}" >&2; return 0 ;;
+           "$ok_p" "${HARBOR_USERNAME:-admin}" >&2
+         # ⚠️ ONLY ON AN ACCEPTED VERDICT. Running it on a REJECTED one would report "no push
+         # permission" for a wrong password — the exact mis-attribution B710 exists to stop.
+         harbor_push_report "${cafg[@]}"; return 0 ;;
     403) printf '%sHarbor accepts %s (http 403 from /users/current — a project-scoped robot, authenticated)\n' \
            "$ok_p" "${HARBOR_USERNAME:-admin}" >&2; return 0 ;;
     401)

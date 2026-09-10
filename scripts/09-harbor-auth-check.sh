@@ -46,7 +46,12 @@ if harbor_auth_report; then
   # is the reassuring direction. `harbor_auth_report` prints which of the two happened; this line
   # must not paper over it. And neither state is a statement about PUSH — see the header.
   log_info "Harbor auth gate: no rejection to report (see the line above for whether a credential was actually probed)."
-  log_info "  This checks AUTHENTICATION only. It cannot tell you whether the credential may PUSH."
+  # ⚠️ UPDATED WITH harbor_push_report, AND STILL NOT A PUSH PROMISE. It now checks RBAC push
+  # permission too -- but RBAC is not the whole chain: read-only mode, per-project quota and
+  # IMMUTABLE TAG RULES can each refuse a push that RBAC allows, and an idea round listed further
+  # middlewares it did not enumerate. Only a real push proves push; say exactly that.
+  log_info "  Checked: AUTHENTICATION, and RBAC push permission (silent above = you have it)."
+  log_info "  NOT checked: read-only mode, quota, immutable tag rules — only a real push proves push."
   exit 0
 fi
 

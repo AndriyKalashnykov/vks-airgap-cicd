@@ -516,7 +516,7 @@ check-ports: ## Fail early if the local app-dev port is already in use (names th
 
 ##@ Air-gap image mirroring
 .PHONY: mirror-pull
-harbor-auth-check: ## Read-only: fail in SECONDS on a Harbor credential Harbor REJECTS — AUTHENTICATION only, it cannot tell you whether the credential may PUSH (prereq of `mirror`, NOT of `mirror-pull` — the sneakernet internet box has no Harbor)
+harbor-auth-check: ## Read-only: fail in SECONDS on a Harbor credential Harbor REJECTS. Checks authentication + RBAC push permission; it canNOT see read-only mode, quota or immutable tag rules — only a real push proves push (prereq of `mirror`, NOT of `mirror-pull` — the sneakernet internet box has no Harbor)
 	@$(SCRIPTS)/09-harbor-auth-check.sh
 
 mirror-pull: check-env ## (internet) Pull every image in images/images.txt into the local cache
