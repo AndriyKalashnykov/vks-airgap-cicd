@@ -1242,7 +1242,22 @@ _reach_ingress() {
         *[!0-9.]*|'') : ;;
         # -x -F: whole line, fixed string. A substring or regex compare would make `10.0.0.1`
         # match `10.0.0.10`, and an address is not a pattern.
-        *) printf '%s\n' "$_res" | grep -qxF "$_ing" || { printf 'stale DNS'; return; } ;;
+        #
+        # ⚠️ THE FIRST SAME-FAMILY ADDRESS, NOT "ANYWHERE IN THE SET". A `grep -qxF` over the whole
+        # set goes SILENT whenever the ingress appears ANYWHERE — including when a STALE entry comes
+        # FIRST. MEASURED with a resolver returning 10.9.9.9 then the ingress: the row printed
+        # `serving` while a browser would use 10.9.9.9. That state was previously unreachable, and
+        # this report's OWN remedy creates it: the advice below says remove-then-add, and an
+        # operator who does the add without the remove lands exactly here — so re-running the report
+        # would CONFIRM the broken state as fixed, and the advice's own warning ("an appended line
+        # LOSES to an earlier one") would have no instrument behind it.
+        #
+        # ⚠️ SAME-FAMILY IS WHAT KEEPS THE 2026-09-08 FIX. `getent hosts` returns every family in
+        # FILE ORDER and `::1` routinely comes first; comparing that against an IPv4 ingress is what
+        # produced a false `stale DNS` then. Filtering to IPv4 (the only shape `$_ing` can be here —
+        # the enclosing case rejects anything with a non-[0-9.] character) preserves that silence.
+        *) _first4="$(printf '%s\n' "$_res" | grep -E '^[0-9.]+$' | head -1 || true)"
+           if [ -n "$_first4" ] && [ "$_first4" != "$_ing" ]; then printf 'stale DNS'; return; fi ;;
       esac ;;
     esac
   fi
@@ -1334,7 +1349,19 @@ _reach_argocd() {
 # it: `_rows_capped` is rebuilt from c1..c5, so the sixth field is DISCARDED. `_rest` future-proofs
 # a row that grows a legitimate sixth COLUMN; it cannot repair a cell that contains a separator.)
 # Sanitising at the single writer makes the 5-field invariant true by construction.
-add_row() { rows="${rows}${1//$'\t'/ }"$'\t'"${2//$'\t'/ }"$'\t'"${3//$'\t'/ }"$'\t'"${4//$'\t'/ }"$'\t'"${5:--}"$'\n'; }
+# ⚠️ TAB **AND NEWLINE**. My first version stripped only TABs and its comment claimed the 5-field
+# invariant was then "true by construction". MEASURED FALSE: `HARBOR_PASSWORD=$'ab\ncd'` split the
+# Harbor row in two — a phantom row with `cd` in the Service column, `serving` in the URL column and
+# a BLANK Reachable cell. A newline is more reachable than a tab, and it is the same column-shift
+# class the strip exists to close.
+# ⚠️ AND IT REWRITES A PRINTED CREDENTIAL, which is disclosed rather than hidden: a password
+# containing a separator is shown with it replaced by a space. That is a trade, not a free fix — it
+# swaps a VISIBLE corruption (main leaks the tail into the next column, so an operator notices) for
+# an INVISIBLE one (`ab cd` is plausible and copy-pasteable). It is the right trade for a
+# fixed-width table and the wrong one to leave unsaid (RULE ZERO-V). Filed: route such a value
+# through the existing `<full value below>` footnote, which already exists for over-long cells.
+add_row() { local _sep=$'\t\n'
+  rows="${rows}${1//[$_sep]/ }"$'\t'"${2//[$_sep]/ }"$'\t'"${3//[$_sep]/ }"$'\t'"${4//[$_sep]/ }"$'\t'"${5:--}"$'\n'; }
 
 
 # Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry) -> ArgoCD (deploy) -> apps.
@@ -1861,7 +1888,12 @@ _dns_absent_hosts=""
 # A cell that is a marker (`<needs ingress>`) or `-` yields nothing, which is what we want.
 _row_host() {
   local _u="${1#*://}"
-  _u="${_u%%/*}"; _u="${_u%%:*}"
+  _u="${_u%%/*}"
+  _u="${_u##*@}"                       # drop userinfo: http://user:pass@h/ was yielding `user`
+  case "$_u" in
+    '['*) _u="${_u#[}"; _u="${_u%%]*}" ;;   # [fd00::1]:443 was yielding `[fd00`
+    *)    _u="${_u%%:*}" ;;
+  esac
   case "$_u" in ''|'<'*|-) return 0 ;; esac
   printf '%s' "$_u"
 }
@@ -1878,10 +1910,16 @@ while IFS=$'\t' read -r c1 c2 c3 c4 c5 _rest; do
   # claims them. The host is recovered from column 2 (the URL) because that is the only place the
   # table carries it -- `_reach_ingress` takes it as an argument and returns only a verdict.
   case "$c5" in
-    *'stale DNS'*)   _dns_stale=1;  _dns_stale_hosts="${_dns_stale_hosts}$(_row_host "$c2") " ;;
+    # ⚠️ THE FLAG IS SET ONLY WHEN A HOST WAS RECOVERED. A row whose URL yields nothing (a marker
+    # cell, `-`) used to append a BARE SPACE, and `tr ' ' '|'` then produced a trailing `|` — an
+    # EMPTY ALTERNATIVE, which GNU grep 3.11 matches against EVERY LINE of /etc/hosts. The printed
+    # command would have told the operator that every line claims our names.
+    *'stale DNS'*)   _h="$(_row_host "$c2")"
+                     [ -n "$_h" ] && { _dns_stale=1;  _dns_stale_hosts="${_dns_stale_hosts}${_h} "; } ;;
   esac
   case "$c5" in
-    *'no DNS here'*) _dns_absent=1; _dns_absent_hosts="${_dns_absent_hosts}$(_row_host "$c2") " ;;
+    *'no DNS here'*) _h="$(_row_host "$c2")"
+                     [ -n "$_h" ] && { _dns_absent=1; _dns_absent_hosts="${_dns_absent_hosts}${_h} "; } ;;
   esac
   # A MARKER (`<...>`) is a placeholder, not a value — never footnote one. Measured: capping at 44
   # sent the 53-char "hidden, re-run with SHOW_SECRETS=1" marker to the footnote, which then read
@@ -1997,8 +2035,16 @@ if [ "${_dns_stale:-0}" = 1 ]; then
   printf '      The service is NOT broken; the link is. A browser here will fail to connect.\n'
 fi
 if [ "${_dns_absent:-0}" = 1 ]; then
-  printf '\n  ⚠️  These names are SERVED by the ingress but do not RESOLVE on this machine, so a\n'
-  printf '      browser here gets DNS_PROBE_FINISHED_NXDOMAIN. The service is not broken, the name is:\n'
+  # ⚠️ "NOT CHECKED", not "SERVED". This arm used to assert the ingress serves these names, and
+  # nothing had asked: `_reach_ingress` returns `no DNS here` BEFORE the route probe, so all that is
+  # established is that the LB accepts TCP (`_ing_live`, shared by every row). The report HAS a
+  # DNS-independent discriminator two blocks below -- the route probe dials the LB by IP with a Host
+  # header -- and declining to use it while making the claim anyway is the B528 class this file has
+  # already fixed once. Filed: run that probe before returning `no DNS here` and downgrade to "the
+  # ingress has no route for these names" on a 404.
+  printf '\n  ⚠️  These names do not RESOLVE on this machine, so a browser here gets\n'
+  printf '      DNS_PROBE_FINISHED_NXDOMAIN. Whether the ingress serves them has NOT been checked\n'
+  printf '      (this report could not get far enough to ask). The names:\n'
   printf '        %s\n' "${_dns_absent_hosts% }"
 fi
 if [ "${_dns_stale:-0}" = 1 ] || [ "${_dns_absent:-0}" = 1 ]; then
@@ -2019,7 +2065,13 @@ if [ "${_dns_stale:-0}" = 1 ] || [ "${_dns_absent:-0}" = 1 ]; then
     # matches any character, so `tekton.vks.local` would also match `tektonXvksYlocal`. Harmless
     # for a read-only grep and wrong all the same -- a printed pattern should mean what it says.
     _dns_alt="$(printf '%s' "${_dns_stale_hosts% }" | sed 's/\./\\./g' | tr ' ' '|')"
-    printf '        1. see which lines claim them:  grep -nE '"'"'%s'"'"' /etc/hosts\n' "$_dns_alt"
+    # ⚠️ `-i`. MEASURED both halves on /etc/hosts = `10.9.9.9  Tekton.VKS.Local`: glibc's resolver
+    # is CASE-INSENSITIVE, so `getent hosts tekton.vks.local` finds it and `stale DNS` fires — while
+    # the case-SENSITIVE pattern returned rc=1 and NOTHING. The operator then concludes no line
+    # claims the name, skips the removal, does the add, and lands in the state where an earlier
+    # entry still wins. The verdict and the command that finds its cause must agree.
+    printf '        1. see which lines claim them (names match case-insensitively):\n'
+    printf '             grep -niE '"'"'%s'"'"' /etc/hosts\n' "$_dns_alt"
     printf '        2. remove ONLY those names from those lines. A line may also carry names you\n'
     printf '           need (localhost, a work host) — deleting or repointing the whole LINE is\n'
     printf '           wrong, and no make target does this, so it is a hand edit.\n'
@@ -2027,6 +2079,17 @@ if [ "${_dns_stale:-0}" = 1 ] || [ "${_dns_absent:-0}" = 1 ]; then
     printf '             %s  %s\n' "${INGRESS_LB_IP:-<ingress-lb-ip>}" "${_dns_all% }"
     printf '      Step 2 is not optional: an appended line LOSES to an earlier one for the same\n'
     printf '      name, so adding without removing leaves the stale entry winning.\n'
+    # ⚠️ THE OTHER CAUSE, and without this the advice is FALSE for it. `getent` does not say WHERE
+    # an answer came from, so a stale DNS **A record** produces the identical verdict -- this repo
+    # has that incident on record (lib/harbor.sh:577: "a reinstalled Harbor takes a NEW LoadBalancer
+    # IP and the record still names the old one ... DNS said .143 while Harbor was at .146"). In
+    # that case step 1 finds NOTHING, step 2 is impossible, and the sentence above is backwards:
+    # nsswitch is `files dns` (measured), so an /etc/hosts line BEATS a DNS answer. Without this
+    # branch the operator either concludes the report is wrong, or is deterred from the one step
+    # that would have worked.
+    printf '      If step 1 finds NOTHING, the stale answer is coming from your DNS server, not this\n'
+    printf '      file — go straight to step 3 (an /etc/hosts line wins over DNS), or fix the A\n'
+    printf '      record: make show-dns-records\n'
   else
     # Nothing stale, so nothing claims these names yet and appending is safe and complete.
     printf '        sudo sh -c '"'"'printf "%%s  %%s\\n" "%s" "%s" >> /etc/hosts'"'"'\n' \
@@ -2108,7 +2171,13 @@ fi
 #     creds.sh no-DNS advice      `sudo sh -c printf >>` -> kept, and now printed ONLY when nothing
 #                                    is stale, because an appended line loses to an earlier one
 #     70-configure-argocd.sh:449  `sudo tee -a`        -> non-idempotent, OPEN, filed
+#     docs/scenario-2.md:316      `sudo tee -a`        -> the DOC TWIN of the line above, in the
+#                                    TENANT runbook -- the surface RULE ZERO-B says is ALL a tenant
+#                                    has -- and in a section that discusses being "here on a RETRY",
+#                                    i.e. exactly where a duplicate line is most likely. OPEN.
 #     98-uninstall-all.sh:332     `sudo sed -i /d`     -> deletes whole lines, OPEN, filed as B727
+# ⚠️ THIS COUNT HAS BEEN WRONG TWICE: it said 2 when it was 4, then 4 when it was 5. Each correction
+# came from a round grepping the tree, not from me re-reading. Grep before quoting it again.
 if [ "${_pw_note_needed:-0}" = 1 ]; then
   if [ "${_sink_refused:-0}" = 1 ]; then
     printf '\n  note: those passwords are held by an overlay this report REFUSED — it belongs to a\n'

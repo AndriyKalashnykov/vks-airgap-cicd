@@ -9633,6 +9633,7 @@ the four survivors are SILENT rather than destructive, which is the harder half 
 | # | site | shape | verdict |
 |---|---|---|---|
 | 0 | `70-configure-argocd.sh:449` | `sudo tee -a` | non-idempotent; duplicates on re-run — **OPEN** |
+| 0b | **`docs/scenario-2.md:316`** | `sudo tee -a` | the DOC TWIN of the line above, in the **tenant runbook** — the surface RULE ZERO-B says is all a tenant has — **OPEN** |
 | 1 | `98-uninstall-all.sh:332` | `sed -i '/DOMAIN/d'` | destroys 6/7 lines — **OPEN** |
 | 2 | `creds.sh` stale-DNS advice | `sed -i 's/^[0-9.]\+…/LB\1/'` | repoints `localhost` AND an unrelated corporate host at our ingress LB — **FIXED on #1249** (the round's worktree was `origin/main`, which predates that branch, so it correctly reported this one as live) |
 | 3 | **`creds.sh` no-DNS advice** | `sudo sh -c 'printf … >> /etc/hosts'` | **I MISSED THIS.** Non-destructive but **NOT IDEMPOTENT** — re-running duplicates the line. `creds.sh` already documents that appending loses to a live stale entry, so it is a known-weak third instance — **OPEN** |
@@ -9708,3 +9709,50 @@ non-pass false-blocks a TENANT with no CA (RULE ZERO-B); B721's row records that
 
 **Grade:** `measured` (adversary ran the target with `HARBOR_URL` unset; line numbers read from the
 tree 2026-09-10).
+
+## 🔴 B729 — three findings left OPEN from the coherence round, and the class denominator is FIVE
+
+An impl-round on #1250 measured these and I did not fold them in; each needs more than a wording
+change and the session was long enough already.
+
+### 1. `_row_host` names the WRONG host whenever a URL var diverges from its HOST var
+
+`creds.sh`'s DNS advice recovers the hostname from column 2 (the URL), because that is the only
+place the *table* carries it. But the *loop* can see `${GITEA_HOST}` / `${TEKTON_DASHBOARD_HOST}` /
+`${HEADLAMP_HOST}` directly. MEASURED with `GITEA_URL=http://git.corp.example.com:3000/x` — a
+documented `.env.example:317` knob that `e2e-cross-cluster.sh:171` actually sets: the DNS verdict is
+computed for `gitea.vks.local`, while the advice lists `git.corp.example.com` and step 3 tells the
+operator to add an entry for a host that has no problem. The host that actually fails is never named.
+
+**Fix (not the refuted restructure):** pass the host as a 6th `add_row` argument on the four ingress
+rows and read it as `c6`. The `read` already has `_rest`, and `_rows_capped` already drops the sixth
+field, so the rendered table is byte-unchanged. Four call sites, one extra positional.
+
+### 2. Arm 2's claim is softened but the DISCRIMINATOR is still unused
+
+The `no DNS here` arm now says "whether the ingress serves them has NOT been checked" rather than
+asserting it does. The honest fix is to *check*: `_reach_ingress` returns before the route probe,
+and that probe dials the LB **by IP with a Host header**, so it is DNS-independent by construction.
+Run it, and on a 404 say "the ingress has no route for these names — a rendering fault, not a DNS
+one". Same class as B528, which this file already fixed once.
+
+### 3. The TAB/newline strip silently rewrites a printed CREDENTIAL
+
+`add_row` replaces separators with a space in cells 1–4, which includes the Password column.
+MEASURED with `SHOW_SECRETS=1` and `HARBOR_PASSWORD=$'ab\tcd'`: the branch prints `ab cd` —
+plausible, copy-pasteable and WRONG. `main` printed `ab` with the tail leaking into the next column,
+which is visibly broken and therefore noticed. The strip is right for a fixed-width table and the
+trade is now disclosed in the code, but the real fix exists already: route such a value through the
+`<full value below>` footnote the file uses for over-long cells.
+
+### And the class denominator is FIVE, not four
+
+`docs/scenario-2.md:316` carries the same non-idempotent `sudo tee -a /etc/hosts` as
+`70-configure-argocd.sh:449` — in the TENANT runbook, the surface RULE ZERO-B says is all a tenant
+has, in a section whose next paragraph discusses being "here on a RETRY". Counted in B727's table
+and in `creds.sh`'s comment. ⚠️ That count has now been wrong twice (2 when it was 4, 4 when it was
+5), each correction coming from a round grepping the tree rather than from me re-reading. Grep
+before quoting it again.
+
+**Grade:** `measured` (impl-round on #1250, product-tier: real `creds.sh` driven by a loopback
+listener and a `getent` stub, `/etc/hosts` semantics in `debian:12` under podman).

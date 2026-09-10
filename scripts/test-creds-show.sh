@@ -2084,7 +2084,11 @@ _dns_probe() {  # <label> <extra .env lines> ; echoes: <stale-rows> <nodns-rows>
   # listener is STILL UP, and `killpg` then fails ESRCH because the pgid is gone -- so the orphan
   # is unreachable by process group and holds its ephemeral port until killed by PID, with a
   # generated `.env` left behind in the leaked mktemp dir. Triggers: a CI job timeout, Ctrl-C, a
-  # `timeout N` wrapper. This function runs inside `$( )`, so EXIT fires on the normal path too.
+  # `timeout N` wrapper. EXIT also fires on the NORMAL path, but the `local`s are already out of
+# scope by then -- MEASURED: the trap runs with t=[] and lp=[], so both its actions are no-ops
+# and the temp dir survives. The explicit kill/rm below is what does the work on that path; do
+# NOT delete it because 'the trap handles it'. The trap earns its keep on the ABNORMAL path,
+# where it was verified to remove the dir and kill the listener.
   trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
   t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
   p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
@@ -2220,13 +2224,31 @@ fi
 # VKS_LAB_STATE_DIR and KUBECONFIG into a sandbox; the isolated call had none of them, and its 0/0
 # may itself be a different failure). Until then this asserts the FIX IS PRESENT, not that the
 # defect is caught.
-if grep -q "add_row() { rows=.*//\$'\\\\t'/ " "${_CREDS_REPO}/scripts/creds.sh"; then
-  ok "add_row: every cell is TAB-sanitised, so the 5-field invariant holds by construction"
-else
-  bad "add_row: a cell is written to \`rows\` without stripping TABs" \
-      "a separator inside a cell shifts every later column — measured: the reachability test then
-      reads the PASSWORD, and a stale host arms NOTHING, with no marker and no error"
-fi
+# ⚠️ COMMENTS STRIPPED, for the reason its sibling gate below already records: the `add_row` block
+# is exactly the kind of comment that QUOTES the code, and a round MEASURED that main's defective
+# creds.sh plus one appended comment quoting the sanitised form made this gate report PASS. Same
+# file, same session, and I had written that warning for the OTHER gate first.
+# ⚠️ AND IT ASSERTS THE SEPARATOR SET, not merely that some substitution happened: the first version
+# of the product fix stripped only TABs, and a NEWLINE splits the record just as thoroughly
+# (measured: a phantom row, the tail in the Service column, a BLANK Reachable cell).
+_ar="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh" | grep -A2 '^add_row()' || true)"
+case "$_ar" in
+  *'_sep=$'*)
+    # The single quotes are the point: these are LITERAL patterns to match in the source, not
+    # expansions. The disable sits on the `case`, which is one command.
+    # shellcheck disable=SC2016
+    case "$_ar" in
+      *'${1//[$_sep]/ }'*'${2//[$_sep]/ }'*'${3//[$_sep]/ }'*'${4//[$_sep]/ }'*)
+        ok "add_row: cells 1-4 are stripped of the separator set, so the 5-field invariant holds" ;;
+      *) bad "add_row: a cell reaches \`rows\` without the separator strip" \
+             "a separator inside a cell shifts every later column — measured: the reachability test
+      then reads the PASSWORD, and a stale host arms NOTHING, with no marker and no error" ;;
+    esac ;;
+  *)
+    bad "add_row: no separator set is defined" \
+        "a newline splits the record as thoroughly as a tab — measured: a phantom row, the tail in
+      the Service column, and a BLANK Reachable cell" ;;
+esac
 
 # ⚠️ STRUCTURAL, and deliberately so: it is the ONE property no render can show. A `sudo` command
 # that rewrites /etc/hosts lines is wrong on more shapes than it is right on, and its absence is
