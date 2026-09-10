@@ -1056,133 +1056,88 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-10 — `main` was RED at its own tip, CI cannot see it, and four rounds refuted me
+## ▶️ HANDOFF 2026-09-10 (evening) — every fix I shipped today had a defect a round found, including a fix FOR a round's finding
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### 🔴 DISTRUST FIRST — the harness's exit code lied THREE times, and five of my probes lied
+### 🔴 DISTRUST FIRST — NINE of my instruments lied today, three of them INSIDE new tests
 
-**A backgrounded task's reported exit code is the LAST statement's, and I read it as the gate's three
-times in one session.** `make lint > log 2>&1; echo rc=$?; grep …` reports **the grep's** status —
-so a **`lint rc=2`** arrived as *"completed (exit code 0)"*, twice, and a **failed `static-check`
-(Error 2)** arrived as *"exit code 0"* once. **Never read pass/fail off the notification.** Make the
-gate the WHOLE command (`make X > log 2>&1`, nothing after it) and grep the log for its own verdict.
+None errored. Each returned a confident wrong answer, and every one was caught by a RED-proof or a
+round, never by reading the code:
 
-Five instruments returned confident wrong answers. None errored:
-
-| probe | what it did |
+| instrument | what it did |
 |---|---|
-| `pgrep -f "make static-check"` after a kill | matched **its own shell** -> "still alive" over a process the task notification confirmed dead (144) |
-| `git worktree add` to a path that already existed | the add FAILED, my `cd` landed in a **non-git directory**, and both control tests returned rc=1 = *file-not-found*, which I nearly reported as "main is red for the same reasons" |
-| `grep -c 'untrusted cert'` | counted the note's own **heading**, so "markers=2" was **1 row + heading** and could never discriminate |
-| a `grep` pattern containing `${_argo_tls_flag:-0}` | **zsh EXPANDED it** (RULE ZERO-S) -> empty pattern -> `sed` syntax error read as a missing anchor |
-| `[ -s "$CA" ]` as "the CA is usable" | a **31-byte non-PEM** file passes; `curl --cacert` then returns **rc=77** where the system store returns 200. `[ -s <directory> ]` is TRUE too |
+| `GITEA_ADMIN_USER=stale DNS` unquoted in a `.env` | `load_env`'s `set -a` ran `DNS` as a command -> report rendered **NOTHING**, 0 lines in BOTH arms, which reads as "the fix works" |
+| a `creds.sh` copy run from OUTSIDE `scripts/` | dies sourcing `lib/os.sh` -> again 0 lines, again indistinguishable from success |
+| `grep 'sudo sed'` in a structural gate | matched **the fix's own comment**, which quotes the removed command on purpose |
+| that gate written `sed … \| grep -qE …` under `pipefail` | `grep -q` exits early, `sed` takes SIGPIPE -> **false CLEAN over a present defect**. MEASURED on the identical file: pipe form NO MATCH, herestring MATCH |
+| a legend check greping `MINTED fresh` | the arm renders `minted each run` -> passed GREEN over a reverted FALSE legend |
+| a width check measuring EVERY line | RED on a 108-char `curl` that must not wrap — that is the REASON for the shape, not the defect |
+| `grep -m1 -oE 're-check: make [a-z0-9-]*'` | **truncated** `harbor-auth-checkX` to a name that DOES exist -> existence check passed |
+| `printf '%s'` with `\t` in the ARGUMENT | printf interprets escapes in the FORMAT only -> the fixture carried a literal backslash-t |
+| `$'…\t…'` passed UNQUOTED | word-split on IFS, **which contains the tab** -> arrived as two words |
 
-### 🔴 `main` IS RED AT ITS OWN TIP, AND CI IS STRUCTURALLY BLIND TO IT
+**And two `static-check` runs were VOIDED by the repo's own tree-stability guard**, both because I
+edited while it read the tree — the second minutes after I described the first. Fix in-flight edits
+in a `git worktree`, not in place.
 
-`b6d214b` (= `origin/main`) fails `make static-check`. **Fixed on `#1242`; verify it landed.**
+### What merged / is open
 
-- `test-creds-reach-ingress` — `#1241` changed `_reach_ingress` from `no ingress` to `-` **and did
-  not update the assertion that pins it**. Fifth prose-pinned test break in one day.
-- `test-gate-vacuity` — `check-doc-make-targets` reads THREE pathspecs, the harness starved TWO, so
-  the gate examined 36 commands and was reported VACUOUS. **The DECLARATION was wrong, not the
-  gate** — the false-RED direction, whose cheapest-looking remedy is to weaken the accused gate.
+- **#1248 MERGED** — `make creds`' legend was FALSE for 3 of 5 credential rows (headlamp minted at
+  report time, Harbor web-UI read from a Supervisor secret, ArgoCD read by live kubectl), and it
+  contradicted the same render 1,100 lines earlier. Also: the `re-check:` register named the one
+  target that cannot answer its own caveat, the cert block had a 126-char label, and the password
+  note read every column.
+- **#1250 OPEN, green, HELD for a round** — supersedes **#1249 (CLOSED)**. #1249's diff carried a
+  regression it introduced and an assertion that CERTIFIED it; see below.
+- Filed: **B727** (uninstall-all deletes the localhost line; corrected twice — damage 6x what I
+  first wrote, the `${APP_DOMAIN}` derivation gap, B528's gate blind to that site, class = **4**
+  sites), **B728** (`harbor-auth-check` says "silent above = you have it" when it probed nothing),
+  **B716 stage 2** (all 12 survivors documented; stage 3's own signal would flag ZERO).
 
-**WHY IT SHIPPED, measured on the run itself:** on a push to `main`, `static-check` **SKIPS**;
-`static-check-fast` runs and **does not contain `test-scripts`** (0 occurrences); `ci-pass` counts
-skipped as passed. So the gate that catches both is never run routinely. Same class as B574.
-**Corollary: a green PR here does NOT mean `static-check` passed. Run it locally.**
+### 🔴 THE PATTERN, and it is the reason to keep running rounds
 
-### Pushed on `#1242` (7 commits) — every one measured, four refuted first
+Five rounds, five refutations, **every one landing on my own work**:
 
-- **the rc=124 arm.** `creds.sh` caps its `argocd-password` child at 3s while the child's ladder is
-  2 x 10s, so a HANGING Supervisor gave rc=124, fell into the EXPIRED arm, and the banner claimed
-  *"the ArgoCD row is read BY this report, not by a second command"* **while `make argocd-password`
-  returned the value**. Measured: `timeout 3` -> rc=124/no output; `timeout 40` -> the value.
-- **the `wait=0` hole in my own fix.** `_ap_exp` is assigned inside `[ "$_wait" -gt 0 ]` while the
-  `case` using it is unconditional -> `ARGOCD_PASSWORD_WAIT_SECONDS=0` (which `.env.example`
-  documents and `creds.sh` always uses) printed **zero** occurrences of "EXPIRED"; default printed 1.
-- **the orphaned cert note** — it hung off an ArgoCD-only flag while Harbor's marker is gated
-  independently, so two Harbor cells carried a marker with **no note and no `Reachable` legend**.
-  Default state, not an edge case.
-- **`NO_COLOR` un-exempted** — it is an operator knob, not terminal environment, and my exempt-it
-  argument was a false dichotomy: `check-env-coverage:185` accepts a **commented** slot.
+1. the design round refuted my framing of the operator's question — the legend was FALSE, not merely
+   cautious — and corrected my cost figure (28 ms prices ONE curl; the function that answers the
+   push question is THREE);
+2. an idea round refuted my proposed restructure as **redundant** (three heredoc-fed loops over
+   `rows` already exist and are not subshells), then found two HIGHs I had not asked about;
+3. the impl round on #1248 found **my new legend had no assertion on its own content** — deleting
+   the entire claim left the suite at the same count, 0 FAIL. The identical hole that commit fixed
+   three screens away;
+4. the B727 round measured the damage at **6x** my filing and found the fix I sketched does not work;
+5. the impl round on #1249 found my co-occurrence fix made the two arms **CONTRADICT** each other —
+   and that my new assertion *"BOTH arms printed"* is **GREEN on the refuted tree**.
 
-### Later that day — three more PRs, and every one of my own fixes was refuted first
-
-`#1243` cut a hedge that was **unactionable by construction**; `#1244` corrected `B726` **the same
-day I filed it** (my probe used an external producer; the repo's 374 `| grep -q` sites use the
-`printf` builtin, which measured **0/150 even at 200 KB** against a positive control at 146/150);
-`#1245` fixed three operator complaints AND the four defects a round found in my fixes for them.
-
-⚠️ **THE PATTERN WORTH CARRYING: I was wrong every time I did not measure, and the round caught it
-every time.** In `#1245` alone my "fix" was a REGRESSION (replaced an actionable `make
-fetch-argocd-ca` pointer with a bare variable name), its comment carried a claim measured FALSE in
-the same render, my count of marker sites was wrong (four, not three), and my replacement text for
-the `flow` field was FALSE (it said "VKS_AUTH_METHOD is not set" while the branch tests `!= vcf`,
-and the documented tenant sets it to `kubeconfig`).
-
-⚠️ **AND THE GATE COULD NOT SEE ANY OF IT.** 103 ok / 0 FAIL on both trees, diff of the two suite
-outputs EMPTY, over three changed operator-facing strings in the one file with a dedicated gate.
-Four assertions added (103 -> 107), each RED-proven in its own case — and **one of those new
-assertions was itself blind** (a single fixture could not reach `_argo_tls_note`), caught only by
-RED-proving it.
-
-**Two pre-existing finds from that round, both real:** `creds.sh:1942` greps `$rows`, which
-`add_row` builds from EVERY column, so an ArgoCD **URL** marker cross-fired the **PASSWORD** note and
-printed a sentence measured false; and `values below :` printed TWICE in 100% of no-overlay states.
-The durable fix for the first — key `:1942` on a FLAG rather than rendered text — is NOT done.
-
-**Also not done:** collapsing `"real lab"` / `"real VKS lab"` in `_flow` (no consumer asserts either
-string, but `creds.sh:721-727` carries a dated in-file directive, so it needs its own round).
-
-⚠️ **A round's own residual UNDERSTATED its footprint by orders of magnitude:** it reported "six
-rendered reports, three sandboxes, a stub kubectl, two suite logs"; the sweep found **2.0 GB across
-9,662 files** in `/tmp/credsprobe`. Sweep outside the repo at session end; `git status` cannot see it.
+⚠️ **An idea-round clearance authorises IMPLEMENTING, never SHIPPING.** #1249 had an idea round and
+no implementation round; that is exactly how it reached a PR with a regression in it.
 
 ### NOT done — next units, in order
 
-1. **The Harbor "verifies" claim is SOFTENED, not MEASURED.** `lib/tls.sh:ca_verifies_endpoint`
-   is the honest version; `creds.sh` does not source `lib/tls.sh` and it is a live probe that must be
-   gated on `CREDS_NO_PROBE`. Named in-file so it is findable.
-2. ⛔ **B726 IS CLOSED — DO NOT REOPEN IT, AND DO NOT EDIT `check-grep-q-pipe.sh:34-40`.** This item
-   used to say the control states a false threshold. **It does not.** I filed the row, "corrected" it,
-   and BOTH filings were wrong. Re-measured against the shape the claim is scoped to
-   (`printf '%s' "$var" | grep -q`): 8,000 B single-line **0/120**, 8,000 B multiline **0/120**,
-   40,000 B multiline 10/120, **82,000 B multiline 120/120 — its own cited figure, exactly**.
-   My first probe used an EXTERNAL producer (silent about a builtin-scoped claim); my "correction"
-   used the right producer and SINGLE-LINE data, which the claim already calls immune, so it
-   CONFIRMED the claim while I recorded it as a refutation. **Before contradicting a control, re-read
-   what its sentence is scoped TO and vary every dimension that sentence names.**
-3. **B721 follow-up — AND THE PRESCRIPTION BELOW IS PROBABLY WRONG; a round is adjudicating it.**
-   The row says: *"`_harbor_ca_args`' third arm is `else return 1` … fix `_harbor_ca_args` FIRST."*
-   MEASURED: `harbor_auth_verdict` ALREADY exists in the same file and returns a STRING
-   (`accepted` / `rejected` / `unchecked:<why>`) — which DISCRIMINATES where `harbor_auth_report`'s
-   **rc** conflates "no problems" with "could not tell". It is already consumed by
-   `22-harbor-robot.sh:70` and `28-harbor-admin-password.sh:80`. So the defect looks like the two
-   CALL SITES (`24-lab-preflight.sh:207`, `09-harbor-auth-check.sh:43`), not the resolver.
-   ⚠️ `09-harbor-auth-check.sh:29` already DISCLOSES the hazard; `24-` does not. Check whether making
-   `unchecked:*` a non-pass false-blocks a TENANT with no CA (RULE ZERO-B) before changing it.
-4. **B716** — ⚠️ this item used to say *"PASS 2 has no denominator"*. **MEASURED FALSE today:**
-   `check-env-coverage PASS 2: 242 commented slot(s) examined (enforcing)` and
-   `PASS 2b: 233 examined, 12 flagged (REPORT-ONLY, B716 stage 1)`. It was TRUE when written and
-   stage 1 shipped exactly that on 2026-09-09 — the un-gateable class (`hooks.md`): a claim
-   correct at authoring time that a later commit falsifies. What REMAINS is stages 2-3: triage
-   the 12 flagged slots, then make PASS 2b enforcing. **B719**, and untouched:
+1. **#1250 is held for a round on the COHERENCE FIX**, which is MY design (larger than the round's
+   prescribed minimal_fix), therefore unreviewed. Merge when it clears.
+2. **B727** — the fix needs the removal names DERIVED from `ingress_infra_hosts()` + `app_host()`
+   (which also brings the site under B528's gate). ⚠️ Do NOT prescribe a command: a correct one took
+   a round FOUR iterations, two silently wrong, and lands at 381 chars of GNU sed — Photon is
+   toybox. NEVER `awk`: `sudo awk … > /etc/hosts` truncates UNCONDITIONALLY (measured, rc=0, 0 bytes).
+3. **B728** · **B721 follow-up** (the two call sites, not the resolver) · **B719** · untouched:
    **B484**, **B498**, **B565**, **B523**.
+4. **NO behavioural test exists for the TAB-in-a-cell defect.** Three harnesses gave three different
+   answers for the same tree; a structural assertion ships instead, with the gap and what would
+   settle it written into `test-creds-show.sh`. Do not "fix" this by adding a case you cannot
+   RED-prove.
 
-⚠️ **`fix/b486-argocd-host` no longer exists** — no local branch, no remote, no PR, and B486 is still
-🔴 open. The reflog shows it was checked out away to `docs/b486-refuted` on 2026-09-08. If you were
-expecting uncommitted work there, it is not in the tree, the stashes, or `origin`.
+⚠️ **`static-check-fast` — what runs on a push to `main` — contains neither `lint` nor
+`test-scripts`.** So none of today's 127 assertions are exercised routinely (B574). A green PR check
+here does NOT mean `static-check` passed; run it locally, on a tree you are not editing.
 
 ### Lab
 
-Up and serving. The Supervisor token was renewed today (`VKS_AUTH_METHOD=vcf make vks-login`) and
-reads `VALID 2026-09-11T00:24Z`. ⚠️ `vcf context use` prints *"Token is still active. Skipped the
-token refresh"* **while the kubeconfig HAS been rewritten** — `vks-login` deletes and re-creates the
-context, so `create` mints the token and `use` is reporting on one three seconds old. Not a
-contradiction; do not chase it.
+Untouched today — every measurement in this session was a fixture, a loopback listener and a stub
+`getent`. No cluster was contacted.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
