@@ -9123,6 +9123,49 @@ every PR, *including the PRs that would document the survivors*.
 cheapest real improvement in the row: the only count printed used to be PASS 1's, so a PASS-2 loop
 that stopped iterating was indistinguishable from a clean run.
 
+### 🔴 B716 STAGE 2 TRIAGE, 2026-09-10 — all 12 survivors are DOCUMENTED, and stage 3's proposed signal would flag ZERO of them
+
+The gate's own report says the 12 are *"a VOCABULARY miss, not a coverage hole"* and names stage 3's
+replacement signal: *"the un-gameable signal is an EMPTY own block"*. I triaged the 12 against the
+file. **The vocabulary-miss verdict HOLDS. The stage-3 signal does not.**
+
+| slot | comment lines in its own block |
+|---|---|
+| `ISTIO_PACKAGE_ALLOW_REMOTE` | 10 |
+| `ARGOCD_DEST_CLUSTER_NAME`, `ISTIO_PACKAGE_VERSION` | 4 |
+| `ISTIO_GWAPI_NAMESPACE`, `ISTIO_PACKAGE_NAME` | 3 |
+| `ARGOCD_SUPERVISOR_CONTEXT`, `ARGOCD_MANAGER_SA`, `ISTIO_GATEWAY_CLASS`, `ISTIO_GATEWAY_NAME`, `SUPERVISOR_CONNECT_TIMEOUT_SECONDS` | 2 |
+| `BOOTSTRAP_TEST_OSES` | 1 |
+| `ARGOCD_MANAGER_NS` | **0 — and this is MY instrument, not a real gap** |
+
+**The single zero is a false positive of my own heuristic.** `ARGOCD_MANAGER_NS` sits directly under
+`ARGOCD_MANAGER_SA` and shares its block, whose comment reads *"The ServiceAccount minted on the
+guest for ArgoCD to act through **(+ its namespace)**"* — it documents both, deliberately, and says
+so. So the honest count is **12 of 12 documented, 0 empty blocks.**
+
+**CONSEQUENCE FOR STAGE 3: an "empty own block" gate would find NOTHING on this corpus, and its only
+RED would be a legitimately SHARED block.** That is a gate whose demonstrated failure is a correct
+pattern — the shape `gates.md` calls refuted on sight, because the only way to go green is to
+degrade the artifact (split a shared block that correctly documents two related slots).
+
+**So stage 3 as written is REFUTED, and stage 2's answer is: there is nothing to triage.** The 12 are
+documented; PASS 2b is measuring whether the prose happens to contain acquisition VOCABULARY, which
+is not the property anyone cares about. Two honest options remain:
+
+1. **Keep PASS 2b report-only, permanently, and say in its own output that a flag means "no
+   acquisition VERB was found", not "undocumented".** Cheapest, honest, and it already prints a
+   denominator.
+2. **Retire PASS 2b** and accept that PASS 1 (every settable var has a slot) plus PASS 2 (enforcing)
+   is the coverage this file can mechanically assert. A report-only pass nobody acts on is a
+   printer, and `hooks.md` records that a printer must say what it does NOT catch.
+
+⚠️ **What I did NOT check:** whether stage 3 would implement "own block" the same way my heuristic
+did (contiguous comment lines above the slot, stopping at another slot). If it models shared blocks,
+its count on this corpus is 0, not 1 — which strengthens the refutation rather than weakening it.
+
+**Grade:** `measured` (12 slots read from `.env.example` 2026-09-10; the `ARGOCD_MANAGER_NS` shared
+block read directly).
+
 **RED-PROVEN with FIXTURES** (`scripts/test-env-coverage-window.sh`, 10 cases) — not against the live
 `.env.example`, because keying a proof on real variable names rots on the next documentation edit,
 which is exactly how the row's original *"VKS_PASSWORD must FAIL"* target would have rotted. Two
