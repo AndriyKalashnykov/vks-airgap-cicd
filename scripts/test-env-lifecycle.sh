@@ -59,6 +59,49 @@ before=$(grep -E '^GITEA_ADMIN_PASSWORD=' "$WORK/.env")
 try "env-populate NEVER clobbers a value already set (re-run is idempotent)" \
     '[ "$(grep -E "^GITEA_ADMIN_PASSWORD=" "$WORK/.env")" = "$before" ]'
 
+# --- env-populate MUST NEVER FABRICATE AN ArgoCD PASSWORD -----------------------------
+# WHY: ArgoCD's password is set BY ArgoCD. A value invented here is written to .env and then
+# printed AS FACT by `make creds`, and .env is the one credential sink that is neither stamped,
+# nor refusable, nor cleaned up -- so it survives every lab re-cut.
+#
+# The old guard was `[ -n "$VKS_NAMESPACE" ]`, and it was ANTI-CORRELATED with a real lab:
+# .env.example ships that var COMMENTED for everyone, 02-env.sh:239-243 argues it must NOT be
+# required on the vcf path, and scenario-2 lists only kubeconfig for a tenant -- so the runbook
+# reader never had it set. BOTH shapes below fabricated a credential before the fix.
+#
+# ⚠️ ASSERT THE FILE CONTENT AND THE PRINTED VERDICT, NEVER rc. `env-populate` is best-effort and
+# returns 0 in every one of these states, so an rc assertion is vacuous here by construction.
+FAB=$(mktemp -d "${TMPDIR:-/tmp}/envfab.XXXXXX")
+cp "$REPO/.env.example" "$FAB/.env.example"
+( cd "$FAB" && ENV_FILE=.env REPO_ROOT="$FAB" bash "$REPO/scripts/02-env.sh" init >/dev/null 2>&1 )
+fab_out=$( cd "$FAB" && ENV_FILE=.env REPO_ROOT="$FAB" KUBECONFIG=/nonexistent \
+           bash "$REPO/scripts/02-env.sh" populate 2>&1 )
+try "DEFAULT TENANT SHAPE (VKS_NAMESPACE unset): .env gains NO ARGOCD_ADMIN_PASSWORD" \
+    '! grep -qE "^ARGOCD_ADMIN_PASSWORD=.+" "$FAB/.env"'
+try "and it SAYS so, rather than staying silent about a credential it declined to invent" \
+    'printf "%s" "$fab_out" | grep -qi "ARGOCD_ADMIN_PASSWORD (never generated"'
+# CONTROL, in the SAME run: if this fails, the run did nothing and the two assertions above are
+# vacuous -- they would pass on a populate that crashed before reaching any generator.
+try "CONTROL: the same run still DID generate GITEA_ADMIN_PASSWORD (so it was not a no-op)" \
+    'grep -qE "^GITEA_ADMIN_PASSWORD=.+" "$FAB/.env"'
+
+# The shape that is WORSE than the default one: the operator has EXPLICITLY declared a real lab.
+VCF=$(mktemp -d "${TMPDIR:-/tmp}/envvcf.XXXXXX")
+cp "$REPO/.env.example" "$VCF/.env.example"
+( cd "$VCF" && ENV_FILE=.env REPO_ROOT="$VCF" bash "$REPO/scripts/02-env.sh" init >/dev/null 2>&1 )
+( cd "$VCF" && ENV_FILE=.env REPO_ROOT="$VCF" KUBECONFIG=/nonexistent \
+  VKS_AUTH_METHOD=vcf SUPERVISOR_HOST=sup.example.com VKS_CONTEXT_NAME=ctx \
+  bash "$REPO/scripts/02-env.sh" populate >/dev/null 2>&1 )
+try "DECLARED REAL LAB (VKS_AUTH_METHOD=vcf): .env still gains NO ARGOCD_ADMIN_PASSWORD" \
+    '! grep -qE "^ARGOCD_ADMIN_PASSWORD=.+" "$VCF/.env"'
+rm -rf "$FAB" "$VCF"
+
+# KinD is unaffected: its password is minted by a DIFFERENT step, into the STAMPED overlay, not .env.
+# Asserted structurally because running kind-up needs a cluster. If this line moves, the deletion
+# above stops being safe and this test says so.
+try "KinD still mints ARGOCD_ADMIN_PASSWORD itself (into .env.state, not .env)" \
+    'grep -qE "state_set ARGOCD_ADMIN_PASSWORD" "$REPO/scripts/05-kind-up.sh"'
+
 # --- env-check: the HARBOR_URL placeholder must CHANGE the exit code ---------------
 # WHY A PAIR, NOT A SINGLE ASSERTION: env-check accumulates EVERY missing required value,
 # so a fixture that is short of anything else exits 1 whether HARBOR_URL is a placeholder
