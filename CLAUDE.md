@@ -1089,8 +1089,9 @@ in a `git worktree`, not in place.
   contradicted the same render 1,100 lines earlier. Also: the `re-check:` register named the one
   target that cannot answer its own caveat, the cert block had a 126-char label, and the password
   note read every column.
-- **#1250 OPEN, green, HELD for a round** — supersedes **#1249 (CLOSED)**. #1249's diff carried a
-  regression it introduced and an assertion that CERTIFIED it; see below.
+- **#1250 MERGED** (supersedes **#1249**, CLOSED). #1249's diff carried a regression it introduced
+  and an assertion that CERTIFIED it. Holding it for a round was worth it: a SIXTH round then found
+  the worst defect of the day in my fix FOR that regression — see below.
 - Filed: **B727** (uninstall-all deletes the localhost line; corrected twice — damage 6x what I
   first wrote, the `${APP_DOMAIN}` derivation gap, B528's gate blind to that site, class = **4**
   sites), **B728** (`harbor-auth-check` says "silent above = you have it" when it probed nothing),
@@ -1098,7 +1099,22 @@ in a `git worktree`, not in place.
 
 ### 🔴 THE PATTERN, and it is the reason to keep running rounds
 
-Five rounds, five refutations, **every one landing on my own work**:
+**SIX rounds, six refutations, every one landing on my own work** — and the last two each found that
+a FIX of mine had introduced a NEW defect. The sixth is the one to remember:
+
+> `_reach_ingress` accepted a match ANYWHERE in the resolved address set, so with a stale entry
+> FIRST and the ingress second the row printed **`serving`**. That state was previously
+> UNREACHABLE — the old `sed -i` REPLACE could not produce it. **The remove-then-add remedy I had
+> just shipped CAN.** So re-running the report would have CONFIRMED the broken state as fixed, and
+> the advice's own warning had no instrument behind it. I built the trap and the thing that hides it
+> in one change. Fixed to compare the FIRST SAME-FAMILY address (same-family is what preserves the
+> 2026-09-08 false-stale fix); RED-proven with the `::1`-first case as its control.
+
+And it CHAINED with a second HIGH: the printed `grep -nE` was case-SENSITIVE while glibc is not, so
+`10.9.9.9 Tekton.VKS.Local` fired `stale DNS` while the operator's own grep found NOTHING — sending
+them to skip the removal, do the add, and land in the state above.
+
+The five before it:
 
 1. the design round refuted my framing of the operator's question — the legend was FALSE, not merely
    cautious — and corrected my cost figure (28 ms prices ONE curl; the function that answers the
@@ -1117,8 +1133,17 @@ no implementation round; that is exactly how it reached a PR with a regression i
 
 ### NOT done — next units, in order
 
-1. **#1250 is held for a round on the COHERENCE FIX**, which is MY design (larger than the round's
-   prescribed minimal_fix), therefore unreviewed. Merge when it clears.
+1. **B729** — three findings the sixth round measured and I did NOT fold in:
+   (a) `_row_host` recovers the hostname from the URL, so it names the WRONG host whenever a URL var
+   diverges from its HOST var — measured with `GITEA_URL`, a documented `.env.example:317` knob that
+   `e2e-cross-cluster.sh:171` actually sets. Fix: pass the host as a 6th `add_row` arg on the four
+   ingress rows and read it as `c6` (the `read` already has `_rest`; `_rows_capped` already drops the
+   sixth field, so the table is byte-unchanged). NOT the refuted restructure.
+   (b) the `no DNS here` arm still does not USE the DNS-independent discriminator that exists two
+   blocks below (the route probe dials the LB by IP with a Host header).
+   (c) the separator strip rewrites a PRINTED PASSWORD — `ab<TAB>cd` renders as `ab cd`, plausible
+   and wrong, where main leaked the tail visibly. Route it through the `<full value below>` footnote
+   that already exists.
 2. **B727** — the fix needs the removal names DERIVED from `ingress_infra_hosts()` + `app_host()`
    (which also brings the site under B528's gate). ⚠️ Do NOT prescribe a command: a correct one took
    a round FOUR iterations, two silently wrong, and lands at 381 chars of GNU sed — Photon is
