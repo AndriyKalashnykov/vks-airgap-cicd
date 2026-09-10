@@ -1809,10 +1809,26 @@ fi
 # DO know is that no ingress address is configured HERE, which is a fact about this box.
 # The phrase "not about the cluster" is asserted by STATE 12 in test-creds-show.sh; so is
 # "port-forward" (the only remedy correct in every persona). Do not drop either.
+# ⚠️ THE REMEDY IS SPLIT BY _sink_refused, AND THE UNGUARDED FORM WAS A MEASURED FALSE PRESCRIPTION.
+# :1953 already forbids prescribing `make install-ingress` here and says why — its default
+# INGRESS_CONTROLLER=istio HELM-INSTALLS a mesh a Scenario-2 tenant does not own. That repair (B517)
+# lived in the guarded arm; the consolidation that moved the ingress explanation into this ONE grouped
+# line left the prescription behind WITHOUT the guard, so the forbidden remedy shipped anyway.
+#
+# MEASURED 2026-09-10 on the live lab: the overlay was refused as another cluster's, this note printed
+# for NINE hosts, and all nine answered HTTP 200 through an ingress that was installed and serving. On
+# that box `.env` carried INGRESS_CONTROLLER=istio, so the prescription would have helm-installed over
+# a live mesh. A refusal erases the ADDRESS; it is not evidence about the cluster.
 if [ -n "${_un_ing:-}" ]; then
   printf '\n  no URL in this report for: %s\n' "$_un_ing"
   printf '    That is a fact about THIS REPORT, not about the cluster — no ingress address\n'
-  printf '    is configured here.  URL: make install-ingress   |   now: kubectl -n <ns> port-forward svc/<svc> 8080:<port>\n'
+  if [ "$_sink_refused" = 1 ]; then
+    printf '    is configured here: a state overlay exists but was REFUSED as another cluster'"'"'s,\n'
+    printf '    so the address it published is not in play.  WHOSE: make state-show\n'
+    printf '    now: kubectl -n <ns> port-forward svc/<svc> 8080:<port>\n'
+  else
+    printf '    is configured here.  URL: make install-ingress   |   now: kubectl -n <ns> port-forward svc/<svc> 8080:<port>\n'
+  fi
 fi
 if [ -n "${_un_oth:-}" ]; then
   printf '\n  no address configured here for: %s\n' "$_un_oth"
@@ -1828,8 +1844,13 @@ if printf '%s' "${rows:-}" | grep -q -- '— see note'; then
   elif [ "${_have_sink:-0}" = 1 ]; then
     printf '\n  note: those passwords are not published in the state overlay this report is using.\n'
   else
-    printf '\n  note: those passwords do not exist yet. KinD GENERATES them at install; for a real\n'
-    printf '        lab, set them in .env (see .env.example for the variable names).\n'
+    # ⚠️ NO RIG NAMES HERE. This arm is reached when there is NO overlay at all, so the report has
+    # NOT established which cluster it is talking to — and the commonest reader is a tenant on a
+    # third-party VKS estate who has never run our local stand-in. Naming it told them about a test
+    # rig they do not have. Say the ACTION for each persona instead; the docs carry the split.
+    printf '\n  note: those passwords do not exist yet — nothing has published them.\n'
+    printf '        If you install these services: the install generates and publishes them. Set none by hand.\n'
+    printf '        If someone else runs this lab: set them in .env (variable names in .env.example).\n'
   fi
 fi
 
@@ -1940,10 +1961,13 @@ if [ "$_have_sink" = 0 ] && [ "$_env_populated" = 1 ]; then
 elif [ "$_have_sink" = 0 ]; then
   printf '\n  note: EVERY value above is a PLACEHOLDER from .env.example, not a credential —\n'
   printf '        including Harbor'\''s and Gitea'\''s. None of them exists.\n'
-  printf '          KinD     : the real addresses and passwords are discovered and filled in for you by\n'
-  printf '                     the install (make e2e-kind / make install-all). Set nothing by hand.\n'
-  printf '          Real lab : you supply HARBOR_URL + HARBOR_PASSWORD (and ARGOCD_SERVER) in .env —\n'
-  printf '                     see docs/scenario-1.md (you install) or docs/scenario-2.md (you are a tenant).\n'
+  # ⚠️ NO RIG NAMES, AND NO `make e2e-kind`. There is no overlay in this arm, so the report cannot
+  # know which cluster it is on — and this line put a command that BUILDS A LOCAL CLUSTER in front of
+  # a tenant whose jump box points at someone else's VKS estate. Split by PERSONA, not by rig.
+  printf '          you install them   : the install discovers the addresses and generates the passwords\n'
+  printf '                               (make install-all). Set nothing by hand — see docs/scenario-1.md.\n'
+  printf '          someone else runs  : you supply HARBOR_URL + HARBOR_PASSWORD (and ARGOCD_SERVER) in\n'
+  printf '          them               : .env — see docs/scenario-2.md.\n'
 else
   if [ -z "$_ing" ]; then
     # ⚠️ SAY WHAT WE KNOW, NOT A FACT ABOUT THE WORLD. "no ingress is installed ... nothing serves
@@ -1990,8 +2014,9 @@ else
     printf '\n  note: ArgoCD'\''s address is not shown because the state overlay that would carry it was\n'
     printf '        REFUSED — not because none exists. Set ARGOCD_SERVER in .env to name it explicitly.\n'
     else
-    printf '\n  note: ArgoCD'\''s address is not set. KinD fills it in automatically when ArgoCD is installed;\n'
-    printf '        on a real lab, set ARGOCD_SERVER in .env.\n'
+    # ⚠️ NO RIG NAME. Reached with no overlay, i.e. the report has not established the cluster.
+    printf '\n  note: ArgoCD'\''s address is not set. If you install ArgoCD, the install publishes it;\n'
+    printf '        if someone else runs this lab, set ARGOCD_SERVER in .env.\n'
     fi
   fi
 fi
