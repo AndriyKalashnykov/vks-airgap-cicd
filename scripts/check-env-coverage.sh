@@ -389,6 +389,56 @@ if [ "$pass2_examined" -lt 225 ]; then
   log_error "  lower this floor. If you deliberately TRIMMED .env.example, lower it and say so in the commit."
   rc=1
 fi
+# ── PASS 2c (B716 STAGE 3) — THE UN-GAMEABLE HALF, AND IT IS ENFORCING ───────────────────────────
+# 2b asks "does this block contain a marker WORD". An idea round measured that its remedy is
+# satisfiable by typing `default`, so enforcing it would buy a word, not documentation. 2c asks the
+# question a word cannot answer: does the slot have ANY prose of its own (or a run-header above the
+# run it belongs to)? MEASURED at the time it shipped: 2 offenders, both tunables of
+# `make vks-cluster-delete` -- DESTRUCTIVE and Supervisor-only -- documented in the same change, so
+# this ships at ZERO and stays there.
+pass2c_offenders="$(awk '
+  { line[NR] = $0 }
+  function is_slot(s) { return s ~ /^#[[:space:]]*[A-Z][A-Z0-9_][A-Z0-9_]+=/ }
+  function is_cmt(s)  { return s ~ /^#/ }
+  # ⚠️ A BARE `#` IS NOT PROSE. The first version counted any comment line, so a single separator
+  # `#` above a slot satisfied the gate -- and its RED-proof DID NOT FIRE (rc=0) because that is
+  # exactly the shape the two real offenders had. Require at least one non-hash, non-space char.
+  function has_text(s) { return s ~ /^#[[:space:]]*[^#[:space:]]/ }
+  function nm(s,  v)  { v = s; sub(/^#[[:space:]]*/, "", v); sub(/=.*/, "", v); return v }
+  END {
+    for (i = 1; i <= NR; i++) {                       # D2 canonical, same rule as 2b
+      if (!is_slot(line[i])) continue
+      r0 = i; while (r0 - 1 >= 1 && is_cmt(line[r0 - 1])) r0--
+      last[r0 SUBSEP nm(line[i])] = i
+    }
+    for (key in last) canonical[last[key]] = 1
+    for (i = 1; i <= NR; i++) {
+      if (!(i in canonical)) continue
+      v = nm(line[i]); if (v !~ /^[A-Z][A-Z0-9_][A-Z0-9_]+$/) continue
+      # ⚠️ DOCUMENTATION IS NOT ONLY ABOVE. This file also documents ON THE SLOT LINE (a trailing
+      # comment after the value) and in CONTINUATION lines BELOW it -- e.g. VKS_SSO_DOMAIN and
+      # VKS_CONTEXT_NAME. Counting only the lines ABOVE flagged both as undocumented: a FALSE RED
+      # I measured and did not ship. Count all three positions.
+      c = 0
+      t = line[i]; sub(/^#[[:space:]]*[A-Z][A-Z0-9_]*=/, "", t)
+      if (t ~ /#[[:space:]]*[^#[:space:]]/) c++                       # trailing comment on the slot
+      for (k = i + 1; k <= NR && is_cmt(line[k]) && !(k in canonical); k++) if (has_text(line[k])) c++
+      for (k = i - 1; k >= 1 && is_cmt(line[k]) && !(k in canonical); k--) if (has_text(line[k])) c++
+      if (c == 0) {                                   # a RUN-HEADER above the run also documents it
+        rs = i; while (rs - 1 >= 1 && (rs - 1) in canonical) rs--
+        if (rs != i) for (k = rs - 1; k >= 1 && is_cmt(line[k]) && !(k in canonical); k--) if (has_text(line[k])) c++
+      }
+      if (c == 0) printf " %s", v
+    }
+  }' "$ENV_FILE")"
+if [ -n "${pass2c_offenders// /}" ]; then
+  log_error "check-env-coverage PASS 2c: slot(s) with NO prose of their own:${pass2c_offenders}"
+  log_error "  A slot with an empty block tells the operator nothing at all — unlike a 2b flag, this"
+  log_error "  cannot be answered by adding a marker word. Write what it is for, what to run, and"
+  log_error "  what to expect. Do NOT silence it by moving an unrelated block above the slot."
+  rc=1
+fi
+
 if [ "$pass2_flagged" -gt 0 ]; then
   log_warn "  no acquisition path stated (report-only — NOT failing the build):${pass2_names}"
   log_warn "  These are a VOCABULARY miss, not a coverage hole: an idea round measured that the"
