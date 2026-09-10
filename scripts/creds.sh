@@ -339,7 +339,14 @@ _probe_t0=$(date +%s 2>/dev/null || echo 0)
 _argo_tls_note() {
   case "$1" in
     https://[0-9]*.[0-9]*.[0-9]*.[0-9]*|https://[0-9]*.[0-9]*.[0-9]*.[0-9]*[:/]*)
-      printf ' (untrusted cert; see note)' ;;
+      # ⚠️ IDENTICAL TO HARBOR'S MARKER, and that symmetry is the point. This said
+      # `(untrusted cert; see note)` while Harbor's two rows said `(untrusted cert)` -- three
+      # marked rows, two different markers, all three explained by the SAME note, whose own
+      # heading now says "per target" and whose first line says "on the marked rows above".
+      # The `; see note` was a leftover from when ArgoCD was the only row with a note. Nothing
+      # consumes it: :1935's dangling-citation gate greps `— see note` (EM DASH) for the
+      # PASSWORD-column markers, and the only test hit is a comment about one of those.
+      printf ' (untrusted cert)' ;;
     *) : ;;
   esac
 }
@@ -396,7 +403,7 @@ else
     # ONE parenthetical, not two. `(discovered) (--insecure; see note)` reads as a stutter and
     # cost 24 columns in a table already measured at 171 chars with one data row.
     _argo_note="$(_argo_tls_note "${argo_scheme}://${_argo_ip}")"
-    if [ -n "$_argo_note" ]; then _argocd_bare="${argo_scheme}://${_argo_ip}"; argocd_url="${argo_scheme}://${_argo_ip} (discovered; --insecure — see note)"; _argo_tls_flag=1; _tls_note_needed=1
+    if [ -n "$_argo_note" ]; then _argocd_bare="${argo_scheme}://${_argo_ip}"; argocd_url="${argo_scheme}://${_argo_ip} (untrusted cert)"; _argo_tls_flag=1; _tls_note_needed=1
     else                          argocd_url="${argo_scheme}://${_argo_ip} (discovered)"; fi
   else
     # A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell short; the instruction goes in a footnote.
@@ -709,7 +716,19 @@ elif [ "$_have_sink" = 1 ]; then
 elif [ "${VKS_AUTH_METHOD:-}" = "vcf" ]; then
   _flow="real VKS lab"
 else
-  _flow="undetermined (KinD: 'make e2e-kind' · lab: docs/scenario-1.md or scenario-2.md)"
+  # ⚠️ NO REMEDY IN A VERDICT FIELD, AND NO RIG. This said
+  #   undetermined (KinD: 'make e2e-kind' · lab: docs/scenario-1.md or scenario-2.md)
+  # `flow` states WHAT WE OBSERVE; a remedy that builds a local cluster does not belong in it.
+  # MEASURED: scenario-2.md:85 tells the tenant to set VKS_AUTH_METHOD=kubeconfig, which is
+  # != vcf, so before any installer writes the sink the DOCUMENTED TENANT PATH lands here -- and
+  # this was the SOLE rig mention reaching that persona. It survived #1236's sweep because the
+  # string is ASSIGNED here and printed later via %s, so a grep for printed rig names misses it.
+  # ⚠️ AND MY FIRST REPLACEMENT WAS ALSO FALSE: it said "VKS_AUTH_METHOD is not set" while the
+  # branch tests != vcf, so it would have told a tenant who set it exactly as their runbook
+  # instructs that they had not. Report the value; do not characterise it.
+  # Losing the pointers costs nothing (measured): the persona-split block below names BOTH
+  # runbooks, and the vCenter paragraph names both again.
+  _flow="undetermined (no state overlay; VKS_AUTH_METHOD is '${VKS_AUTH_METHOD:-unset}', not vcf)"
 fi
 # ⚠️ THE FLOW LINE NAMES THE FLOW. IT MUST NOT CLAIM WHAT IS INSTALLED — it cannot know.
 # It is computed from `_have_sink` + VKS_AUTH_METHOD only, and `_cluster` is measured LIVE about
@@ -913,8 +932,10 @@ case "$_prov" in
                 # "— normal, but unverified here" fires on EVERY real lab ALWAYS (nothing on that
                 # path calls state_stamp), so it cannot vary, carries no information, and reads as
                 # an alarm beside nine `serving` rows. The REASON survives; the alarm does not.
-                printf '    values below : your .env + install-time discovery. Reachable is probed live,\n'
-                printf '                   and the headlamp token is MINTED fresh on every run.\n'
+                # ⚠️ ONE LINE. The break here was arbitrary: joined it is 133 chars, in a report whose
+                # table is 140 wide and which already prints a 202-char /etc/hosts line (measured).
+                # Wrapping a sentence that fits makes the reader reassemble it for no reason.
+                printf '    values below : your .env + install-time discovery. Reachable is probed live, and the headlamp token is MINTED fresh on every run.\n'
                 # ⚠️ CUT 2026-09-10: "Nothing records which cluster they came from — normal for a
                 # real lab." The operator asked what it was FOR, twice, and it has no answer: it is
                 # UNACTIONABLE BY CONSTRUCTION. If nothing recorded the cluster, no command can
@@ -957,9 +978,14 @@ if [ "$_sink_refused" = 1 ]; then
   printf '                   Every address and password an installer published is MISSING FROM THIS\n'
   printf '                   REPORT — which is not the same as absent from the cluster.\n'
   printf '                   whose: make state-show\n'
-elif [ "$_have_sink" != 1 ]; then
-  printf '    values below : nothing has been installed yet\n'
 fi
+# ⚠️ AN `elif [ "$_have_sink" != 1 ]` ARM WAS DELETED HERE. It printed a SECOND `values below :`
+# in 100% of no-overlay states, and its content was a strict subset of the arm above
+# ("PLACEHOLDERS from .env.example — nothing is installed yet"): a two-column block with a
+# DUPLICATE KEY, so the reader could not tell which was authoritative. test-creds-show's
+# `grep -m1 'values below :'` made the second line untestable by construction, which is why it
+# survived. Removing the printf alone left an arm with no command -- the sole-body-of-an-if
+# splice this repo documents -- so the whole arm goes.
 printf '    flow         : %s\n' "$_flow"
 # ⚠️ "cluster", NOT "guest cluster" — and the ambiguity is DELIBERATE until something can resolve it.
 # On a real lab there are always TWO (the Supervisor, where Harbor and ArgoCD run as Services, and
@@ -2070,7 +2096,20 @@ if [ "${_tls_note_needed:-0}" = 1 ]; then
   if [ "${_argo_tls_flag:-0}" = 1 ]; then
     printf '    - ArgoCD (browse/read only): curl --insecure %s — a self-signed ArgoCD cert\n' "$_argocd_bare"
     printf '      typically carries DNS names only, so a bare IP cannot verify. argocd login and the\n'
-    printf '      WRITE path need a NAME the cert carries plus ARGOCD_CA_FILE — see docs/scenario-2.md.\n'
+    # ⚠️ NAMES THE MAKE TARGET, NOT A RUNBOOK. It used to end "see docs/scenario-2.md" -- one
+    # persona's runbook, at a reader this report CANNOT identify (it prints `flow: real lab` and
+    # cannot tell the scenario-1 admin from the scenario-2 tenant).
+    # ⚠️ MY FIRST FIX WAS A REGRESSION AND ITS COMMENT WAS FALSE. I replaced the pointer with the
+    # bare variable name and wrote that it was "the ONLY doc reference in the whole report".
+    # MEASURED FALSE: :2134 prints the identical string 44 lines below. And the bare variable is
+    # step 2 of two -- scenario-2.md records that `make fetch-argocd-ca` writes the file and
+    # PRINTS the line rather than setting it -- so it named a value with no way to obtain it,
+    # while the Harbor sibling three lines above correctly names a COMMAND.
+    # `make fetch-argocd-ca` (Makefile:736) is tenant-safe: it dials ARGOCD_SERVER/ARGOCD_LB_IP
+    # over the wire and its script contains zero kubectl/Supervisor references, so it passes
+    # RULE ZERO-B's "does this work from .env alone?".
+    printf '      WRITE path need a NAME the cert carries, plus ARGOCD_CA_FILE — run\n'
+    printf '      make fetch-argocd-ca, then set it in .env.\n'
   fi
 fi
 

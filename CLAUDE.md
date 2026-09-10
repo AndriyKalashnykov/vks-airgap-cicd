@@ -1109,6 +1109,38 @@ skipped as passed. So the gate that catches both is never run routinely. Same cl
 - **`NO_COLOR` un-exempted** — it is an operator knob, not terminal environment, and my exempt-it
   argument was a false dichotomy: `check-env-coverage:185` accepts a **commented** slot.
 
+### Later that day — three more PRs, and every one of my own fixes was refuted first
+
+`#1243` cut a hedge that was **unactionable by construction**; `#1244` corrected `B726` **the same
+day I filed it** (my probe used an external producer; the repo's 374 `| grep -q` sites use the
+`printf` builtin, which measured **0/150 even at 200 KB** against a positive control at 146/150);
+`#1245` fixed three operator complaints AND the four defects a round found in my fixes for them.
+
+⚠️ **THE PATTERN WORTH CARRYING: I was wrong every time I did not measure, and the round caught it
+every time.** In `#1245` alone my "fix" was a REGRESSION (replaced an actionable `make
+fetch-argocd-ca` pointer with a bare variable name), its comment carried a claim measured FALSE in
+the same render, my count of marker sites was wrong (four, not three), and my replacement text for
+the `flow` field was FALSE (it said "VKS_AUTH_METHOD is not set" while the branch tests `!= vcf`,
+and the documented tenant sets it to `kubeconfig`).
+
+⚠️ **AND THE GATE COULD NOT SEE ANY OF IT.** 103 ok / 0 FAIL on both trees, diff of the two suite
+outputs EMPTY, over three changed operator-facing strings in the one file with a dedicated gate.
+Four assertions added (103 -> 107), each RED-proven in its own case — and **one of those new
+assertions was itself blind** (a single fixture could not reach `_argo_tls_note`), caught only by
+RED-proving it.
+
+**Two pre-existing finds from that round, both real:** `creds.sh:1942` greps `$rows`, which
+`add_row` builds from EVERY column, so an ArgoCD **URL** marker cross-fired the **PASSWORD** note and
+printed a sentence measured false; and `values below :` printed TWICE in 100% of no-overlay states.
+The durable fix for the first — key `:1942` on a FLAG rather than rendered text — is NOT done.
+
+**Also not done:** collapsing `"real lab"` / `"real VKS lab"` in `_flow` (no consumer asserts either
+string, but `creds.sh:721-727` carries a dated in-file directive, so it needs its own round).
+
+⚠️ **A round's own residual UNDERSTATED its footprint by orders of magnitude:** it reported "six
+rendered reports, three sandboxes, a stub kubectl, two suite logs"; the sweep found **2.0 GB across
+9,662 files** in `/tmp/credsprobe`. Sweep outside the repo at session end; `git status` cannot see it.
+
 ### NOT done — next units, in order
 
 1. **The Harbor "verifies" claim is SOFTENED, not MEASURED.** `lib/tls.sh:ca_verifies_endpoint`
