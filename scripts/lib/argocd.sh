@@ -228,8 +228,8 @@ argocd_print_versions() {
     elif [ ! -f "$kc" ]; then why="kubeconfig file not found: $kc"
     else                     why="kubectl not installed"
     fi
-    log_warn "RUNNING server version: UNAVAILABLE — $why. On a real lab the RUNNING server is the number that matters; the CLI version and the KinD pin are NOT it."
-    log_info "this repo's KinD pin: ARGOCD_VERSION=${ARGOCD_VERSION:-?}"
+    log_warn "RUNNING server version: UNAVAILABLE — $why. On a real lab the RUNNING server is the number that matters; the CLI version and this repo's pin are NOT it."
+    log_info "this repo's pin: ARGOCD_VERSION=${ARGOCD_VERSION:-?}"
     return 0
   fi
   local ka=(kubectl --kubeconfig "$kc" --request-timeout="$to")
@@ -253,7 +253,7 @@ argocd_print_versions() {
   else
     log_warn "RUNNING server version: UNAVAILABLE — no cluster reachable in ns/$ns (ArgoCD is elsewhere, you may not read it as a tenant, or your cluster is down). On a real lab THIS is the number that matters; the CLI version and the pin above are NOT it."
   fi
-  log_info "this repo's KinD pin: ARGOCD_VERSION=${ARGOCD_VERSION:-?}"
+  log_info "this repo's pin: ARGOCD_VERSION=${ARGOCD_VERSION:-?}"
 }
 
 # argocd_kubeconfig_stale_reason <recorded-path> <supervisor-path>

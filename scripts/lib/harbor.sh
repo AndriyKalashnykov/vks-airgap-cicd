@@ -142,9 +142,21 @@ ensure_project() {
       # GENERATES fresh credentials — new password in the state sink, old password in Harbor's DB.
       log_error "Harbor rejected the credentials for '${HARBOR_USERNAME:-<unset>}' (HTTP 401 = UNAUTHENTICATED)."
       log_error "  This is NOT a permissions problem — Harbor returns 403 for that. The PASSWORD IS WRONG."
-      log_error "  Most likely: Harbor's DATABASE survives from an earlier install and still holds the"
-      log_error "  ORIGINAL admin password, while a later install generated a new one (e.g. 'make"
-      log_error "  install-harbor' with your .env, then 'make e2e-kind', which regenerates credentials)."
+      # ⚠️ THE DIAGNOSIS IS RIG-SPECIFIC TOO, AND ONLY THE REMEDY WAS GUARDED. The "surviving Harbor
+      # DATABASE" story is a LOCAL-STAND-IN failure mode; a tenant on a third-party estate has no
+      # earlier install of ours to survive. Printed unconditionally it handed them a root cause that
+      # cannot apply, on `make env-validate` / `make harbor-auth-check` — both tenant-safe targets.
+      # The guard below already existed for the remedy and its reasoning (B209) covers the diagnosis
+      # verbatim: "The diagnosis above is about KinD ... so its remedy is printed ONLY on KinD."
+      if [ "${VKS_STATE_KIND:-0}" = 1 ]; then
+        log_error "  Most likely: Harbor's DATABASE survives from an earlier install and still holds the"
+        log_error "  ORIGINAL admin password, while a later install generated a new one (e.g. 'make"
+        log_error "  install-harbor' with your .env, then 'make e2e-kind', which regenerates credentials)."
+      else
+        log_error "  Most likely: the credential is STALE — rotated, or issued for a Harbor that has since"
+        log_error "  been rebuilt. There is no self-service fix: ask whoever operates Harbor for a current"
+        log_error "  one (a robot credential for CI, or the admin password)."
+      fi
       # The diagnosis above is about KinD (a surviving Harbor DB from an earlier local install), so its
       # remedy is printed ONLY on KinD. VKS_STATE_KIND is stamped by 05-kind-up.sh; a real lab never
       # stamps it, so it defaults to 0 and the operator gets the remedy that can actually work. The

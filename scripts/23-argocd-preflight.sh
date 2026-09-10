@@ -61,7 +61,7 @@ log_info "guest  (workload): ${GUEST_API:-?}"
 log_info "argocd (control) : ${ARGOCD_API:-?}"
 
 if [ "$ARGOCD_KUBECONFIG" = "$KUBECONFIG" ]; then
-  log_info "ARGOCD_KUBECONFIG is unset -> assuming ArgoCD runs IN the workload cluster (KinD / ArgoCD-in-guest)."
+  log_info "ARGOCD_KUBECONFIG is unset -> assuming ArgoCD runs IN the workload cluster (ArgoCD-in-guest)."
   log_info "  On a real VKS lab ArgoCD is a Supervisor SERVICE — a DIFFERENT cluster. If that is your lab,"
   log_info "  set ARGOCD_KUBECONFIG ('make fetch-argocd-kubeconfig') or gitops will look in the wrong place."
 fi
