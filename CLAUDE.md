@@ -1056,106 +1056,84 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-09 — a privilege downgrade, a live `install-all` break, and THREE of my own probes were broken
+## ▶️ HANDOFF 2026-09-10 — `main` was RED at its own tip, CI cannot see it, and four rounds refuted me
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### 🔴 DISTRUST FIRST — and this session's theme is MY INSTRUMENTS, not the product
+### 🔴 DISTRUST FIRST — the harness's exit code lied THREE times, and five of my probes lied
 
-**THREE separate probes I wrote returned confident wrong answers, all the same shape: an instrument
-that cannot see most of its corpus.** Assume the next one is broken too.
+**A backgrounded task's reported exit code is the LAST statement's, and I read it as the gate's three
+times in one session.** `make lint > log 2>&1; echo rc=$?; grep …` reports **the grep's** status —
+so a **`lint rc=2`** arrived as *"completed (exit code 0)"*, twice, and a **failed `static-check`
+(Error 2)** arrived as *"exit code 0"* once. **Never read pass/fail off the notification.** Make the
+gate the WHOLE command (`make X > log 2>&1`, nothing after it) and grep the log for its own verdict.
+
+Five instruments returned confident wrong answers. None errored:
 
 | probe | what it did |
 |---|---|
-| `grep -oE '^## B[0-9]+'` to pick the next backlog id | matched only the TRAILING-emoji heading form, missed all 68 LEADING-emoji rows -> undercounted the max by **157** -> I reused **two live ids** (B557, B560) |
-| a "dangling citation" check | looked only for `## <emoji> B<n> —` headings; this file ALSO carries `\| **B<n>** \|` index rows, so it called **14 real rows dangling** |
-| `ps`/`grep -c` style helper in a test | `grep -c` prints `0` **and exits 1**, so `\|\| echo 0` fired too and the helper returned `"0\n0"` — every comparison failed while printing the right number |
+| `pgrep -f "make static-check"` after a kill | matched **its own shell** -> "still alive" over a process the task notification confirmed dead (144) |
+| `git worktree add` to a path that already existed | the add FAILED, my `cd` landed in a **non-git directory**, and both control tests returned rc=1 = *file-not-found*, which I nearly reported as "main is red for the same reasons" |
+| `grep -c 'untrusted cert'` | counted the note's own **heading**, so "markers=2" was **1 row + heading** and could never discriminate |
+| a `grep` pattern containing `${_argo_tls_flag:-0}` | **zsh EXPANDED it** (RULE ZERO-S) -> empty pattern -> `sed` syntax error read as a missing anchor |
+| `[ -s "$CA" ]` as "the CA is usable" | a **31-byte non-PEM** file passes; `curl --cacert` then returns **rc=77** where the system store returns 200. `[ -s <directory> ]` is TRUE too |
 
-**`static-check-fast` DOES NOT RUN `lint`.** SC2016 sat in a test I wrote for an hour under a green
-PR check; it would have reddened only the WEEKLY run. Run `make lint` yourself before pushing.
-And **a `# shellcheck disable` scopes to the NEXT COMMAND, not the file** — mine silently did nothing.
+### 🔴 `main` IS RED AT ITS OWN TIP, AND CI IS STRUCTURALLY BLIND TO IT
 
-**AN rc-ONLY ASSERTION IS OFTEN VACUOUS.** `harbor_auth_report` returned **0 at 412 both before and
-after** the fix, so `check "412 -> 0"` passes identically on the broken and fixed tree — and the
-file's existing cases are written exactly that way. Assert the VERDICT STRING and the CHAIN.
-Two more of mine were vacuous until fixed: a `NOT 'inconclusive'` case whose fixture pulled
-successfully, and three `NO admin published` assertions that stay green because the script dies
-earlier (labelled in-file rather than deleted).
+`b6d214b` (= `origin/main`) fails `make static-check`. **Fixed on `#1242`; verify it landed.**
 
-**MY "OFFLINE" TEST MADE LIVE API CALLS.** It pinned `VKS_SUPERVISOR_KUBECONFIG` and missed the other
-resolver candidates; `${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}/kubeconfig` EXISTS here and
-points at the real Supervisor. Pin **every** candidate.
+- `test-creds-reach-ingress` — `#1241` changed `_reach_ingress` from `no ingress` to `-` **and did
+  not update the assertion that pins it**. Fifth prose-pinned test break in one day.
+- `test-gate-vacuity` — `check-doc-make-targets` reads THREE pathspecs, the harness starved TWO, so
+  the gate examined 36 commands and was reported VACUOUS. **The DECLARATION was wrong, not the
+  gate** — the false-RED direction, whose cheapest-looking remedy is to weaken the accused gate.
 
-### Merged: #1219, #1220 — and, on 2026-09-10, #1236 + #1237
+**WHY IT SHIPPED, measured on the run itself:** on a push to `main`, `static-check` **SKIPS**;
+`static-check-fast` runs and **does not contain `test-scripts`** (0 occurrences); `ci-pass` counts
+skipped as passed. So the gate that catches both is never run routinely. Same class as B574.
+**Corollary: a green PR here does NOT mean `static-check` passed. Run it locally.**
 
-**#1236** — `kind-down.sh` was the ONE path still doing `rm -f` on the state sink. The protection was
-ASYMMETRIC: `state_claim_kind` stops the KinD flow writing into the lab's sink, and nothing stopped
-`kind-down` deleting LAB values out of KIND's sink (the stamp proves CREATION, not AUTHORSHIP —
-`state_stamp` has two callers, neither on the lab path). Also: the refused-overlay arm of `make creds`
-prescribed `make install-ingress` while the SAME FILE forbids it 91 lines away (`creds.sh:1953`), and
-the test policing that prohibition was **vacuous** — anchored on `note:` while the violation sat in the
-`no URL…` block (guard hits 0, defect hits 1, suite 99/99 green). Both fixed, the guard re-anchored on
-the whole report and RED-proven. **And KinD stopped leaking into the tenant surface** (owner's
-constraint, stated three times): three printed mentions in `creds.sh` — all in no-sink arms, one
-prescribing `make e2e-kind` to a tenant — and `scenario-2.md`'s "0c. Remove any stale KinD overlay".
+### Pushed on `#1242` (7 commits) — every one measured, four refuted first
 
-**#1237** — `B722`–`B724`, plus the measurement `B721`'s own "still open" section had asked for.
-
-- **A PRIVILEGE DOWNGRADE.** `is_placeholder ''` is TRUE, the sole robot guard sat INSIDE
-  `if ! is_placeholder`, so robot username + empty password published `HARBOR_USERNAME=admin`. The
-  file had already been fixed once for a sibling bypass *within* that block; nobody questioned the
-  block.
-- **HTTP 412 IS AUTHENTICATED**, measured with three controls that **all return 401** — a wrong
-  robot credential, a nonexistent robot, and an unauthenticated request — plus goharbor v2.15.2
-  source. The same unhandled string was giving OPPOSITE
-  wrong answers: exit 0 in `env-validate`, and **a hard stop of `install-all` at prerequisite 7**
-  (`ensure_skip_if_credential_works`'s `unchecked:no*` arm does not match `unchecked:the probe did
-  not complete`). `lib/harbor.sh`'s "a robot gets 403" comment was measurably false.
-- **`make creds`**: a discarded cause (the report HELD `NOT ATTEMPTED: token EXPIRED` and printed
-  `<could not read node addresses>`), `"read live"` printed when nothing was probed, three unscoped
-  claims, and a table with four credential columns and **no legend**.
-- **`vks-trust-probe`**: a DNS fault was classified as a TRUST problem; a tenant RBAC denial was
-  reported as a timing problem; and fixing that armed a footgun (`PROBE_NS` pointed `_cleanup` at a
-  namespace the operator owns).
+- **the rc=124 arm.** `creds.sh` caps its `argocd-password` child at 3s while the child's ladder is
+  2 x 10s, so a HANGING Supervisor gave rc=124, fell into the EXPIRED arm, and the banner claimed
+  *"the ArgoCD row is read BY this report, not by a second command"* **while `make argocd-password`
+  returned the value**. Measured: `timeout 3` -> rc=124/no output; `timeout 40` -> the value.
+- **the `wait=0` hole in my own fix.** `_ap_exp` is assigned inside `[ "$_wait" -gt 0 ]` while the
+  `case` using it is unconditional -> `ARGOCD_PASSWORD_WAIT_SECONDS=0` (which `.env.example`
+  documents and `creds.sh` always uses) printed **zero** occurrences of "EXPIRED"; default printed 1.
+- **the orphaned cert note** — it hung off an ArgoCD-only flag while Harbor's marker is gated
+  independently, so two Harbor cells carried a marker with **no note and no `Reachable` legend**.
+  Default state, not an edge case.
+- **`NO_COLOR` un-exempted** — it is an operator knob, not terminal environment, and my exempt-it
+  argument was a false dichotomy: `check-env-coverage:185` accepts a **commented** slot.
 
 ### NOT done — next units, in order
 
-1. **B716** — the round REFUTED my prescription three ways (34 of 57 REDs are group-documented; my
-   RED-proof target `VKS_PASSWORD` is itself documented; "it regressed" is wrong —
-   `.env.example:2005-2008` documents it as a known convention). It needs the **staged rollout** the
-   row specifies: report-only + a denominator, then triage ~21, then enforce. **PASS 2 has no
-   denominator at all** — that is the cheapest real improvement.
-2. ⛔ **CORRECTED 2026-09-10 — THIS ITEM WAS WRONG AND IT COST A ROUND.** It read: *"Deleting
-   `02-env.sh:520-528`'s hand-rolled copy in favour of `harbor_auth_report` is the durable fix."*
-   **`B721` — merged in #1223, an EARLIER session — already says REFUTED**, and its reason is a
-   fake-green `lib/harbor.sh:233` forbids in writing. I briefed a round from this line and it
-   re-derived a filed refutation. **A handoff's task list is a CLAIM ABOUT THE BACKLOG; check it
-   against the backlog, not only against the code.**
-   The round still earned its keep, and both facts are appended to `B721` (#1237): the one-line
-   mechanism (`_harbor_ca_args`'s third arm is `else return 1`, so no-CA makes BOTH entry points skip
-   the probe — measured live with a control, `rc=0` on a REJECTED credential vs `rc=1` with the CA),
-   and that **two live gates already have the defect** — `24-lab-preflight.sh:207` and
-   `09-harbor-auth-check.sh:43` both use the REPORTER as a verdict. Fix `_harbor_ca_args` FIRST and
-   RED-prove it; the behaviour change for those two gates is UNMEASURED.
-3. **B719** — 30 of 252 cited `B<nnn>` ids resolve to no row; some legitimately cross-repo.
-4. Untouched and open: **B484**, **B498**, **B565**, **B523**.
-   ⚠️ **B480 was listed here and is CLOSED** — `istio_refuse_foreign_owner` is called by BOTH
-   installers and `test-istio-ownership.sh` passes 22/22; the row simply never recorded it. That is
-   the SECOND stale-open row this session (B563 was the first). **Check a row's premise before
-   briefing from it** — and check it with the SCRIPT's wording, not the row's paraphrase: grepping
-   B523's paraphrase (`cursed`) read 0 hits and would have closed a row that is genuinely open.
+1. **The Harbor "verifies" claim is SOFTENED, not MEASURED.** `lib/tls.sh:ca_verifies_endpoint`
+   is the honest version; `creds.sh` does not source `lib/tls.sh` and it is a live probe that must be
+   gated on `CREDS_NO_PROBE`. Named in-file so it is findable.
+2. **B726** (filed today) — `check-grep-q-pipe.sh:37-38` and B52 both assert *"risk needs >32KB AND
+   multiline"*. MEASURED FALSE: rc=141 at **8,000 B, 195/200** under `taskset -c 0`. ⚠️ Correct the
+   SENTENCES; do **NOT** reopen B52's sweep, which is refuted.
+3. **B721 follow-up** — `_harbor_ca_args`' third arm is `else return 1`, so no-CA makes BOTH entry
+   points skip the probe; `24-lab-preflight.sh:207` and `09-harbor-auth-check.sh:43` use the REPORTER
+   as a verdict. Fix `_harbor_ca_args` FIRST and RED-prove it.
+4. **B716** (needs the staged rollout; PASS 2 has no denominator), **B719**, and untouched:
+   **B484**, **B498**, **B565**, **B523**.
 
-⚠️ **B563 is CLOSED** — the previous handoff listed it as open while its own PR table said #1185
-shipped it. Verify a row before briefing from it; the status is a CLAIM.
+⚠️ **`fix/b486-argocd-host` no longer exists** — no local branch, no remote, no PR, and B486 is still
+🔴 open. The reflog shows it was checked out away to `docs/b486-refuted` on 2026-09-08. If you were
+expecting uncommitted work there, it is not in the tree, the stashes, or `origin`.
 
 ### Lab
 
-Up and serving (all 9 `make creds` rows HTTP 200, all 6 apps `/healthz` 200; ingress LB
-`192.168.101.134`). **The Supervisor token is EXPIRED** (2026-09-09T15:53Z), so Supervisor-only
-targets need `VKS_AUTH_METHOD=vcf make vks-login` first — ⚠️ vCenter SSO locks out **permanently
-after 3 failed attempts**; never guess. Harbor has **no** lockout, so a wrong-password probe there is
-safe and is how the 412-vs-401 split was settled.
+Up and serving. The Supervisor token was renewed today (`VKS_AUTH_METHOD=vcf make vks-login`) and
+reads `VALID 2026-09-11T00:24Z`. ⚠️ `vcf context use` prints *"Token is still active. Skipped the
+token refresh"* **while the kubeconfig HAS been rewritten** — `vks-login` deletes and re-creates the
+context, so `create` mints the token and `use` is reporting on one three seconds old. Not a
+contradiction; do not chase it.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
