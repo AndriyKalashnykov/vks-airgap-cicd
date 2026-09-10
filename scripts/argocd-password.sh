@@ -355,6 +355,29 @@ fi
 #
 # The old bullet also cited THIS COMMAND back at the person running it ("'make argocd-password'
 # waits for it") -- a citation that resolves to the thing you just ran.
+# ⚠️ THE DIAGNOSIS MUST NOT DEPEND ON WHETHER WE INTENDED TO WAIT.
+# `_ap_cls` and `_ap_exp` are assigned inside `if [ "$_wait" -gt 0 ] …` above, but THIS case is
+# UNCONDITIONAL -- so with `--wait 0` they are empty and every expired token fell to the `*)` arm
+# and printed the generic headline. `--wait 0` is not exotic: `.env.example` documents
+# `make argocd-password ARGOCD_PASSWORD_WAIT_SECONDS=0`, and `creds.sh` dispatches this script
+# with `--wait 0` on every run.
+# MEASURED 2026-09-10, ONE expired-token fixture, TWO operating points, opposite answers:
+#     ARGOCD_PASSWORD_WAIT_SECONDS=0 -> rc=2, occurrences of "EXPIRED" in the output: 0
+#     default wait                   -> rc=2, occurrences of "EXPIRED" in the output: 1
+# That is verbatim the failure the LEAD-WITH-THE-CAUSE block below was written to remove, so the
+# fix worked at one operating point and was inert at the other. Found by adversary-bash-git-cli.
+#
+# RECOMPUTED ONLY WHEN UNSET, AND ONLY BEHIND THE SAME `UNAUTHORIZED` GATE. Dropping that gate
+# would blame a NotFound / timeout / crash on an expiry that merely HAPPENS to be true -- the
+# exact conflation creds.sh's rc=124 arm was fixed for the same day. `kube_token_expiry` is
+# OFFLINE (it reads the JWT's own exp), so this costs none of the THREE vCenter SSO attempts
+# before permanent lockout. `_ap_err` is created at :154 with an EXIT trap, so it is still alive.
+if [ -z "${_ap_exp:-}" ] && [ -z "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
+  _ap_cls="${_ap_cls:-$(classify_kube_failure "$_ap_err" 2>/dev/null || true)}"
+  if [ "${_ap_cls:-}" = UNAUTHORIZED ]; then
+    _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
+  fi
+fi
 case "${_ap_exp:-}" in
   EXPIRED*)
     log_error "Cannot read ArgoCD's password: the Supervisor token EXPIRED at ${_ap_exp#EXPIRED }."
