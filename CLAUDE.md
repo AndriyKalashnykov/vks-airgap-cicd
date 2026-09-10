@@ -1164,7 +1164,12 @@ rendered reports, three sandboxes, a stub kubectl, two suite logs"; the sweep fo
    CALL SITES (`24-lab-preflight.sh:207`, `09-harbor-auth-check.sh:43`), not the resolver.
    ⚠️ `09-harbor-auth-check.sh:29` already DISCLOSES the hazard; `24-` does not. Check whether making
    `unchecked:*` a non-pass false-blocks a TENANT with no CA (RULE ZERO-B) before changing it.
-4. **B716** (needs the staged rollout; PASS 2 has no denominator), **B719**, and untouched:
+4. **B716** — ⚠️ this item used to say *"PASS 2 has no denominator"*. **MEASURED FALSE today:**
+   `check-env-coverage PASS 2: 242 commented slot(s) examined (enforcing)` and
+   `PASS 2b: 233 examined, 12 flagged (REPORT-ONLY, B716 stage 1)`. It was TRUE when written and
+   stage 1 shipped exactly that on 2026-09-09 — the un-gateable class (`hooks.md`): a claim
+   correct at authoring time that a later commit falsifies. What REMAINS is stages 2-3: triage
+   the 12 flagged slots, then make PASS 2b enforcing. **B719**, and untouched:
    **B484**, **B498**, **B565**, **B523**.
 
 ⚠️ **`fix/b486-argocd-host` no longer exists** — no local branch, no remote, no PR, and B486 is still
