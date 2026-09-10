@@ -349,6 +349,72 @@ _note_case "note/kind-argocd" 'HARBOR_PASSWORD=x
 ' 'ARGOCD_LB_IP=10.0.0.2
 '
 
+# ── the three operator-facing strings the gate could not see ──────────────────────────────────────
+# ⚠️ A ROUND MEASURED THIS SUITE BYTE-IDENTICAL BEFORE AND AFTER A DIFF THAT CHANGED THREE PRINTED
+# STRINGS in this very file's subject. 103 ok / 0 FAIL on both trees, diff of the two outputs EMPTY.
+# Reverting the change would have changed nothing here. `gates.md`: a gate green at the SAME COUNT as
+# before your change is blind to it. These four cases are the coverage that was missing.
+_o_mark="$(render_with_env 'HARBOR_URL=10.0.0.1
+HARBOR_PASSWORD=x
+HARBOR_CA_FILE=./secrets/harbor-ca.crt
+' 'ARGOCD_LB_IP=10.0.0.2
+')"
+# (c) every cert marker must be BYTE-IDENTICAL. Three rows carried two different texts, and a fourth
+# site was left behind by the first attempt at this -- the survivor was the one cross-triggering the
+# password note (its `— see note` reached :1942's grep, which reads $rows = EVERY column, not just
+# Password). Assert the SET of distinct markers is exactly one.
+# ⚠️ TWO FIXTURES, BECAUSE ONE CANNOT REACH ALL THE SITES. The marker is emitted from THREE
+# places on two different ArgoCD paths: `_argo_tls_note` fires only for an ARGOCD_SERVER that is
+# a BARE IP, while ARGOCD_LB_IP takes a different branch entirely. A single-fixture version of
+# this case passed while `_argo_tls_note` carried a DIFFERENT marker text -- measured, by
+# mutating that line and watching this stay green. Union the markers from both shapes.
+_o_mark2="$(render_with_env 'HARBOR_URL=10.0.0.1
+HARBOR_PASSWORD=x
+HARBOR_CA_FILE=./secrets/harbor-ca.crt
+ARGOCD_SERVER=10.0.0.9
+' '')"
+_marks="$(printf '%s\n%s' "$_o_mark" "$_o_mark2" | grep -oE '\(untrusted cert[^)]*\)' | sort -u | tr '\n' '|')"
+if [ "$_marks" = '(untrusted cert)|' ]; then
+  ok "cert markers: every marked row uses the IDENTICAL text"
+else
+  bad "cert markers: more than one distinct marker text is in play: [$_marks]
+      A second text was what cross-triggered the password note; keep them byte-identical."
+fi
+# (a) exactly ONE `values below :`. Two arms printed it in 100% of no-overlay states -- a two-column
+# block with a duplicate key -- and `grep -m1` made the second untestable by construction.
+_o_fresh="$(render_with_env '' '')"
+_vb="$(printf '%s' "$_o_fresh" | grep -c 'values below :' || true)"
+if [ "${_vb:-0}" -eq 1 ]; then
+  ok "Context prints exactly ONE 'values below :' key (no-overlay state)"
+else
+  bad "Context prints $_vb 'values below :' keys — a duplicate key; the reader cannot tell which is authoritative"
+fi
+# (b) cert advice must name a RUNNABLE command, not just a variable. The first attempt replaced a doc
+# pointer with a bare variable name, which is step 2 of two: `make fetch-argocd-ca` writes the file
+# and PRINTS the line rather than setting it.
+if printf '%s' "$_o_mark" | grep -q 'ARGOCD_CA_FILE'; then
+  if printf '%s' "$_o_mark" | grep -qE 'make fetch-argocd-ca'; then
+    ok "cert advice: naming ARGOCD_CA_FILE also names the command that produces it"
+  else
+    bad "cert advice names ARGOCD_CA_FILE but NO command to obtain it — a value with no way to get it"
+  fi
+else
+  ok "cert advice: ARGOCD_CA_FILE not mentioned in this state (nothing to obtain)"
+fi
+# the `flow` verdict field must not carry a REMEDY -- and never our test rig. The documented tenant
+# path (scenario-2.md tells them VKS_AUTH_METHOD=kubeconfig) lands in the else arm, where this used
+# to print `make e2e-kind`. It is a verdict, not a menu.
+_o_flow="$(render_with_env 'VKS_AUTH_METHOD=kubeconfig
+' '')"
+_flowline="$(printf '%s' "$_o_flow" | grep -m1 -E '^ *flow +:' || true)"
+case "$_flowline" in
+  *'make '*|*'docs/'*)
+    bad "the flow VERDICT field carries a remedy: [$_flowline]
+      flow states what we OBSERVE; a command (especially a rig one) belongs in a labelled remedy." ;;
+  '') bad "no flow line rendered at all — the case cannot discriminate" ;;
+  *)  ok "the flow verdict carries no command and no doc path" ;;
+esac
+
 # The banner must NOT re-acquire an alarm it cannot justify. This is the RED-proof for the change:
 # re-adding the old sentence turns this red, so nobody can quietly restore it.
 if printf '%s' "$out" | grep -qi 'no longer exists'; then
