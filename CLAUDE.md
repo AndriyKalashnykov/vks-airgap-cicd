@@ -1146,12 +1146,24 @@ rendered reports, three sandboxes, a stub kubectl, two suite logs"; the sweep fo
 1. **The Harbor "verifies" claim is SOFTENED, not MEASURED.** `lib/tls.sh:ca_verifies_endpoint`
    is the honest version; `creds.sh` does not source `lib/tls.sh` and it is a live probe that must be
    gated on `CREDS_NO_PROBE`. Named in-file so it is findable.
-2. **B726** (filed today) — `check-grep-q-pipe.sh:37-38` and B52 both assert *"risk needs >32KB AND
-   multiline"*. MEASURED FALSE: rc=141 at **8,000 B, 195/200** under `taskset -c 0`. ⚠️ Correct the
-   SENTENCES; do **NOT** reopen B52's sweep, which is refuted.
-3. **B721 follow-up** — `_harbor_ca_args`' third arm is `else return 1`, so no-CA makes BOTH entry
-   points skip the probe; `24-lab-preflight.sh:207` and `09-harbor-auth-check.sh:43` use the REPORTER
-   as a verdict. Fix `_harbor_ca_args` FIRST and RED-prove it.
+2. ⛔ **B726 IS CLOSED — DO NOT REOPEN IT, AND DO NOT EDIT `check-grep-q-pipe.sh:34-40`.** This item
+   used to say the control states a false threshold. **It does not.** I filed the row, "corrected" it,
+   and BOTH filings were wrong. Re-measured against the shape the claim is scoped to
+   (`printf '%s' "$var" | grep -q`): 8,000 B single-line **0/120**, 8,000 B multiline **0/120**,
+   40,000 B multiline 10/120, **82,000 B multiline 120/120 — its own cited figure, exactly**.
+   My first probe used an EXTERNAL producer (silent about a builtin-scoped claim); my "correction"
+   used the right producer and SINGLE-LINE data, which the claim already calls immune, so it
+   CONFIRMED the claim while I recorded it as a refutation. **Before contradicting a control, re-read
+   what its sentence is scoped TO and vary every dimension that sentence names.**
+3. **B721 follow-up — AND THE PRESCRIPTION BELOW IS PROBABLY WRONG; a round is adjudicating it.**
+   The row says: *"`_harbor_ca_args`' third arm is `else return 1` … fix `_harbor_ca_args` FIRST."*
+   MEASURED: `harbor_auth_verdict` ALREADY exists in the same file and returns a STRING
+   (`accepted` / `rejected` / `unchecked:<why>`) — which DISCRIMINATES where `harbor_auth_report`'s
+   **rc** conflates "no problems" with "could not tell". It is already consumed by
+   `22-harbor-robot.sh:70` and `28-harbor-admin-password.sh:80`. So the defect looks like the two
+   CALL SITES (`24-lab-preflight.sh:207`, `09-harbor-auth-check.sh:43`), not the resolver.
+   ⚠️ `09-harbor-auth-check.sh:29` already DISCLOSES the hazard; `24-` does not. Check whether making
+   `unchecked:*` a non-pass false-blocks a TENANT with no CA (RULE ZERO-B) before changing it.
 4. **B716** (needs the staged rollout; PASS 2 has no denominator), **B719**, and untouched:
    **B484**, **B498**, **B565**, **B523**.
 
