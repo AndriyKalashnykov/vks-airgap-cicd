@@ -2059,6 +2059,11 @@ _dns_probe() {  # <label> <extra .env lines> ; echoes: <stale-rows> <nodns-rows>
   # THE STUB IS THE FIXTURE: gitea fails to resolve (`no DNS here`); every other host resolves to an
   # address that is NOT the ingress LB (`stale DNS`). That yields BOTH conditions in ONE report,
   # which is exactly the state defect 2 could not print.
+  # ⚠️ SC2016 IS CORRECT AND DELIBERATE: `$2` is the STUB's positional, written LITERALLY into the
+  # file being generated — expanding it here would bake THIS shell's $2 into the stub. The disable
+  # sits on the compound `{ … } > file`, which is ONE command: a `# shellcheck disable` scopes to
+  # the NEXT COMMAND, not to the file, so placing it anywhere else silently does nothing.
+  # shellcheck disable=SC2016
   {
     printf '#!/bin/sh\n'
     printf 'case "$2" in gitea.vks.local) exit 2 ;; esac\n'
