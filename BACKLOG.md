@@ -9380,7 +9380,7 @@ time, so the same refutation may apply); or keep generating but never `env_set` 
 never heard of, `make env-check` cannot go green on a fabricated one, and both directions are
 RED-proven with a control that must still generate.
 
-## 🔴 B726 — a CONTROL states a SIZE THRESHOLD about itself that is measurably FALSE, and B52 repeats it
+## ⚪ B726 — CLOSED, REFUTED BY ITS OWN AUTHOR: the control was RIGHT and I mis-measured it TWICE
 
 `scripts/check-grep-q-pipe.sh:37-38` says, in the scope note it prints its own verdict against:
 
@@ -9414,6 +9414,41 @@ B52's copy of the claim is corrected the same way.
 
 ⚠️ **Do NOT reopen B52's sweep.** It is refuted, and the `<<<` empty-value hazard independently
 justifies not sweeping. This row is about the CLAIM, not the sites.
+
+### ⛔ CLOSED 2026-09-10 — THE CLAIM IS CORRECT; both of my measurements were off-scope
+
+**Do not reopen this. Do not edit `check-grep-q-pipe.sh:34-40`.** Read the paragraph, not the
+sentence: the whole block is scoped to **`printf '%s' "$var" | grep -q`**, and it states three
+things — no-newline data is immune at ANY size; below the 64KB pipe buffer the write completes;
+risk needs **>32KB AND multiline**.
+
+**MEASURED against that exact shape**, 120 trials each, `taskset -c 0`, GNU grep 3.11:
+
+| variable | rc=141 | the claim says |
+|---|---|---|
+| 8,000 B **single-line** | **0 / 120** | immune (no newlines) ✓ |
+| 8,000 B **multiline** | **0 / 120** | immune (< 32KB) ✓ |
+| 40,000 B multiline | 10 / 120 | just above the threshold |
+| **82,000 B multiline** | **120 / 120** | its own cited figure, `82KB multiline: 120/120` ✓ **reproduced exactly** |
+
+**WHY I FILED IT WRONG, TWICE — and both are the same error on different axes:**
+
+1. **First probe used an EXTERNAL producer** (`{ printf; head -c N \| tr; printf; }`), a pipeline of
+   real processes, and got 146/150 at 8 KB. True — and it says nothing about the claim, which is
+   scoped to a shell builtin writing one variable.
+2. **The "correction" then used the right producer and the WRONG DIMENSION**: single-line data, which
+   the claim already declares immune at any size. It **confirmed** the claim, and I recorded it as a
+   refutation.
+
+I varied size, then producer shape, and never varied **newlines** with the right producer — so
+neither run could touch the claim's actual risk case. `gates.md` §"ONE OPERATING POINT ESTABLISHES AN
+OBSERVATION, NEVER A MECHANISM" is about over-generalising a measurement; this is its mirror —
+**refuting a claim with a measurement taken outside its stated scope.** Before contradicting a
+control, re-read what its sentence is scoped TO, and vary every dimension that sentence names.
+
+The out-of-scope conclusion (`~70 such sites remain and NONE qualifies`) also stands: those sites
+hold short variable values, and the empty-value `<<<` hazard documented directly below is an
+independent reason not to sweep them.
 
 ### ⚠️ CORRECTED the same day — I measured the WRONG PRODUCER SHAPE, and it changes the verdict
 
