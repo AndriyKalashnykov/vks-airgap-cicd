@@ -49,8 +49,55 @@ check "i/o timeout" TRANSPORT \
   'Error: Get "https://harbor.vks.local/v2/": dial tcp 10.0.0.5:443: i/o timeout'
 
 # ── CORRUPT: crane's own templates + the registry codes the 2026-07-13 incident produced ─────────
-check "mismatched digest (the integrity verdict)" CORRUPT \
+# ⚠️ THE FIXTURE BELOW IS SYNTHETIC AND PINNED THE ARM GREEN OVER A HOLE. An idea round extracted
+# the strings go-containerregistry 0.21.9 ACTUALLY emits and measured that EIGHT OF TEN classified
+# UNCLASSIFIED -- the bare token `mismatched digest:` lives only at validate/layer.go, reachable via
+# the non-image `default:` branch of validateChildren, i.e. NEVER on the path every mirrored image
+# takes. So the arm was very nearly decorative and the probe was doing all the work, while this test
+# reported it healthy. It is KEPT (that branch is real) and LABELLED, and the real strings are
+# pinned below it. A classifier tested only on strings its author wrote is testing the author's
+# imagination -- this file's own header says so, and the fixture predated the check.
+check "mismatched digest — SYNTHETIC: the non-image default: branch only" CORRUPT \
   'Error: validating layer sha256:abc: mismatched digest: got sha256:def, want sha256:abc'
+
+# ── THE REAL 0.21.9 IMAGE-PATH CORRUPTION STRINGS, extracted from the module cache ───────────────
+# Each of these classified UNCLASSIFIED before 2026-09-10. They reached CORRUPT only via
+# `_verify_probe`, so any future text arm inserted AHEAD of the probe would have silently taken
+# them away from the only thing that caught them.
+check "mismatched layer digest (the NORMAL layer-corruption string)" CORRUPT \
+  'Error: validating image: mismatched layer[0] digest: Digest()=sha256:def, want sha256:abc'
+check "mismatched layer diffid" CORRUPT \
+  'Error: validating image: mismatched layer[0] diffid: DiffID()=sha256:def, want sha256:abc'
+check "mismatched config digest" CORRUPT \
+  'Error: validating image: mismatched config digest: ConfigName()=sha256:def, want sha256:abc'
+check "mismatched config size" CORRUPT \
+  'Error: validating image: mismatched config size: Manifest.Config.Size()=12, want 10'
+check "mismatched manifest digest" CORRUPT \
+  'Error: validating image: mismatched manifest digest: Digest()=sha256:def, want sha256:abc'
+check "blob checksum failure (verify.ReadCloser)" CORRUPT \
+  'Error: error verifying sha256 checksum after reading 1024 bytes; got "sha256:def", want "sha256:abc"'
+check "blob size failure (verify.ReadCloser)" CORRUPT \
+  'Error: error verifying size; got 10, want 12'
+check "manifest served under the wrong digest" CORRUPT \
+  'Error: manifest digest: "sha256:def" does not match requested digest: "sha256:abc"'
+check "0.22.x diffid-count (correct after a crane bump)" CORRUPT \
+  'Error: validating image: mismatched number of diffids: 2 != 3'
+
+# ── ARCH-ABSENT: a CONFIG fault, and it must NOT reach the corrupt tally ─────────────────────────
+# `crane validate --platform` errors before validating anything, so this string cannot co-occur with
+# a corruption string. Without its own class it fell to UNCLASSIFIED -> probe -> rc=0 on an index ->
+# CORRUPT -> "re-carry 12 GB", for a typo in MIRROR_ARCH. MEASURED against a live public index.
+check "MIRROR_ARCH names an arch the index lacks" ARCH-ABSENT \
+  'Error: reading image "cgr.dev/chainguard/busybox@sha256:19f0": no child with platform linux/mips64 in index cgr.dev/chainguard/busybox@sha256:19f0'
+
+# ── THE INCIDENT THIS ROUND CAME FROM: a PUBLISHER metadata bug, not corruption ──────────────────
+# chainguard writes "architecture": "arm/v6" INSIDE the config blob (spec says architecture: arm +
+# variant: v6). MEASURED: the UPSTREAM image fails the identical validation, and our mirrored index
+# digest is BYTE-IDENTICAL to upstream. The fix is `crane validate --platform` (upstream PR #1776
+# sanctions it), NOT a text arm -- which is why this string is deliberately NOT given a class here:
+# with --platform it can no longer be produced. If it ever reappears it SHOULD fall to the fail-safe.
+check "platform mismatch is NOT silently forgiven (must reach the fail-safe)" UNCLASSIFIED \
+  'Error: validating children: failed to validate image platform[2](sha256:502f): mismatched Architecture: arm/v6 != arm'
 check "undersized layer" CORRUPT \
   'Error: undersized layer: wanted 12345 bytes, got 999'
 check "BLOB_UNKNOWN (the 2026-07-13 shape)" CORRUPT \
