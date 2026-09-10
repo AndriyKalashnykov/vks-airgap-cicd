@@ -488,6 +488,10 @@ _pad() {
 # trailing space here instead: one join, one separator, blank lines still skipped.
 tr_free_join() { local _l _o=""; while IFS= read -r _l || [ -n "${_l:-}" ]; do [ -n "$_l" ] || continue; _o="${_o}${_l} "; done; printf '%s' "$_o"; }
 
+# ⚠️ DECLARED HERE, ABOVE THE FIRST ARM THAT SETS IT. Putting it beside the NOTE (~400 lines
+# below) would run the init AFTER the arms and wipe it -- the trap this file already records
+# measuring once: "markers=2, note=0".
+_pw_note_needed=0
 _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per flow
   # ⚠️ "check the state overlay" IS THE FOURTH FALSE CLAIM, and the most dangerous of them: under a
   # REFUSAL the password WAS published -- for another cluster -- so this sent the operator to read a
@@ -512,14 +516,14 @@ harbor_user="${HARBOR_USERNAME:-admin}"
 # The `:-` form cannot be kept: it would feed the PLACEHOLDER through _mask and hide the one thing a
 # reader needs when nothing is installed. Branch instead — mask a real value, print the explanation.
 if [ -n "${HARBOR_PASSWORD:-}" ]; then harbor_pw="$(_mask "$HARBOR_PASSWORD")"
-else harbor_pw="$(_unset_pw HARBOR_PASSWORD)"; fi
+else harbor_pw="$(_unset_pw HARBOR_PASSWORD)"; _pw_note_needed=1; fi
 # NOT a `gitea_admin` fallback: it disagreed with .env.example's GITEA_ADMIN_USER=admin, so this
 # printer could name an account the pipeline never used. It is also dead code — load_env sources
 # .env.example unconditionally (SKIP_DOTENV skips only .env), so the value is always set. If it
 # somehow is not, SAY SO rather than inventing a name. This is a printer; it must still exit 0.
 gitea_user="${GITEA_ADMIN_USER:-<unset — see GITEA_ADMIN_USER in .env.example>}"
 if [ -n "${GITEA_ADMIN_PASSWORD:-}" ]; then gitea_pw="$(_mask "$GITEA_ADMIN_PASSWORD")"
-else gitea_pw="$(_unset_pw GITEA_ADMIN_PASSWORD)"; fi
+else gitea_pw="$(_unset_pw GITEA_ADMIN_PASSWORD)"; _pw_note_needed=1; fi
 # ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
 # `--wait 0` is an ARGUMENT, not an env var: this is a PRINTER and must never block. argocd-password
 # defaults to a 900s wait for the still-reconciling case, and an env-var opt-out would be defeated by
@@ -607,7 +611,7 @@ else
   # SAME CLASS AS THE TWO ABOVE, third row: "<VKS-provided — get it from your lab>" is only true on a real
   # lab. On a KinD box ArgoCD's password is GENERATED at install like the others, so telling the operator
   # to go and get it from a lab they do not have is a third invented chore. Answer per flow.
-  argo_pw="$(_unset_pw ARGOCD_ADMIN_PASSWORD)"
+  argo_pw="$(_unset_pw ARGOCD_ADMIN_PASSWORD)"; _pw_note_needed=1
   # NOT "get it from your lab" — that sentence sent an operator to fetch something that was TWELVE
   # SECONDS away (measured, walk row 1: this printed at 19:42:25Z, the ArgoCD operator created
   # argocd-initial-admin-secret at 19:42:37Z). This printer passes --wait 0 by design, so "absent
@@ -949,7 +953,21 @@ case "$_prov" in
                 #   STORED     -> "your .env + install-time discovery. ..."
                 # The arms discriminate without it. test-creds-show now asserts THAT property
                 # (the human line must DIFFER between arms) instead of grepping this sentence.
-                printf '                   re-check: make env-validate  (it cannot prove a robot can PUSH)\n'
+                # ⚠️ `harbor-auth-check`, NOT `env-validate`. Both authenticate; only one reports
+                # PUSH RBAC. MEASURED: `env-validate` runs a HAND-ROLLED copy of the predicate
+                # (02-env.sh:544-557, whose own comment says "Filed to delete this copy ... five
+                # homes for one predicate is the real defect") and cannot see push at all (B715);
+                # `harbor-auth-check` calls harbor_auth_report -> harbor_push_report. So the old
+                # line sent a robot-configured operator to the one command that cannot check the
+                # thing the parenthetical apologised for, while a stronger one sat in the same
+                # Makefile.
+                # ⚠️ THE PARENTHETICAL IS GONE, and not for brevity. It printed UNCONDITIONALLY --
+                # advice attached to a CATEGORY, not a FINDING (gates.md) -- so for an `admin`
+                # credential, which env-validate DOES settle, it was pure noise. Its content is
+                # not lost: Makefile:519's help for this target already carries the fuller caveat
+                # ("canNOT see read-only mode, quota or immutable tag rules -- only a real push
+                # proves push"), which is where someone about to run it will read it.
+                printf '                   re-check: make harbor-auth-check\n'
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
                 printf '                   passwords below belong to that one, not to the cluster you are talking to.\n'
@@ -962,7 +980,13 @@ case "$_prov" in
                 # fresh every run, so a blanket "the values you supplied" is false about exactly
                 # the two cells a reader acts on.
                 printf '    values below : your .env — except Reachable (probed live) and the headlamp\n'
-                printf '                   token (minted each run).  re-check: make env-validate\n'
+                # ⚠️ SAME TARGET SWAP AS THE STORED ARM ABOVE, for the same reason: this register
+                # offers a re-check of the CREDENTIALS printed below, and `env-validate` cannot
+                # judge a robot's push right at all (B715). The stamped-MISMATCH arm above keeps
+                # `env-validate` deliberately -- its finding is that the whole overlay belongs to
+                # another cluster, where the broad format+KUBECONFIG+reachability check is the
+                # right one and push RBAC is not the question.
+                printf '                   token (minted each run).  re-check: make harbor-auth-check\n'
               else
                 printf '    values below : PLACEHOLDERS from .env.example — nothing is installed yet\n'
               fi ;;
@@ -1956,7 +1980,24 @@ fi
 
 # The <... — see note> markers in the Password column, explained where width is free.
 # Re-derived from the SAME globals `_unset_pw` branches on, so cell and note cannot drift.
-if printf '%s' "${rows:-}" | grep -q -- '— see note'; then
+# ⚠️ KEYED ON THE FLAG, NOT ON THE RENDERED STRING. This grepped `$rows` for `— see note`, and
+# `add_row` builds `$rows` from EVERY column -- the gate had NO column scope, while the note it
+# guards speaks only about the PASSWORD column.
+# RED-PROVED WITH NO EDIT TO THE TREE: a `.env` carrying
+#     GITEA_ADMIN_USER="someuser — see note"
+# renders that marker in column 3, and the report then printed
+#     note: those passwords do not exist yet — nothing has published them.
+# while TWO password cells held real values. A false operator-facing claim (RULE ZERO-V).
+# ⚠️ GRADED HONESTLY: that proves the MECHANISM is unscoped. An em dash in a username is not a
+# realistic operator input, so it is NOT a reachable false-fire today -- do not let this demo be
+# read as one. The reason to fix it is the CLASS: `lib`-adjacent code already learned this twice
+# (the vCenter row test now keys its three source vars; the SSH note is flag-keyed and its
+# comment states the rule outright -- "Display text is not a control channel").
+# ⚠️ THE SIBLING IS STILL OPEN: a `case "$rows" in *'stale DNS'*)` a few lines above has the
+# identical unscoped shape and drives a ROOT edit to /etc/hosts. Its producer is called inline
+# inside five `add_row` argument lists, so fixing it is a capture-then-flag restructure, not a
+# one-liner -- filed, and deliberately not folded in here.
+if [ "${_pw_note_needed:-0}" = 1 ]; then
   if [ "${_sink_refused:-0}" = 1 ]; then
     printf '\n  note: those passwords are held by an overlay this report REFUSED — it belongs to a\n'
     printf '        DIFFERENT cluster. Do NOT use them.\n'
@@ -2039,10 +2080,24 @@ fi
 # WHOLE table vanished whenever ArgoCD happened to be at a name. Four credential-shaped columns
 # beside a green fifth read as ONE verdict. They are not: `Reachable` probes the ADDRESS only --
 # Harbor's probe sends no -u/-K/-H, ArgoCD's is a bare TCP connect, the ingress rows are a
-# `curl -H Host:` -- and Username/Password are ECHOED from .env / the install-time overlay, never
-# read back. Only a real push discriminates (CLAUDE.md, "THREE HARBOR AUTH CHECKS THAT DO NOT
-# DISCRIMINATE"); `make env-validate` cannot judge a robot at all (B715).
-printf '\n  Reachable = the address answered. Username/Password are AS CONFIGURED, not tested.\n'
+# `curl -H Host:`. The report makes ZERO authentication attempts, and THAT is the whole claim.
+#
+# ⚠️ IT USED TO ALSO SAY "Username/Password are AS CONFIGURED" -- MEASURED FALSE for THREE of the
+# five credential rows, and it CONTRADICTED this same render 1,100 lines earlier (:938 prints
+# "the headlamp token is MINTED fresh on every run"):
+#     Gitea :1290            $GITEA_ADMIN_PASSWORD   <- .env               as configured  ✅
+#     Harbor (registry):1478 $HARBOR_PASSWORD        <- .env               as configured  ✅
+#     headlamp        :1448  $headlamp_tok           <- kubectl create token AT REPORT TIME
+#     Harbor (web UI) :1725  $_h_admin_pw            <- Supervisor secret harbor-core-ver-1
+#     ArgoCD          :1740  $argo_pw                <- argocd-password.sh, live kubectl
+# "As configured" invites the operator to edit .env to "fix" a cell that is read from the cluster
+# and will not change. The remaining claim -- nothing here is auth-tested -- is true of all five,
+# and provenance already has a home in the Context block's `values below :` line.
+#
+# ⚠️ "Reachable = the address answered" is PINNED VERBATIM by test-creds-show.sh:335. Keep it.
+# Only a real push discriminates a Harbor robot (CLAUDE.md, "THREE HARBOR AUTH CHECKS THAT DO NOT
+# DISCRIMINATE"); `make env-validate` cannot judge one at all (B715).
+printf '\n  Reachable = the address answered — NOT that the credential works. Nothing here is auth-tested.\n'
 
 # ⚠️ THE CERT NOTE KEYS ON "DID ANY ROW CARRY A MARKER", NOT ON ArgoCD.
 # And it is now PER TARGET, because one sentence cannot be right for both. MEASURED on the lab:
@@ -2081,8 +2136,15 @@ if [ "${_tls_note_needed:-0}" = 1 ]; then
       printf '    - Harbor: if that CA is the one that signed it, this verifies —\n      curl --cacert %s %s://%s\n' \
         "$_ca_abs" "$harbor_scheme" "${HARBOR_URL}"
     else
-      printf '    - Harbor: no readable CA at %s — run make fetch-harbor-ca, then curl --cacert <it>.\n' \
-        "${_ca_abs:-<HARBOR_CA_FILE unset>}"
+      # ⚠️ SPLIT BY THE WIDTH GATE ADDED IN THE SAME CHANGE, on its FIRST run. This was ONE label
+      # line of 126 chars carrying an absolute path AND two commands -- the same "chaotic and
+      # crowded" defect that was raised about the ArgoCD half, in the half nobody looked at.
+      # Shape now matches its siblings: label, command alone, then the diagnostic. The path is
+      # kept (an earlier bug reported "not on disk" for a CA that WAS there, because the relative
+      # path resolved against the CWD) but it is a diagnostic, not part of the instruction.
+      printf '    - Harbor: no readable CA — get one, then re-run this report:\n'
+      printf '      make fetch-harbor-ca\n'
+      printf '      (looked for it at %s)\n' "${_ca_abs:-<HARBOR_CA_FILE unset>}"
     fi
   elif [ "${_harbor_marked:-0}" = 1 ]; then
     printf '    - Harbor: HARBOR_URL is not set, so this report cannot name the endpoint to verify.\n'
@@ -2094,8 +2156,18 @@ if [ "${_tls_note_needed:-0}" = 1 ]; then
   # ⚠️ `--insecure` ONLY on the bare-IP path (_argo_tls_flag), never with an explicit name: #745
   # and B168 forbid offering it when the operator supplied a NAME the cert can match.
   if [ "${_argo_tls_flag:-0}" = 1 ]; then
-    printf '    - ArgoCD (browse/read only): curl --insecure %s — a self-signed ArgoCD cert\n' "$_argocd_bare"
-    printf '      typically carries DNS names only, so a bare IP cannot verify. argocd login and the\n'
+    # ⚠️ TWO BULLETS, ONE PURPOSE EACH, EVERY COMMAND ALONE ON ITS LINE. The single bullet this
+    # replaces ran two purposes (browse vs login) through four wrapped lines at up to 110 chars,
+    # ended a line on a dangling `— run`, and did not match the SHAPE of its Harbor sibling three
+    # lines above (label, then command). Max width is now 88 and the line count is unchanged.
+    # ⚠️ THE MECHANISM SENTENCE STAYS, as a CONDITIONAL. `_argo_tls_flag` (:295) is set by "https
+    # at a BARE IP" -- this report has NOT read the cert's SANs -- so "a bare IP cannot match a
+    # DNS-only cert" is a general truth, not a claim about THIS cert. It also has to stay because
+    # it is the JUSTIFICATION for a security downgrade: without it `--insecure` sits unmotivated
+    # beside Harbor's `--cacert`, inviting an operator to "fix" the asymmetry with a `--cacert`
+    # that cannot work.
+    printf '    - ArgoCD, browse only — a bare IP cannot match a DNS-only cert:\n'
+    printf '      curl --insecure %s\n' "$_argocd_bare"
     # ⚠️ NAMES THE MAKE TARGET, NOT A RUNBOOK. It used to end "see docs/scenario-2.md" -- one
     # persona's runbook, at a reader this report CANNOT identify (it prints `flow: real lab` and
     # cannot tell the scenario-1 admin from the scenario-2 tenant).
@@ -2108,8 +2180,16 @@ if [ "${_tls_note_needed:-0}" = 1 ]; then
     # `make fetch-argocd-ca` (Makefile:736) is tenant-safe: it dials ARGOCD_SERVER/ARGOCD_LB_IP
     # over the wire and its script contains zero kubectl/Supervisor references, so it passes
     # RULE ZERO-B's "does this work from .env alone?".
-    printf '      WRITE path need a NAME the cert carries, plus ARGOCD_CA_FILE — run\n'
-    printf '      make fetch-argocd-ca, then set it in .env.\n'
+    # ⚠️ THIS SECOND BULLET IS NOT OPTIONAL, and its guard CANNOT see it go. MEASURED:
+    # test-creds-show.sh:395-403 is conditional -- "if the output mentions ARGOCD_CA_FILE it must
+    # also name make fetch-argocd-ca, ELSE ok" -- so deleting BOTH halves lands in the else arm
+    # and the suite stays GREEN. It guards the historical half-regression (a bare variable name
+    # with no way to obtain it), not a full deletion. And `grep -n fetch-argocd-ca scripts/creds.sh`
+    # returns exactly one printf: this is the report's ONLY pointer to the only command that
+    # produces ARGOCD_CA_FILE. `.env.example` documenting it does not discharge RULE ZERO-B --
+    # this report is the surface the operator is looking at when `argocd login` fails.
+    printf '    - ArgoCD, argocd login / write — needs a NAME the cert carries, plus ARGOCD_CA_FILE:\n'
+    printf '      make fetch-argocd-ca, then set it in .env\n'
   fi
 fi
 

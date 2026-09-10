@@ -398,9 +398,112 @@ if printf '%s' "$_o_mark" | grep -q 'ARGOCD_CA_FILE'; then
   else
     bad "cert advice names ARGOCD_CA_FILE but NO command to obtain it — a value with no way to get it"
   fi
+elif printf '%s' "$_o_mark" | grep -q 'ArgoCD, argocd login'; then
+  # ⚠️ THE OLD `else` ARM WAS A HOLE, and it was the arm this fixture lands in on a deletion.
+  # "if ARGOCD_CA_FILE is mentioned it must name the command, ELSE ok" goes GREEN when BOTH halves
+  # are deleted -- it guards the historical half-regression (a bare variable name) and is blind to
+  # the fuller one. This fixture DOES render the ArgoCD cert bullet, so "nothing to obtain" is a
+  # vacuous pass here: the write-path half is the report's ONLY pointer to the only command that
+  # produces ARGOCD_CA_FILE.
+  bad "cert advice: the ArgoCD write-path bullet printed but names NEITHER ARGOCD_CA_FILE nor its command"
 else
-  ok "cert advice: ARGOCD_CA_FILE not mentioned in this state (nothing to obtain)"
+  ok "cert advice: no ArgoCD cert bullet in this state (nothing to obtain)"
 fi
+# ⚠️ AND THE BULLET ITSELF MUST BE PRESENT FOR THIS FIXTURE. Both cases above are conditional on
+# text the deletion removes, so neither can fail on a deletion alone. This one can: the fixture
+# pins ARGOCD_LB_IP to a bare IP, which is exactly the state `_argo_tls_flag` exists for.
+if printf '%s' "$_o_mark" | grep -q 'make fetch-argocd-ca'; then
+  ok "cert advice: the ArgoCD write path names make fetch-argocd-ca (RULE ZERO-B: obtainable here)"
+else
+  bad "cert advice: a bare-IP ArgoCD renders no fetch-argocd-ca pointer — the report's ONLY one"
+fi
+# ⚠️ SHAPE, not wording: one purpose per bullet, and no line ending on a dangling connector. The
+# 4-line single bullet this replaced ran `... — run` at a line end, so the command was orphaned
+# from the clause that introduced it.
+_dangle="$(printf '%s' "$_o_mark" | grep -cE '(— run|-- run|, run)$' || true)"
+if [ "$_dangle" -eq 0 ]; then
+  ok "cert advice: no line ends on a dangling connector"
+else
+  bad "cert advice: $_dangle line(s) end on a dangling connector — the command is orphaned"
+fi
+# ⚠️ LABEL LINES ONLY. My first version of this measured EVERY line and went RED on the Harbor
+# command -- 108 chars, because it carries an absolute CA path and a hostname. That is not the
+# crowding defect; it is the REASON for the shape. A command sits alone on its line precisely so
+# it can be as long as it needs to be and still copy-paste in one piece. Wrapping PROSE is the
+# complaint; wrapping a command would be a worse bug than the one being fixed.
+_wide="$(printf '%s' "$_o_mark" | awk '/what to do, per target/,/^$/ {if ($1 == "-" && length($0) > 92) c++} END {print c+0}')"
+if [ "$_wide" -eq 0 ]; then
+  ok "cert advice: every bullet LABEL fits 92 columns (commands are exempt — they must not wrap)"
+else
+  bad "cert advice: $_wide bullet label(s) exceed 92 columns — this is the crowding complaint"
+fi
+
+# ---- the table-wide legend must not make a PROVENANCE claim the columns cannot support ----------
+# ⚠️ PROPERTY, NOT WORDING. The legend used to add "Username/Password are AS CONFIGURED, not
+# tested" -- MEASURED FALSE for 3 of the 5 credential rows (headlamp is minted by `kubectl create
+# token` at report time; Harbor's web-UI password is read from a Supervisor secret; ArgoCD's is
+# read by argocd-password.sh) -- and it CONTRADICTED the Context block in the SAME render, which
+# says the headlamp token is MINTED fresh on every run. Zero assertions pinned it, so it could
+# have been reworded, deleted, or re-broken in silence.
+#
+# The assertion is the internal contradiction, because that is what a re-introduction looks like:
+# a report that anywhere claims a value is read/minted LIVE may not also claim, table-wide, that
+# the credential columns are echoed configuration.
+_o_leg="$(render_with_env 'HARBOR_URL=10.0.0.1
+HARBOR_PASSWORD=x
+' '')"
+_legline="$(printf '%s' "$_o_leg" | grep -m1 'Reachable = the address answered' || true)"
+if [ -n "$_legline" ]; then
+  ok "legend: the pinned 'Reachable = the address answered' scope line printed"
+else
+  bad "legend: the table-wide Reachable legend is MISSING"
+fi
+# ⚠️ MY FIRST PATTERN HERE WAS BLIND, and the RED-proof is the only thing that said so. It grepped
+# 'MINTED fresh|read live|read from the cluster' -- but the arm THIS fixture renders says "minted
+# each run" and "(probed live)", so `_live` read 0, the case fell to the "unreachable here" arm,
+# and reverting the legend to the false form left the suite GREEN. The pattern now covers what the
+# three arms ACTUALLY print, measured:
+#   STORED     : "Reachable is probed live, and the headlamp token is MINTED fresh on every run"
+#   DISCOVERED : "read from the cluster you are talking to now"
+#   plain .env : "except Reachable (probed live) and the headlamp token (minted each run)"
+_live="$(printf '%s' "$_o_leg" | grep -ciE 'minted|probed live|read from the cluster' || true)"
+_echoed="$(printf '%s' "$_legline" | grep -ciE 'as configured|never read back|echoed from' || true)"
+if [ "$_live" -gt 0 ] && [ "$_echoed" -gt 0 ]; then
+  bad "legend: it claims the credential columns are echoed config, while the SAME render says a value
+      is read/minted LIVE ($_live mention(s)) — 3 of 5 credential cells are read live"
+elif [ "$_live" -gt 0 ]; then
+  ok "legend: the render names a live-read value and the legend makes no echoed-config claim"
+else
+  ok "legend: this render names no live-read value (the contradiction is unreachable here)"
+fi
+
+# ---- the re-check register must name a target that can answer its own caveat --------------------
+# MEASURED: `env-validate` runs a hand-rolled copy of the auth predicate and cannot see push RBAC
+# at all (B715); `harbor-auth-check` calls harbor_auth_report -> harbor_push_report. The old line
+# named the weaker target and then apologised for the exact gap the stronger one closes.
+_o_rc="$(render_with_env 'HARBOR_URL=10.0.0.1
+HARBOR_PASSWORD=x
+' '')"
+_rcline="$(printf '%s' "$_o_rc" | grep -m1 're-check:' || true)"
+case "$_rcline" in
+  *env-validate*) bad "re-check: names env-validate, which cannot judge a robot's push right at all (B715)" ;;
+  *harbor-auth-check*) ok "re-check: names harbor-auth-check (the target that reports push RBAC)" ;;
+  # ⚠️ ONE ARM KEEPS env-validate ON PURPOSE: the stamped-MISMATCH arm (creds.sh:976), where the
+  # finding is that the WHOLE overlay belongs to another cluster. There the broad check -- format
+  # + KUBECONFIG + Harbor reachability -- is the right one, and Harbor push RBAC is not the
+  # question. This fixture does not render that arm; if a future fixture does, exempt it by arm,
+  # never by loosening the case below.
+  '') ok "re-check: no register in this arm" ;;
+  *) bad "re-check: names an unexpected target — '$_rcline'" ;;
+esac
+# and the apology must be gone: it printed unconditionally, so for an `admin` credential -- which
+# env-validate DOES settle -- it was advice attached to a CATEGORY, not a finding (gates.md).
+case "$_rcline" in
+  *'can PUSH'*|*'cannot prove'*)
+    bad "re-check: still carries the unconditional push caveat — Makefile:519's help already has it" ;;
+  *) ok "re-check: no unconditional push caveat hanging off the register" ;;
+esac
+
 # the `flow` verdict field must not carry a REMEDY -- and never our test rig. The documented tenant
 # path (scenario-2.md tells them VKS_AUTH_METHOD=kubeconfig) lands in the else arm, where this used
 # to print `make e2e-kind`. It is a verdict, not a menu.
@@ -414,6 +517,41 @@ case "$_flowline" in
   '') bad "no flow line rendered at all — the case cannot discriminate" ;;
   *)  ok "the flow verdict carries no command and no doc path" ;;
 esac
+
+# ── the password note is COLUMN-SCOPED, and it had NO assertions at all ───────────────────────────
+# ⚠️ A round measured `grep -n 'those passwords\|see note' scripts/test-creds-show.sh` -> 3 hits, ALL
+# COMMENTS. Zero assertions pinned this note, so it could have regressed to never firing (or firing
+# always) in silence. Both directions are asserted here; the POSITIVE one is the control.
+#
+# The gate used to grep `$rows` for `— see note`, and `add_row` builds `$rows` from EVERY column,
+# while the note speaks only about the PASSWORD column. RED-PROVED with no edit to the tree: a `.env`
+# whose GITEA_ADMIN_USER carries an em-dash marker put it in column 3 and the note fired while two
+# password cells held real values.
+_pwnote_neg="$(render_with_env 'GITEA_ADMIN_USER="someuser — see note"
+HARBOR_URL=10.0.0.1
+HARBOR_PASSWORD=hpw123
+GITEA_ADMIN_PASSWORD=gpw123
+' '')"
+if printf '%s' "$_pwnote_neg" | grep -q 'someuser — see note'; then
+  ok "pw-note: the fixture DID render an em-dash marker outside the password column (case is live)"
+else
+  bad "pw-note: the fixture did NOT render the marker — this case cannot discriminate anything"
+fi
+if printf '%s' "$_pwnote_neg" | grep -q 'those passwords'; then
+  bad "pw-note: fired while password cells hold VALUES — the gate is reading a non-password column"
+else
+  ok "pw-note: a marker in another column does NOT fire the password note"
+fi
+# POSITIVE CONTROL: with the passwords genuinely unset the note MUST print, or the negative case
+# above passes for the wrong reason (a note that never fires satisfies it trivially).
+_pwnote_pos="$(render_with_env 'HARBOR_URL=10.0.0.1
+' '')"
+if printf '%s' "$_pwnote_pos" | grep -q 'those passwords'; then
+  ok "pw-note: ...and it DOES fire when the passwords are actually unset (positive control)"
+else
+  bad "pw-note: it does not fire even with the passwords unset — the note is dead, and the negative
+      case above is therefore vacuous"
+fi
 
 # The banner must NOT re-acquire an alarm it cannot justify. This is the RED-proof for the change:
 # re-adding the old sentence turns this red, so nobody can quietly restore it.
@@ -638,10 +776,32 @@ if printf '%s' "$out" | grep -qE 'values below *: *your \.env'; then
 else
   bad "B161: it does not name .env as the source" "source is the only question answerable offline"
 fi
-if printf '%s' "$out" | grep -q 'env-validate'; then
-  ok "B161: it points at the one thing that SETTLES it (make env-validate authenticates for real)"
+# ⚠️ RE-KEYED FROM THE TARGET NAME TO THE PROPERTY. This used to be `grep -q 'env-validate'`,
+# which pinned a WORDING while its own message states a PROPERTY -- "telling a reader a value is
+# unconfirmable without saying how to confirm it is half a message". Swapping the register to
+# `make harbor-auth-check` (which reports push RBAC, where env-validate cannot judge a robot at
+# all -- B715) satisfied the property and broke the test, with a message asserting a referral was
+# MISSING when it had merely improved. That is the fifth prose-pinned break in this file's history.
+#
+# UPGRADED WHILE RE-KEYING: the referral must name a target that EXISTS. RULE ZERO-B -- the
+# operator has this repo and nothing else, so a `make <target>` this report prints and this
+# Makefile does not define is an unrunnable instruction, which reads as a broken product. That
+# check is strictly stronger than the string it replaces, and it is the reason to re-key rather
+# than just widen the grep.
+# ⚠️ `[^[:space:]]+`, NOT a character class. My first version used `[a-z][a-z0-9-]*`, which
+# SILENTLY TRUNCATED at the first character outside the class: a mutation to
+# `make harbor-auth-checkX` captured `harbor-auth-check`, found THAT in the Makefile, and passed.
+# A check that quietly rewrites its own input to something valid is worse than no check. Capture
+# the whole token and let the Makefile grep judge it.
+_b161_ref="$(printf '%s' "$out" | grep -m1 -oE 're-check: make [^[:space:]]+' || true)"
+_b161_tgt="${_b161_ref##* }"
+if [ -z "$_b161_ref" ]; then
+  bad "B161: no re-check referral at all" "telling a reader a value is unconfirmable without saying how to confirm it is half a message"
+elif grep -qE "^${_b161_tgt}:" Makefile; then
+  ok "B161: it points at something that SETTLES it, and 'make $_b161_tgt' exists in this Makefile"
 else
-  bad "B161: no referral to env-validate" "telling a reader a value is unconfirmable without saying how to confirm it is half a message"
+  bad "B161: it refers to 'make $_b161_tgt', which this Makefile does NOT define" \
+      "RULE ZERO-B: the operator has this repo and nothing else — an unrunnable instruction reads as a broken product"
 fi
 # It must NEVER say STALE: on the documented real-lab flow that label is FALSE, and it would send an
 # operator to rotate a working credential.
