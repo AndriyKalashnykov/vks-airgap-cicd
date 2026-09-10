@@ -586,7 +586,22 @@ else
   # carried one, it went stale by 203 lines, and it was independently mis-cited THREE times in
   # one session, twice by reviewers who then prescribed a fix that would have died rc=127 here); `kube_token_expiry` comes from lib/os.sh, is offline, and answers the one question
   # that decides which of the two sentences is true.
-  if [ "$_have_sink" = 1 ]; then
+  # ⚠️ rc=124 IS NOT "THE TOKEN EXPIRED" -- IT IS *MY OWN* CAP, AND CONFLATING THEM PRINTS A LIE.
+  # MEASURED 2026-09-10 against a HANGING Supervisor (expired token + unroutable API server):
+  #     timeout 3  argocd-password.sh --wait 0 --raw  -> rc=124, no output
+  #     timeout 40 (identical inputs)                 -> rc=0,   the value
+  #     make argocd-password (UNCAPPED)               -> rc=0,   the value, 10s
+  # The cap at :537 is ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s while the child's ladder is two
+  # candidates x ${CREDS_K8S_TIMEOUT:-10}s, which this file never shrinks -- so the parent's WHOLE
+  # budget is smaller than ONE of the child's calls. Falling through to the EXPIRED arm sets
+  # `_argo_pw_expired=1`, and the banner then claims "the ArgoCD row is read BY this report, not by
+  # a second command" while that second command RETURNS IT. Refuted by vks-adversary 2026-09-10 and
+  # reproduced here. A green run cannot reach this: a REACHABLE Supervisor rejects fast (rc=3), so
+  # only a HANGING one exceeds the cap -- and lab-down is exactly when the banner also says
+  # "the recorded ingress did not answer either".
+  if [ "${_argo_rc:-0}" = 124 ]; then
+    argo_pw="<not read — MY OWN ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s cap expired, not the token; run: make argocd-password (uncapped)>"
+  elif [ "$_have_sink" = 1 ]; then
     # ⚠️ REUSE :116's PROBE, do not re-run it. Byte-identical inputs, but each call reads the clock
     # independently (lib/os.sh's `date -u +%s`), so a token expiring BETWEEN the two reads yielded
     # `<not read>` + `_argo_pw_expired=1` with NO banner and no explanation anywhere in the report.
