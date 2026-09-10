@@ -236,6 +236,33 @@ printf '#!/bin/sh\nprintf "127.0.0.1       %%s\\n" "$2"\n' > "$T/bin4/getent"
 chmod +x "$T/bin4/getent"
 ck "resolves to a DIFFERENT address than the ingress -> stale DNS" \
    "$(PATH="$T/bin4:$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=203.0.113.9 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "stale DNS"
+# ⚠️ A STALE ADDRESS FIRST, THE INGRESS SECOND — the state THIS REPORT'S OWN REMEDY CREATES.
+# `creds.sh`'s /etc/hosts advice says remove-then-add; an operator who does the ADD without the
+# REMOVE leaves the old line winning and appends ours after it. `getent hosts` then returns BOTH, in
+# file order, and a `grep -qxF` over the whole set goes SILENT because the ingress appears somewhere.
+# MEASURED end-to-end before this case existed: the row printed `serving` while a browser would use
+# the stale address — so re-running the report CONFIRMED the broken state as fixed, and the advice's
+# own warning ("an appended line LOSES to an earlier one") had no instrument behind it.
+# The verdict must key on the FIRST same-family address, not on membership.
+mkdir -p "$T/bin4b"
+# shellcheck disable=SC2016  # single quotes REQUIRED: "$2" is the STUB's positional, not ours.
+printf '#!/bin/sh\nprintf "10.9.9.9 %%s\\n203.0.113.9 %%s\\n" "$2" "$2"\n' > "$T/bin4b/getent"
+chmod +x "$T/bin4b/getent"
+ck "a STALE address FIRST and the ingress second -> stale DNS (membership is not enough)" \
+   "$(PATH="$T/bin4b:$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=203.0.113.9 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "stale DNS"
+# ...and its CONTROL, which is the 2026-09-08 false-stale fix: an IPv6 address routinely comes FIRST
+# and must NOT be compared against an IPv4 ingress. Filtering to the same family is what keeps this
+# silent; a naive "first address" rule would re-break it.
+mkdir -p "$T/bin4c"
+# shellcheck disable=SC2016  # single quotes REQUIRED: "$2" is the STUB's positional, not ours.
+printf '#!/bin/sh\nprintf "::1 %%s\\n203.0.113.9 %%s\\n" "$2" "$2"\n' > "$T/bin4c/getent"
+chmod +x "$T/bin4c/getent"
+# `silent`, not empty: "NOT stale" means it falls THROUGH to the route probe, which reports
+# `silent` for an unreachable ingress — the same value the sibling control below asserts. My first
+# version wanted '' and failed for that reason, which would have read as a product defect.
+ck "::1 FIRST, then the ingress -> NOT stale (same-family only; the 2026-09-08 regression)" \
+   "$(PATH="$T/bin4c:$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=203.0.113.9 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "silent"
+
 # THE CONTROL. If a MATCHING address also read `stale DNS`, the check would flag every healthy host
 # and the state would be worthless — a verdict that cannot be false is not a verdict.
 ck "resolves to the ingress itself -> NOT stale (falls through to the route probe)" \
