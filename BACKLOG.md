@@ -8836,6 +8836,48 @@ Do not pick one without a round; and fix all four homes together (`lib/harbor.sh
 
 ## 🟡 B716 — STAGE 1 of 3 SHIPPED 2026-09-09 (report-only + a denominator): PASS 2's window is UNBOUNDED, and my original prescribed fix was a MASS FALSE-RED
 
+**⚠️ 2026-09-10 — STAGE 2 MEASURED, AND ITS PREMISE IS LARGELY WRONG. STAGE 3 MUST NOT SHIP AS
+SPECIFIED.** The row assumes the 21 survivors need triage — *"some may need a marker, others a wider
+marker vocabulary"*. Measured against the file: **they are already documented, and the gate cannot
+see it.**
+
+Every one of the 21 carries substantial prose (min **5** comment lines, median ~50, max **138**), and
+`CAPACITY_PREFLIGHT`'s block contains **`# how:` AND `# stage: choose`** — two of the strongest
+tokens in `ACQ_MARKERS` — while still being flagged.
+
+**THE MECHANISM IS A WINDOW TRUNCATION, NOT A VOCABULARY GAP.** PASS 2b walks up from the slot
+collecting contiguous comments and **breaks on the first slot-shaped line** (`is_slot`). But
+`.env.example` contains **14 lines that are PROSE and slot-shaped** — e.g. `:1603`
+`# CAPACITY_PREFLIGHT=0 disables that check entirely. Set it only to …`. Such a line is a **WALL**:
+the real slot's window stops below it and never reaches the `# how:` above.
+
+Re-walking the file with a model of the gate's own algorithm:
+
+| | |
+|---|---|
+| flagged whose marker exists ABOVE the wall (false flag) | **19** |
+| flagged with no marker anywhere in the block | **0** |
+
+⚠️ **My re-walk flags 19 where the gate flags 21**, so it is a MODEL of the gate, not the gate — two
+cases disagree and I did not chase them. The direction is not in doubt (19 ≥ 0), but do not quote 19
+as the gate's own number.
+
+**CONSEQUENCES FOR THE PLAN:**
+
+- **Stage 2 as filed is mostly not doc work** — it is a gate fix. Adding markers to 19 already-
+  documented slots would be typing filler to satisfy a broken window.
+- **Stage 3 ("enforce at zero") would RED the build over 19 well-documented slots**, and the only
+  remedy is to move or duplicate text below the wall — the *remedy-degrades-the-artifact* shape this
+  corpus has already refuted four gate designs on. An `adversary-bash-git-cli` round independently
+  reached the same conclusion by a different route (the remedy is satisfiable by typing the single
+  word `default.`, and narrowing `ACQ_MARKERS` moves flags 21 -> 68).
+- **The window fix is a CONTROL CHANGE and needs its own idea round** — the obvious discriminator
+  ("a real slot has nothing after the value; prose has words") is exactly the kind of predicate this
+  repo keeps having refuted. Do not implement it from this note.
+
+The stage-1 report-only shipping decision is VINDICATED by this: had it been enforcing, it would have
+reddened every PR for a defect in the gate rather than in the file.
+
 Its own header says a wider window *"would pick up a NEIGHBOURING block's marker and the gate would
 never fire — which is exactly what it did on its first version"*. **It regressed to v1 behaviour.**
 The awk resets the block only on a NON-comment line, and `.env.example` is an unbroken run of `#`
