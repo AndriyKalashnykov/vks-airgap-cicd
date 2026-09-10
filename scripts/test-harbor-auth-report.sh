@@ -108,6 +108,36 @@ case "$out" in
   *) bad "the 401 message does not name the rejection: $out" ;;
 esac
 
+# THE 401 DIAGNOSIS IN ensure_project() IS RIG-SCOPED, AND ONLY THE REMEDY USED TO BE GUARDED.
+# The "Harbor's DATABASE survives from an earlier install" story is a LOCAL-STAND-IN failure mode: a
+# tenant on a third-party estate has no earlier install of OURS to survive. It reaches them through
+# ensure_project(), i.e. the MIRROR/PUSH path (21-mirror-push.sh, 22-harbor-robot.sh,
+# 22-builder-push.sh) -- NOT env-validate/harbor-auth-check, which call harbor_auth_report instead.
+#
+# ⚠️ STRUCTURAL, AND DELIBERATELY SO. A behavioural case was written first and abandoned: ensure_project
+# needs harbor_setup's HARBOR_CURL_CFG and a /projects oracle, neither of which this harness has (it
+# was built for harbor_auth_report). Faking a pass was the alternative; this asserts the real code
+# shape instead, and its RED is demonstrated by reverting the guard.
+#
+# It reads the FUNCTION BODY, not the file, so a mention in some other function cannot satisfy it.
+_body="$(sed -n '/^ensure_project() {/,/^}/p' "${SCRIPT_DIR}/lib/harbor.sh")"
+_g="$(printf '%s\n' "$_body" | grep -n 'VKS_STATE_KIND'   | head -1 | cut -d: -f1)"
+_d="$(printf '%s\n' "$_body" | grep -n 'DATABASE survives' | head -1 | cut -d: -f1)"
+_s="$(printf '%s\n' "$_body" | grep -c 'STALE' || true)"
+if [ -z "$_g" ] || [ -z "$_d" ]; then
+  bad "ensure_project body: could not find the guard ($_g) or the diagnosis ($_d) -- the probe is broken, not the code"
+elif [ "$_g" -lt "$_d" ]; then
+  ok "the rig-specific 401 diagnosis sits INSIDE the VKS_STATE_KIND guard (guard line $_g < diagnosis line $_d)"
+else
+  bad "the rig-specific 401 diagnosis is printed BEFORE/OUTSIDE the guard (guard $_g, diagnosis $_d) -- a tenant gets a local-stand-in root cause"
+fi
+# The other arm must EXIST, or the tenant simply loses the diagnosis instead of getting a usable one.
+if [ "${_s:-0}" -ge 1 ]; then
+  ok "and the non-rig arm offers a cause that CAN apply to a third-party estate (stale/rotated)"
+else
+  bad "the non-rig arm names no cause at all -- guarding the rig story must not leave a tenant with nothing"
+fi
+
 printf '500\n' > "$T/status"
 rc=0; harbor_auth_report >/dev/null 2>&1 || rc=$?
 check "500 -> inconclusive, not judged here" 0 "$rc"
