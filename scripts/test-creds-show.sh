@@ -241,6 +241,7 @@ if printf '%s' "$out_services" | grep -qiE 'NOTHING IS INSTALLED YET|<not set>|<
 else
   ok "fully installed -> no stale 'not set' / 'needs ingress' / 'defaults' markers remain"
 fi
+_provline_disc="$(printf '%s' "$out" | grep -m1 'values below :' || true)"
 if printf '%s' "$out" | grep -q 'values-provenance: DISCOVERED'; then
   ok "fully installed -> declares values-provenance: DISCOVERED (the token FLIPS; it is not a constant)"
 else
@@ -262,6 +263,7 @@ out="$(render 'HARBOR_URL=10.0.0.1
 HARBOR_PASSWORD=x
 ARGOCD_LB_IP=10.0.0.2
 ')"
+_provline_stored="$(printf '%s' "$out" | grep -m1 'values below :' || true)"
 if printf '%s' "$out" | grep -q 'values-provenance: STORED'; then
   ok "unstamped overlay, non-KinD -> declares values-provenance: STORED"
 else
@@ -286,10 +288,24 @@ fi
 # wording — so it fired RED when that phrase was replaced for being internal jargon a reader cannot
 # parse ("cluster stamp" is our word, not theirs). The intent above is that the human is told the
 # REASON; assert THAT, so the reason can be worded better without breaking the control.
-if printf '%s' "$out" | grep -qiE 'which cluster they came from|carries no cluster stamp'; then
-  ok "...and tells the HUMAN why (it cannot tell which cluster), not just the token"
+# ⚠️ KEYED ON DISCRIMINATION, NOT ON A PHRASE -- AND THE PHRASE FORM WAS MEASURED TO ROT.
+# This was `grep -qiE 'which cluster they came from|carries no cluster stamp'` over the WHOLE
+# report. Two defects in that shape: it cannot tell WHICH arm printed the phrase, and it is an OR of
+# literals, so each reword appends an alternative and it then passes when ANY historical phrasing
+# appears anywhere -- strictly weaker with every edit. Its own comment claimed "KEYED ON THE
+# PROPERTY, NOT THE PHRASE" while the code matched two phrases.
+#
+# The invariant is unchanged: the HUMAN is told, not just the machine token. Its non-rotting form is
+# DISCRIMINATION -- the line the operator READS must differ between arms, or the token flips while
+# the sentence does not and the reader learns nothing.
+if [ -z "$_provline_stored" ] || [ -z "$_provline_disc" ]; then
+  bad "...but a 'values below :' line is MISSING from an arm -- the token alone is not the deliverable
+      (STORED='$_provline_stored' DISCOVERED='$_provline_disc')"
+elif [ "$_provline_stored" = "$_provline_disc" ]; then
+  bad "...but the HUMAN cannot tell the arms apart: STORED and DISCOVERED print the IDENTICAL line
+      ('$_provline_stored'). The token flips and the sentence does not."
 else
-  bad "...but the human is not told WHY. The token alone is not the deliverable."
+  ok "...and the HUMAN line DISCRIMINATES STORED from DISCOVERED (not just the machine token)"
 fi
 # ── the cert note must never be ORPHANED, and the legend is TABLE-WIDE ────────────────────────────
 # ⚠️ THIS WHOLE MECHANISM SHIPPED UNTESTED. A round measured the suite's assertion count UNCHANGED
