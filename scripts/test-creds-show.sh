@@ -1531,10 +1531,11 @@ _jwt()  { printf 'h.%s.s' "$(_b64u "{\"exp\":$1}")"; }
 # file" — my instrument, not the code. The stamp is kept because it also exercises the
 # DISCOVERED/KinD flow; the UNSTAMPED overlay reaches site 2 too and is not separately rendered
 # (measured equal today).
-_sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-content-or-empty> -> the report
-  local which="$1" tok="$2" sink="$3" t; t="$(mktemp -d)"; mkdir -p "$t/bin"
+_sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-or-empty> [extra-.env-lines]
+  local which="$1" tok="$2" sink="$3" extra="${4:-}" t; t="$(mktemp -d)"; mkdir -p "$t/bin"
   cp .env.example "$t/.env.example"
   printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME='robot\$probe'\nHARBOR_PASSWORD=x\n" > "$t/.env"
+  [ -n "$extra" ] && printf '%s\n' "$extra" >> "$t/.env"
   : > "$t/kc"; printf 'apiVersion: v1\nkind: Config\n' > "$t/sup"
   [ -n "$sink" ] && printf '%s\n' "$sink" > "$t/.env.state"
   { printf '#!/bin/sh\ncase "$*" in\n'
@@ -1617,6 +1618,34 @@ while IFS='|' read -r _sso_lbl _sso_bin _sso_sink _sso_mE _sso_mV _sso_mU; do
 done <<SSOROWS
 $_sso_rows
 SSOROWS
+
+# ── THE 119 ARM OF THE GUEST-NODE-SSH PROBE HAD NO FIXTURE AT ALL ────────────────────────────────
+# B717 shipped the classification of a NOT-ATTEMPTED Supervisor read (`_sup_timeout` returns 119
+# without dialling when the token is dead) and NOTHING tested it: `_sso_render`'s .env sets only
+# HARBOR_*, so `VKS_NAMESPACE` is unset, the SSH probe never starts, and the row renders
+# `<not probed>` -- a DIFFERENT arm. MEASURED before adding this: with the four VKS_* vars the same
+# fixture flips to `<not read>`, creds.sh:2330's 119 token. So the arm is fixturable; it simply had
+# no cell. An adversary round found this while ranking, not any gate.
+#
+# ⚠️ BOTH DIRECTIONS, because `<not read>` and `<not probed>` are one word apart and the whole point
+# is that they mean different things to an operator: without the vars it must NOT say `<not read>`.
+_119="$(_sso_render creds "$(_jwt 1000000000)" 'VKS_STATE_KIND=1' \
+        'VKS_USERNAME=u
+VKS_PASSWORD=p
+VKS_CLUSTER=c
+VKS_NAMESPACE=n' || true)"
+_119_bare="$(_sso_render creds "$(_jwt 1000000000)" 'VKS_STATE_KIND=1' || true)"
+case "$_119" in
+  *"guest node SSH  <not read>"*) ok "119 arm: a dead Supervisor token renders <not read> (B717)" ;;
+  *) bad "119 arm: the guest-node-SSH row did NOT reach the 119 classification. Either the probe did
+      not start (VKS_* unset?) or B717's arm regressed. This cell exists because the arm previously
+      had NO fixture at all." ;;
+esac
+case "$_119_bare" in
+  *"<not probed>"*) ok "  ...and WITHOUT the VKS_* vars it says <not probed>, not <not read>" ;;
+  *) bad "  the no-VKS_* render should say <not probed> — if it now says <not read>, the report is
+      claiming a probe was attempted when VKS_NAMESPACE is unset." ;;
+esac
 
 # ── The cause is stated ONCE. This is the property the dedup bought, and nothing else pins it. ────
 # The expiry instant used to be restated on every row that lost a value, alongside the renewal
