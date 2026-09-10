@@ -9533,3 +9533,36 @@ comments first, because the fix's own comment quotes the removed command; and us
 not a pipe, or `grep -q` + `pipefail` reports a false CLEAN over a present defect).
 
 **Grade:** `measured` (fixture run locally 2026-09-10; the file's line number read from the tree).
+
+## 🔴 B728 — `harbor-auth-check` prints "silent above = you have it" when it probed NOTHING
+
+**MEASURED 2026-09-10** by an implementation-round adversary, and it is the reassuring direction.
+
+`09-harbor-auth-check.sh:47` is careful and two-state:
+
+> `Harbor auth gate: no rejection to report (see the line above for whether a credential was actually probed).`
+
+Six lines later, `:53` is not:
+
+> `Checked: AUTHENTICATION, and RBAC push permission (silent above = you have it).`
+
+**"silent above" is ALSO true when nothing was probed.** With `HARBOR_URL` unset — it is COMMENTED
+in `.env.example`, so genuinely unset on a fresh box — the target exits **0** and prints that line.
+An operator sent there by a report reads it as "my credential is fine".
+
+**Same family as B721** (`harbor_auth_report`'s **rc** conflates "no problems" with "could not
+tell", while `harbor_auth_verdict` returns a discriminating STRING). `:53` is that conflation
+surfacing in PROSE rather than in an exit code, so a fix that only changes call-site rc handling
+leaves this line saying the wrong thing.
+
+**Half of it is already mitigated, elsewhere:** `creds.sh`'s `re-check:` register no longer offers
+this target when `HARBOR_URL` is unset — it falls back to `env-validate`, which is broad enough to
+have something to check. That removes the path a REPORT sends people down; it does not fix the line.
+
+**Done when:** `:53` distinguishes "checked and clean" from "nothing to check", keyed on the same
+signal `harbor_auth_verdict` already returns (`accepted` / `rejected` / `unchecked:<why>`) rather
+than on silence — and a test pins BOTH states. ⚠️ Check first whether making `unchecked:*` a
+non-pass false-blocks a TENANT with no CA (RULE ZERO-B); B721's row records that hazard.
+
+**Grade:** `measured` (adversary ran the target with `HARBOR_URL` unset; line numbers read from the
+tree 2026-09-10).

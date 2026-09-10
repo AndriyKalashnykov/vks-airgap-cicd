@@ -263,6 +263,22 @@ out="$(render 'HARBOR_URL=10.0.0.1
 HARBOR_PASSWORD=x
 ARGOCD_LB_IP=10.0.0.2
 ')"
+# ⚠️ THE STORED ARM'S REGISTER HAD NO ASSERTION AT ALL. Both re-check fixtures elsewhere in this
+# file render the DEFAULT arm (measured), so mutating the STORED arm's target to a nonexistent one
+# -- the exact RULE ZERO-B failure the B161 existence check was added to catch -- left the suite
+# green. Deleting the register there was equally invisible. The STORED render already exists here;
+# only the assertion was missing.
+_rc_stored="$(printf '%s' "$out" | grep -m1 -oE 're-check: make [^[:space:]]+' || true)"
+_rc_stored_tgt="${_rc_stored##* }"
+if [ -z "$_rc_stored" ]; then
+  bad "STORED arm: no re-check register at all" "this is the only branch a real lab reaches (B87)"
+elif ! grep -qE "^${_rc_stored_tgt}:[^=]" Makefile; then
+  # `[^=]` so a make VARIABLE assignment (`NAME := …`) cannot satisfy a target lookup.
+  bad "STORED arm: the register names 'make $_rc_stored_tgt', which this Makefile does NOT define" \
+      "RULE ZERO-B: an unrunnable instruction reads as a broken product"
+else
+  ok "STORED arm: its re-check names 'make $_rc_stored_tgt', which this Makefile defines"
+fi
 _provline_stored="$(printf '%s' "$out" | grep -m1 'values below :' || true)"
 if printf '%s' "$out" | grep -q 'values-provenance: STORED'; then
   ok "unstamped overlay, non-KinD -> declares values-provenance: STORED"
@@ -466,6 +482,19 @@ fi
 #   STORED     : "Reachable is probed live, and the headlamp token is MINTED fresh on every run"
 #   DISCOVERED : "read from the cluster you are talking to now"
 #   plain .env : "except Reachable (probed live) and the headlamp token (minted each run)"
+# ⚠️ THE CONTENT ASSERTION, AND ITS ABSENCE WAS A HIGH. An impl-round MEASURED that truncating the
+# legend to just "Reachable = the address answered." -- DELETING the entire new claim -- left this
+# suite at the SAME COUNT, 0 FAIL, rc=0. The two checks around it are the OLD pinned prefix and the
+# ABSENCE of "as configured", and a legend that says NOTHING satisfies both. That is the identical
+# structural hole this file fixed for the ArgoCD write-path bullet in the same commit: an
+# assertion keyed only on a negative goes green on a deletion.
+case "$_legline" in
+  *auth-tested*|*'credential works'*)
+    ok "legend: it states the credentials are UNTESTED, not merely that it avoids claiming otherwise" ;;
+  *)
+    bad "legend: it defines Reachable but never says the CREDENTIAL is untested" \
+        "a legend truncated to the Reachable clause passes every other check here — measured" ;;
+esac
 _live="$(printf '%s' "$_o_leg" | grep -ciE 'minted|probed live|read from the cluster' || true)"
 _echoed="$(printf '%s' "$_legline" | grep -ciE 'as configured|never read back|echoed from' || true)"
 if [ "$_live" -gt 0 ] && [ "$_echoed" -gt 0 ]; then

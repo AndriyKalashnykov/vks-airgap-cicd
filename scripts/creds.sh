@@ -967,7 +967,22 @@ case "$_prov" in
                 # not lost: Makefile:519's help for this target already carries the fuller caveat
                 # ("canNOT see read-only mode, quota or immutable tag rules -- only a real push
                 # proves push"), which is where someone about to run it will read it.
-                printf '                   re-check: make harbor-auth-check\n'
+                # ⚠️ GATED ON HARBOR BEING CONFIGURED, and this is the SAME gates.md defect the
+                # parenthetical was deleted for: advice attached to a CATEGORY rather than a
+                # FINDING. `harbor-auth-check` is HARBOR-ONLY, so with HARBOR_URL unset (it is
+                # COMMENTED in .env.example, so genuinely unset on a fresh box) the register
+                # offered a command that cannot answer anything -- and an impl-round MEASURED the
+                # same render printing BOTH "re-check: make harbor-auth-check" AND "Harbor:
+                # HARBOR_URL is not set, so this report cannot name the endpoint to verify".
+                # Running it there exits 0 and prints "silent above = you have it": a false
+                # reassurance in the one surface a tenant has.
+                # `env-validate` is the honest fallback -- it is BROAD (format + KUBECONFIG +
+                # reachability), so it still has something to check when Harbor does not.
+                if [ -n "${HARBOR_URL:-}" ]; then
+                  printf '                   re-check: make harbor-auth-check\n'
+                else
+                  printf '                   re-check: make env-validate\n'
+                fi
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
                 printf '                   passwords below belong to that one, not to the cluster you are talking to.\n'
@@ -986,7 +1001,11 @@ case "$_prov" in
                 # `env-validate` deliberately -- its finding is that the whole overlay belongs to
                 # another cluster, where the broad format+KUBECONFIG+reachability check is the
                 # right one and push RBAC is not the question.
-                printf '                   token (minted each run).  re-check: make harbor-auth-check\n'
+                if [ -n "${HARBOR_URL:-}" ]; then
+                  printf '                   token (minted each run).  re-check: make harbor-auth-check\n'
+                else
+                  printf '                   token (minted each run).  re-check: make env-validate\n'
+                fi
               else
                 printf '    values below : PLACEHOLDERS from .env.example — nothing is installed yet\n'
               fi ;;
