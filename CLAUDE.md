@@ -1087,7 +1087,20 @@ earlier (labelled in-file rather than deleted).
 resolver candidates; `${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}/kubeconfig` EXISTS here and
 points at the real Supervisor. Pin **every** candidate.
 
-### Merged: #1219, #1220
+### Merged: #1219, #1220 — and, on 2026-09-10, #1236 + #1237
+
+**#1236** — `kind-down.sh` was the ONE path still doing `rm -f` on the state sink. The protection was
+ASYMMETRIC: `state_claim_kind` stops the KinD flow writing into the lab's sink, and nothing stopped
+`kind-down` deleting LAB values out of KIND's sink (the stamp proves CREATION, not AUTHORSHIP —
+`state_stamp` has two callers, neither on the lab path). Also: the refused-overlay arm of `make creds`
+prescribed `make install-ingress` while the SAME FILE forbids it 91 lines away (`creds.sh:1953`), and
+the test policing that prohibition was **vacuous** — anchored on `note:` while the violation sat in the
+`no URL…` block (guard hits 0, defect hits 1, suite 99/99 green). Both fixed, the guard re-anchored on
+the whole report and RED-proven. **And KinD stopped leaking into the tenant surface** (owner's
+constraint, stated three times): three printed mentions in `creds.sh` — all in no-sink arms, one
+prescribing `make e2e-kind` to a tenant — and `scenario-2.md`'s "0c. Remove any stale KinD overlay".
+
+**#1237** — `B722`–`B724`, plus the measurement `B721`'s own "still open" section had asked for.
 
 - **A PRIVILEGE DOWNGRADE.** `is_placeholder ''` is TRUE, the sole robot guard sat INSIDE
   `if ! is_placeholder`, so robot username + empty password published `HARBOR_USERNAME=admin`. The
@@ -1113,8 +1126,18 @@ points at the real Supervisor. Pin **every** candidate.
    `.env.example:2005-2008` documents it as a known convention). It needs the **staged rollout** the
    row specifies: report-only + a denominator, then triage ~21, then enforce. **PASS 2 has no
    denominator at all** — that is the cheapest real improvement.
-2. **The FIVE homes** of the Harbor auth predicate. Deleting `02-env.sh:520-528`'s hand-rolled copy
-   in favour of `harbor_auth_report` is the durable fix; it changes what `env-validate` prints.
+2. ⛔ **CORRECTED 2026-09-10 — THIS ITEM WAS WRONG AND IT COST A ROUND.** It read: *"Deleting
+   `02-env.sh:520-528`'s hand-rolled copy in favour of `harbor_auth_report` is the durable fix."*
+   **`B721` — merged in #1223, an EARLIER session — already says REFUTED**, and its reason is a
+   fake-green `lib/harbor.sh:233` forbids in writing. I briefed a round from this line and it
+   re-derived a filed refutation. **A handoff's task list is a CLAIM ABOUT THE BACKLOG; check it
+   against the backlog, not only against the code.**
+   The round still earned its keep, and both facts are appended to `B721` (#1237): the one-line
+   mechanism (`_harbor_ca_args`'s third arm is `else return 1`, so no-CA makes BOTH entry points skip
+   the probe — measured live with a control, `rc=0` on a REJECTED credential vs `rc=1` with the CA),
+   and that **two live gates already have the defect** — `24-lab-preflight.sh:207` and
+   `09-harbor-auth-check.sh:43` both use the REPORTER as a verdict. Fix `_harbor_ca_args` FIRST and
+   RED-prove it; the behaviour change for those two gates is UNMEASURED.
 3. **B719** — 30 of 252 cited `B<nnn>` ids resolve to no row; some legitimately cross-repo.
 4. Untouched and open: **B484**, **B498**, **B565**, **B523**.
    ⚠️ **B480 was listed here and is CLOSED** — `istio_refuse_foreign_owner` is called by BOTH
