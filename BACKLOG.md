@@ -9624,8 +9624,15 @@ side.
 
 **DENOMINATOR CORRECTED — 3 sites, not 2:**
 
+⚠️ **CORRECTED AGAIN 2026-09-10 — the class is FOUR sites, not three.** A second round found
+`70-configure-argocd.sh:449`, which prints `echo "<argocd-lb-ip> <host>" | sudo tee -a /etc/hosts`.
+Non-destructive but **non-idempotent**: re-running duplicates the line, and a duplicate that sorts
+after an existing stale entry changes nothing, so the operator sees no effect and repeats it. Two of
+the four survivors are SILENT rather than destructive, which is the harder half to notice.
+
 | # | site | shape | verdict |
 |---|---|---|---|
+| 0 | `70-configure-argocd.sh:449` | `sudo tee -a` | non-idempotent; duplicates on re-run — **OPEN** |
 | 1 | `98-uninstall-all.sh:332` | `sed -i '/DOMAIN/d'` | destroys 6/7 lines — **OPEN** |
 | 2 | `creds.sh` stale-DNS advice | `sed -i 's/^[0-9.]\+…/LB\1/'` | repoints `localhost` AND an unrelated corporate host at our ingress LB — **FIXED on #1249** (the round's worktree was `origin/main`, which predates that branch, so it correctly reported this one as live) |
 | 3 | **`creds.sh` no-DNS advice** | `sudo sh -c 'printf … >> /etc/hosts'` | **I MISSED THIS.** Non-destructive but **NOT IDEMPOTENT** — re-running duplicates the line. `creds.sh` already documents that appending loses to a live stale entry, so it is a known-weak third instance — **OPEN** |

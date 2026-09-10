@@ -2080,6 +2080,12 @@ fi
 # in-house practice here (test-creds-reach-ingress.sh does the same).
 _dns_probe() {  # <label> <extra .env lines> ; echoes: <stale-rows> <nodns-rows> <stale-block> <nodns-block>
   local t p lp out
+  # ⚠️ TRAP FIRST. MEASURED on this shape: terminate the subshell before its `kill` and the
+  # listener is STILL UP, and `killpg` then fails ESRCH because the pgid is gone -- so the orphan
+  # is unreachable by process group and holds its ephemeral port until killed by PID, with a
+  # generated `.env` left behind in the leaked mktemp dir. Triggers: a CI job timeout, Ctrl-C, a
+  # `timeout N` wrapper. This function runs inside `$( )`, so EXIT fires on the normal path too.
+  trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
   t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
   p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
   python3 -m http.server "$p" --bind 127.0.0.1 >/dev/null 2>&1 &
@@ -2107,15 +2113,24 @@ _dns_probe() {  # <label> <extra .env lines> ; echoes: <stale-rows> <nodns-rows>
             CREDS_NO_PROBE="${CREDS_NO_PROBE:-0}" CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
   kill "$lp" 2>/dev/null || true
   wait "$lp" 2>/dev/null || true
-  printf '%s %s %s %s' \
+  # fields 5 and 6 exist so the co-occurrence case can assert COHERENCE, not just presence:
+  #   5 = an append command was prescribed        6 = a STALE host appears in the ABSENT arm's list
+  _ab="$(printf '%s' "$out" | sed -n '/do not RESOLVE on this machine/,/^$/p' || true)"
+  printf '%s %s %s %s %s %s' \
     "$(printf '%s' "$out" | grep -c 'stale DNS' || true)" \
     "$(printf '%s' "$out" | grep -c 'no DNS here' || true)" \
     "$(printf '%s' "$out" | grep -c 'RESOLVE ON THIS MACHINE' || true)" \
-    "$(printf '%s' "$out" | grep -c 'do not RESOLVE on this machine' || true)"
+    "$(printf '%s' "$out" | grep -c 'do not RESOLVE on this machine' || true)" \
+    "$(printf '%s' "$out" | grep -c '>> /etc/hosts' || true)" \
+    "$(printf '%s' "$_ab" | grep -c 'tekton\.vks\.local' || true)"
   rm -rf "$t"
 }
 if command -v python3 >/dev/null 2>&1; then
-  read -r _sr _nr _sb _nb <<< "$(_dns_probe co-occur)"
+  # ⚠️ SIX NAMES FOR SIX FIELDS. With four, `_nb` silently absorbed the trailing fields and
+  # read "1 0 0" — the last name in a `read` takes ALL remaining input, so a numeric test on
+  # it fails with a message that looks like a product defect. One probe run feeds every
+  # assertion below; re-running it per case would spawn three listeners for one question.
+  read -r _sr _nr _sb _nb _app _scope <<< "$(_dns_probe co-occur)"
   # THE CONTROL FIRST. If the fixture did not put BOTH markers in the table, the two assertions
   # below prove nothing -- an absent block would be indistinguishable from an absent condition.
   if [ "${_sr:-0}" -ge 1 ] && [ "${_nr:-0}" -ge 1 ]; then
@@ -2130,6 +2145,25 @@ if command -v python3 >/dev/null 2>&1; then
     bad "dns-advice: stale-block=$_sb no-DNS-block=$_nb with BOTH conditions present" \
         "the arms must be independent \`if\`s; a \`case\` leaves the second host with NO remediation"
   fi
+  # ⚠️ PRINTING BOTH IS NOT ENOUGH — THEY MUST NOT CONTRADICT. An impl-round MEASURED that the
+  # co-occurrence fix alone made arm 1 say "APPENDING a second line is UNRELIABLE ... the stale
+  # entry keeps winning" while arm 2 PRESCRIBED an append, for an unscoped host list that included
+  # the stale hosts. The operator did exactly what arm 1 forbade. The assertion above, alone, would
+  # have LOCKED THAT IN as correct.
+  if [ "${_app:-1}" -eq 0 ]; then
+    ok "dns-advice: with stale hosts present, NO append command is prescribed (remove-then-add)"
+  else
+    bad "dns-advice: an append command is prescribed while $_sr host(s) are STALE" \
+        "an appended line LOSES to an earlier one for the same name — this tells the operator to do
+      the thing the stale arm forbids, and leaves two competing lines"
+  fi
+  # ...and the scoping: the stale hosts must not appear in the ABSENT arm's list.
+  if [ "${_scope:-1}" -eq 0 ]; then
+    ok "dns-advice: the absent arm names only the hosts that do not resolve (host-scoped, not global)"
+  else
+    bad "dns-advice: the absent arm's host list includes a STALE host" \
+        "it is armed from a boolean, not from the row — so it lists every ingress host"
+  fi
   # NEGATIVE: the same phrase in a NON-reachability column must not fire it. Quoted, because an
   # unquoted value with a space makes load_env's \`set -a\` source run \`DNS\` as a command and the
   # whole report renders NOTHING -- which reads as "the block is gone" for the wrong reason.
@@ -2138,7 +2172,7 @@ if command -v python3 >/dev/null 2>&1; then
   # legitimate reason in both arms and the assertion could not see the username's contribution at
   # all (it stayed GREEN against the pre-fix code). Pinning column 5 to `not probed` makes column 3
   # the ONLY possible source, so any advice at all is proof the trigger read the wrong column.
-  read -r _sr2 _nr2 _sb2 _nb2 <<< "$(CREDS_NO_PROBE=1 _dns_probe false-fire $'GITEA_ADMIN_USER=\'stale DNS\'\n')"
+  read -r _sr2 _nr2 _sb2 _nb2 _app2 _scope2 <<< "$(CREDS_NO_PROBE=1 _dns_probe false-fire $'GITEA_ADMIN_USER=\'stale DNS\'\n')"
   if [ "${_sr2:-0}" -ge 1 ]; then
     ok "dns-advice: the false-fire fixture DID render the phrase in a non-reachability column"
   else
@@ -2150,7 +2184,12 @@ if command -v python3 >/dev/null 2>&1; then
   # is EXPECTED here; what must not happen is the phrase in column 3 CONTRIBUTING to it. Measured
   # against the pre-fix code with column 5 pinned by CREDS_NO_PROBE: block=1 from the username
   # alone. Here the discriminator is that the block count does not EXCEED the co-occurrence run's.
-  if [ "${_sb2:-0}" -eq 0 ]; then
+  # ⚠️ `-n` FIRST. This is the case that IS the verdict, and it was the only one of the four whose
+  # `${VAR:-0}` default pointed at PASS: with every var empty (a totally broken fixture) the three
+  # liveness checks go `bad` and this one went `ok`. The suite still failed -- but a future edit
+  # that reorders or drops a control would convert the verdict into an unconditional pass. That is
+  # the documented `${VAR:-default}`-in-a-harness trap, in the one place it matters most.
+  if [ -n "${_sb2:-}" ] && [ "$_sb2" -eq 0 ]; then
     ok "dns-advice: with column 5 pinned to 'not probed', a column-3 marker fires NOTHING"
   else
     bad "dns-advice: advice printed ($_sb2) while column 5 CANNOT hold a marker (CREDS_NO_PROBE=1)" \
@@ -2160,6 +2199,35 @@ else
   bad "dns-advice: python3 is absent, so the ONLY behavioural control for this block cannot run" \
       "this suite already depends on python3 elsewhere; do not soften this to a skip"
 fi
+# ⚠️ A TAB IN A CELL DISARMS THE WHOLE MECHANISM, SILENTLY — and this is a STRUCTURAL assertion
+# because I could not build a behavioural one I trust. `rows` is TAB-separated and every reader
+# splits it with `IFS=$'\t' read -r c1..c5`, so a TAB inside a cell adds a field and shifts every
+# later column left: `case "$c5"` then tests the PASSWORD, not the reachability. Adding `_rest` to
+# the read does NOT save it — `_rows_capped` is rebuilt from c1..c5, so the sixth field is
+# discarded. The fix is to sanitise at the single writer, `add_row`.
+#
+# MEASURED on the PRODUCT, in a controlled run with `.env tab present: 1` verified before the
+# render: pre-fix 0 markers / 0 advice blocks, fixed 3 markers / 1 block. That is the evidence the
+# fix works.
+#
+# ⚠️ THE BEHAVIOURAL CASE IS DELIBERATELY ABSENT, and here is why rather than a silent omission:
+# three separate harnesses gave three different answers for the same tree — the suite reported 2/1
+# for BOTH pre-fix and fixed, an isolated call of this file's own `_dns_probe` reported 0/0 vs 2/1,
+# and a debug COPY of this suite reported 0/0 for both. I could not make one that RED-proves, and
+# `gates.md` is explicit that an assertion whose RED you have not demonstrated is not evidence.
+# Shipping it would have added a case that passes on the defect it names.
+# WHAT WOULD SETTLE IT: find why the three harnesses disagree (the suite exports REPO_ROOT,
+# VKS_LAB_STATE_DIR and KUBECONFIG into a sandbox; the isolated call had none of them, and its 0/0
+# may itself be a different failure). Until then this asserts the FIX IS PRESENT, not that the
+# defect is caught.
+if grep -q "add_row() { rows=.*//\$'\\\\t'/ " "${_CREDS_REPO}/scripts/creds.sh"; then
+  ok "add_row: every cell is TAB-sanitised, so the 5-field invariant holds by construction"
+else
+  bad "add_row: a cell is written to \`rows\` without stripping TABs" \
+      "a separator inside a cell shifts every later column — measured: the reachability test then
+      reads the PASSWORD, and a stale host arms NOTHING, with no marker and no error"
+fi
+
 # ⚠️ STRUCTURAL, and deliberately so: it is the ONE property no render can show. A `sudo` command
 # that rewrites /etc/hosts lines is wrong on more shapes than it is right on, and its absence is
 # invisible to any output assertion that does not know it used to be there.
@@ -2174,7 +2242,12 @@ fi
 # the pipe form printed NO MATCH and the herestring form MATCH on the identical pre-fix file.
 # In a scan gate the failure direction is a false CLEAN, which is the worst one. A herestring
 # spools to a temp file, so there is nothing to SIGPIPE.
-if grep -qE "printf.*sudo sed.*etc/hosts" <<< "$(sed 's/#.*//' "${_CREDS_REPO}/scripts/creds.sh")"; then
+# ⚠️ WHOLE-LINE COMMENTS ONLY. `sed 's/#.*//'` is not shell-aware: MEASURED, it damages 36 real
+# lines of creds.sh -- mostly `${var#prefix}` expansions, not comments -- so the gate was scanning a
+# mangled file. Dropping only whole-line comments is the repo's own documented form, it keeps the
+# fix's quoted command out of scope (it IS a whole-line comment), and it additionally catches an
+# evasion the old strip missed: a `#` earlier on the same line as a real printf.
+if grep -qE "printf.*sudo sed.*etc/hosts" <<< "$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh")"; then
   bad "dns-advice: creds.sh prescribes a \`sudo sed\` over /etc/hosts" \
       "measured: it repoints the localhost line, takes unrelated names with it, and is a silent no-op on TAB and IPv6 lines"
 else

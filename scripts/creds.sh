@@ -1326,7 +1326,15 @@ _reach_argocd() {
   esac
   _probe_tcp "$_h" "$_port" && printf 'serving' || printf 'silent'
 }
-add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\t'"${5:--}"$'\n'; }
+# ⚠️ TABS ARE STRIPPED FROM EVERY CELL, and this is load-bearing rather than tidy. `rows` is a
+# TAB-separated record and every reader splits it with `IFS=$'\t' read -r c1..c5`; a TAB inside a
+# cell adds a field and shifts every later column left. MEASURED on the DNS flags: with a TAB in the
+# Username cell the capping loop's `case "$c5"` tested the PASSWORD, so a genuinely stale host armed
+# NOTHING -- no marker in the table, no advice, no error. (Adding `_rest` to that read did not save
+# it: `_rows_capped` is rebuilt from c1..c5, so the sixth field is DISCARDED. `_rest` future-proofs
+# a row that grows a legitimate sixth COLUMN; it cannot repair a cell that contains a separator.)
+# Sanitising at the single writer makes the 5-field invariant true by construction.
+add_row() { rows="${rows}${1//$'\t'/ }"$'\t'"${2//$'\t'/ }"$'\t'"${3//$'\t'/ }"$'\t'"${4//$'\t'/ }"$'\t'"${5:--}"$'\n'; }
 
 
 # Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry) -> ArgoCD (deploy) -> apps.
@@ -1847,6 +1855,16 @@ _rows_capped=""
 # this whole change exists for silently widens again.
 _dns_stale=0
 _dns_absent=0
+_dns_stale_hosts=""
+_dns_absent_hosts=""
+# The hostname out of a table URL: strip the scheme, then anything from the first `/` or `:`.
+# A cell that is a marker (`<needs ingress>`) or `-` yields nothing, which is what we want.
+_row_host() {
+  local _u="${1#*://}"
+  _u="${_u%%/*}"; _u="${_u%%:*}"
+  case "$_u" in ''|'<'*|-) return 0 ;; esac
+  printf '%s' "$_u"
+}
 while IFS=$'\t' read -r c1 c2 c3 c4 c5 _rest; do
   [ -n "$c1" ] || continue
   # COLUMN 5 IS THE ONLY PRODUCER. `_reach_ingress` (:1206) emits these two strings; nothing else
@@ -1854,8 +1872,17 @@ while IFS=$'\t' read -r c1 c2 c3 c4 c5 _rest; do
   # containing the phrase fired a ROOT `sed` on /etc/hosts. MEASURED by an idea-round with the
   # discriminating control in place (CREDS_NO_PROBE=1 pins column 5 to `not probed`, so a fire
   # under it cannot have come from column 5): GITEA_ADMIN_USER='stale DNS' -> sed advice printed.
-  case "$c5" in *'stale DNS'*)   _dns_stale=1  ;; esac
-  case "$c5" in *'no DNS here'*) _dns_absent=1 ;; esac
+  # ⚠️ THE HOSTS, NOT JUST A BOOLEAN. An impl-round MEASURED that a boolean makes the second arm
+  # UNSCOPED: it listed every ingress host, including the STALE ones the first arm is about, and so
+  # told the operator to append a line for names whose problem is that an EARLIER line already
+  # claims them. The host is recovered from column 2 (the URL) because that is the only place the
+  # table carries it -- `_reach_ingress` takes it as an argument and returns only a verdict.
+  case "$c5" in
+    *'stale DNS'*)   _dns_stale=1;  _dns_stale_hosts="${_dns_stale_hosts}$(_row_host "$c2") " ;;
+  esac
+  case "$c5" in
+    *'no DNS here'*) _dns_absent=1; _dns_absent_hosts="${_dns_absent_hosts}$(_row_host "$c2") " ;;
+  esac
   # A MARKER (`<...>`) is a placeholder, not a value — never footnote one. Measured: capping at 44
   # sent the 53-char "hidden, re-run with SHOW_SECRETS=1" marker to the footnote, which then read
   # "full value (too long for the table): <hidden: ...>". The cap exists for real secrets that are
@@ -1953,39 +1980,60 @@ EOF
 # only the first arm printed -- so the no-DNS host got NO remediation, under a closing sentence
 # promising "every affected row should turn to serving". Realistic trigger: a newly added app host
 # absent from /etc/hosts while the existing hosts are stale.
+# ⚠️ THE TWO ARMS DIAGNOSE; THE INSTRUCTION IS PRINTED ONCE, AFTERWARDS. An impl-round MEASURED
+# that simply making both arms print (the co-occurrence fix) made them CONTRADICT each other: arm 1
+# said "APPENDING a second line is UNRELIABLE ... the stale entry keeps winning", and arm 2 then
+# PRESCRIBED an append -- for an unscoped host list that included the stale hosts arm 1 was about.
+# The operator did exactly what arm 1 forbade, the stale hosts stayed broken, and /etc/hosts ended
+# up with two competing lines and no guidance on which to delete.
+#
+# The two conditions are not in conflict once they are SEQUENCED: a stale name loses to its earlier
+# line, so REMOVE those first; after that, one appended line is correct for everything. So each arm
+# states only what is WRONG and for WHICH hosts, and the single remedy below says remove-then-add.
 if [ "${_dns_stale:-0}" = 1 ]; then
-    printf '\n  ⚠️  Some hosts above RESOLVE ON THIS MACHINE TO A DIFFERENT ADDRESS than the ingress\n'
-    printf '      that is serving them — almost always an /etc/hosts line left by a PREVIOUS lab.\n'
-    printf '      The service is NOT broken; the link is. A browser here will fail to connect.\n'
-    printf '      ⚠️ APPENDING a second line is UNRELIABLE: it helps only if the stale address is\n'
-    printf '      dead, and if that lab is still running the stale entry keeps winning.\n'
-    printf '      See what is there, then remove ONLY the *.%s names from those lines:\n' "${APP_DOMAIN:-vks.local}"
-    printf '        grep -n %s /etc/hosts\n' "${APP_DOMAIN:-vks.local}"
-    printf '      …and add the single line this report prints above. Editing needs root.\n'
-    # ⚠️ NO `sudo sed` HERE ANY MORE, AND THAT IS THE POINT. The line this replaces was
-    #     sudo sed -i "s/^[0-9.]\+\( \+.*vks\.local\)/<LB>\1/" /etc/hosts
-    # MEASURED on seven realistic /etc/hosts shapes -- DESTRUCTIVE on two and a silent NO-OP on two:
-    #   127.0.0.1 localhost gitea.vks.local           -> localhost REPOINTED at the ingress LB
-    #   10.0.0.1 myserver.example.com stale.vks.local -> an unrelated host REPOINTED
-    #   192.168.1.7<TAB>tabbed.vks.local              -> UNCHANGED (`\( \+` demands literal spaces)
-    #   fe80::1 v6.vks.local                          -> UNCHANGED (`^[0-9.]\+` cannot match v6)
-    # A single /etc/hosts line routinely carries a *.vks.local alias AND names the operator needs,
-    # so NO line-level rewrite is correct -- only removing the vks.local TOKENS is. There is no
-    # make target that does it (checked: `show-dns-records` prints A records for a real DNS server,
-    # it does not touch /etc/hosts), and RULE ZERO-B forbids naming one that does not exist. So the
-    # report diagnoses and instructs, and does not hand out a root command that is wrong on more
-    # shapes than it is right on.
-    # ⚠️ SAME DEFECT, SAME CLASS, STILL LIVE ELSEWHERE: 98-uninstall-all.sh:332 prescribes
-    # `sudo sed -i '/vks.local/d' /etc/hosts`, which DELETES the whole `127.0.0.1 localhost
-    # gitea.vks.local` line -- removing localhost. Filed, not fixed here.
+  printf '\n  ⚠️  These names RESOLVE ON THIS MACHINE TO A DIFFERENT ADDRESS than the ingress that\n'
+  printf '      is serving them — almost always an /etc/hosts line left by a PREVIOUS lab:\n'
+  printf '        %s\n' "${_dns_stale_hosts% }"
+  printf '      The service is NOT broken; the link is. A browser here will fail to connect.\n'
 fi
 if [ "${_dns_absent:-0}" = 1 ]; then
-    printf '\n  ⚠️  Some hosts above are SERVED by the ingress but do not RESOLVE on this machine,\n'
-    printf '      so a browser here gets DNS_PROBE_FINISHED_NXDOMAIN. The service is not broken —\n'
-    printf '      the name is. Add the /etc/hosts line printed above (needs root):\n'
+  printf '\n  ⚠️  These names are SERVED by the ingress but do not RESOLVE on this machine, so a\n'
+  printf '      browser here gets DNS_PROBE_FINISHED_NXDOMAIN. The service is not broken, the name is:\n'
+  printf '        %s\n' "${_dns_absent_hosts% }"
+fi
+if [ "${_dns_stale:-0}" = 1 ] || [ "${_dns_absent:-0}" = 1 ]; then
+  _dns_all="${_dns_stale_hosts}${_dns_absent_hosts}"
+  # "in this order" only when there IS an order: the absent-only path is one step.
+  if [ "${_dns_stale:-0}" = 1 ]; then
+    printf '\n      To fix, in this order (editing /etc/hosts needs root):\n'
+  else
+    printf '\n      To fix (editing /etc/hosts needs root):\n'
+  fi
+  if [ "${_dns_stale:-0}" = 1 ]; then
+    # ⚠️ GREPS THE AFFECTED HOSTS, NOT ${APP_DOMAIN}. MEASURED: GITEA_HOST, TEKTON_DASHBOARD_HOST
+    # and HEADLAMP_HOST are INDEPENDENT LITERALS in .env.example -- :884 records that deriving them
+    # from APP_DOMAIN was tried and REVERTED -- so only app_host() carries the domain. With a
+    # TEKTON_DASHBOARD_HOST outside it, `grep vks.local` does NOT match the broken line and sends
+    # the operator to look for the wrong string.
+    # ⚠️ DOTS ESCAPED. This is a REGEX we print for the operator to paste; an unescaped `.`
+    # matches any character, so `tekton.vks.local` would also match `tektonXvksYlocal`. Harmless
+    # for a read-only grep and wrong all the same -- a printed pattern should mean what it says.
+    _dns_alt="$(printf '%s' "${_dns_stale_hosts% }" | sed 's/\./\\./g' | tr ' ' '|')"
+    printf '        1. see which lines claim them:  grep -nE '"'"'%s'"'"' /etc/hosts\n' "$_dns_alt"
+    printf '        2. remove ONLY those names from those lines. A line may also carry names you\n'
+    printf '           need (localhost, a work host) — deleting or repointing the whole LINE is\n'
+    printf '           wrong, and no make target does this, so it is a hand edit.\n'
+    printf '        3. then add ONE line:\n'
+    printf '             %s  %s\n' "${INGRESS_LB_IP:-<ingress-lb-ip>}" "${_dns_all% }"
+    printf '      Step 2 is not optional: an appended line LOSES to an earlier one for the same\n'
+    printf '      name, so adding without removing leaves the stale entry winning.\n'
+  else
+    # Nothing stale, so nothing claims these names yet and appending is safe and complete.
     printf '        sudo sh -c '"'"'printf "%%s  %%s\\n" "%s" "%s" >> /etc/hosts'"'"'\n' \
-      "${INGRESS_LB_IP:-<ingress-lb-ip>}" "$(ingress_infra_hosts)$(app_names | while read -r _a; do if [ -n "$_a" ]; then printf '%s ' "$(app_host "$_a")"; fi; done)"
-    printf '      Or create those names as A records pointing at %s in your DNS: make show-dns-records\n' "${INGRESS_LB_IP:-<ingress-lb-ip>}"
+      "${INGRESS_LB_IP:-<ingress-lb-ip>}" "${_dns_all% }"
+  fi
+  printf '      Or create those names as A records pointing at %s in your DNS: make show-dns-records\n' \
+    "${INGRESS_LB_IP:-<ingress-lb-ip>}"
 fi
 
 # The values too long to sit in a cell, printed where width does not matter. One per line, the
@@ -2046,10 +2094,21 @@ fi
 # read as one. The reason to fix it is the CLASS: `lib`-adjacent code already learned this twice
 # (the vCenter row test now keys its three source vars; the SSH note is flag-keyed and its
 # comment states the rule outright -- "Display text is not a control channel").
-# ⚠️ THE SIBLING IS STILL OPEN: a `case "$rows" in *'stale DNS'*)` a few lines above has the
-# identical unscoped shape and drives a ROOT edit to /etc/hosts. Its producer is called inline
-# inside five `add_row` argument lists, so fixing it is a capture-then-flag restructure, not a
-# one-liner -- filed, and deliberately not folded in here.
+# ⚠️ THE SIBLING IS CLOSED, and this comment said three things that are now FALSE -- an impl-round
+# caught all three. It claimed the sibling "IS STILL OPEN" (it is flag-keyed from column 5 now); it
+# pointed at "a `case \"$rows\"` a few lines above" when the ONLY remaining occurrence of that
+# string in this file WAS this comment; and it called the fix "a capture-then-flag restructure, not
+# a one-liner" when an idea-round refuted the restructure as redundant -- the flags are armed in the
+# capping loop that already existed. A future session reading a control's rationale would have
+# re-fixed a closed defect, or built the restructure this file elsewhere calls refuted.
+#
+# ⚠️ THE PRINTED-ROOT-/etc/hosts-MUTATION CLASS IS 4 SITES, NOT 2, and two of the survivors are
+# SILENT rather than destructive:
+#     creds.sh stale-DNS advice   `sudo sed -i s///`   -> FIXED (no root rewrite is printed)
+#     creds.sh no-DNS advice      `sudo sh -c printf >>` -> kept, and now printed ONLY when nothing
+#                                    is stale, because an appended line loses to an earlier one
+#     70-configure-argocd.sh:449  `sudo tee -a`        -> non-idempotent, OPEN, filed
+#     98-uninstall-all.sh:332     `sudo sed -i /d`     -> deletes whole lines, OPEN, filed as B727
 if [ "${_pw_note_needed:-0}" = 1 ]; then
   if [ "${_sink_refused:-0}" = 1 ]; then
     printf '\n  note: those passwords are held by an overlay this report REFUSED — it belongs to a\n'
