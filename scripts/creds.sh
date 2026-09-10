@@ -159,6 +159,17 @@ export CREDS_NO_PROBE="$_no_probe_snapshot"   # child scripts (argocd-password.s
 # output -- and the mask message names the accepted value verbatim, so it is self-correcting.
 if [ -t 1 ] || [ "$_show_secrets_snapshot" = "1" ]; then _reveal=1; else _reveal=0; fi
 
+# ANSI, GATED ON A REAL TERMINAL — and deliberately NOT on $_reveal, which SHOW_SECRETS=1 can force
+# on for a pipe. Escape codes in a captured report are corruption: walk-doc.sh runs every statement
+# through a PIPE (creds.sh:147), the walk artifacts are read by humans and greps, and this repo's
+# own test suite matches literal substrings of this banner. Piped => empty strings => byte-identical
+# output to today. NO_COLOR is honoured (no-color.org); TERM=dumb too.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  _RED=$(printf '\033[31m'); _BOLD=$(printf '\033[1m'); _RST=$(printf '\033[0m')
+else
+  _RED=""; _BOLD=""; _RST=""
+fi
+
 # _mask <secret> — apply ONLY to values that are REAL secrets.
 # ⚠️ MASK THE VALUES, NOT THE COLUMN (B182 F4). Four things that appear in the Password column are
 # NOT secrets and MUST stay legible: the `<no login; …>` notes, the `_unset_pw` placeholders, the
@@ -779,7 +790,11 @@ if [ "${_SUP_DEAD:-0}" = 1 ]; then
   # F5: the old headline said "every <not read> below needs it" and MEASURED to ZERO referents in
   # a reachable state, while nine unrelated `<not read — …>` variants compete for the reader's eye.
   # State the fact, do not send them hunting for a marker.
-  printf '\n  \u26a0\ufe0f  Supervisor token EXPIRED %s — values that depend on it could not be read.\n' "${_SUP_DEAD_AT:-?}"
+  # ⚠️ THE CODES WRAP THE WHOLE LINE, never a fragment: test-creds-show matches the literal
+  # substring 'Supervisor token EXPIRED', and a code inserted mid-phrase would break that match
+  # on a tty while passing when piped -- green in CI, broken for the human.
+  printf '\n  %s\u26a0\ufe0f  Supervisor token EXPIRED %s — values that depend on it could not be read.%s\n' \
+    "${_BOLD}${_RED}" "${_SUP_DEAD_AT:-?}" "${_RST}"
   # BEFORE the command, never after: it is the reason NOT to run it yet.
   if [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; then
     printf '     FIRST: the recorded ingress did not answer either — check the lab is UP before spending\n'
