@@ -72,7 +72,10 @@
 # Proven behaviourally, both binaries against the real Harbor: v1.24.0 pushes, v1.25.18-as-shipped
 # FAILS, v1.25.18 rebuilt with v0.21.9 PUSHES.
 #
-# ✅ RESOLVED 2026-08-27 by BUMPING THE FORK to v1.25.19. Read this before touching the pins.
+# ✅ RESOLVED 2026-08-27 by BUMPING THE FORK to v1.25.19, and BEHAVIOURALLY PROVEN 2026-09-10 —
+# 12/12 `-build` TaskRuns True across all six apps in a full `make e2e-kind`. Read this before
+# touching the pins, and note that a REFUTED paragraph further down this file still argues the
+# opposite; it is marked SUPERSEDED at its head.
 #
 # THE DEADLOCK WAS NEVER A ggcr VERSION PROBLEM. It was kaniko's own bug: GetFSFromLayers had
 # `defer r.Close()` INSIDE `for i, l := range layers`, and Go's defer is FUNCTION-scoped, so every
@@ -137,6 +140,24 @@
 # There is no version that has one without the other. Bumping further does not help; v0.22.0 still
 # has the limiter.
 #
+# ⚠️ SUPERSEDED 2026-09-10 — MEASURED GREEN. DO NOT ACT ON THE PARAGRAPH BELOW.
+# The pin at the bottom of this file BUILDS AND PUSHES. Measured end-to-end by a full `make e2e-kind`
+# (0 errors, 0 make errors): TWELVE `-build` TaskRuns across ALL SIX apps completed True, and the
+# build step's image was verbatim `172.18.0.3/cicd/kaniko-project/executor:v1.25.19-gcr0.21.9-debug`
+# — read off the running TaskRuns, not inferred from the pipeline name.
+#
+# THIS SENTENCE IS THE ONE CLAUDE.md's RULE ZERO-P RECORDS AS HAVING COST A DAY, and it survived
+# UNMARKED for two weeks while a `✅ RESOLVED` line sat SIXTY-FIVE LINES ABOVE it. A reader could
+# quote either half, which is exactly why B498 kept re-opening. It is kept, not deleted: deleting the
+# refuted text is how the next session rebuilds the refuted design (see the -orig/ARCHIVAL rule in
+# BACKLOG.md). It is now UNQUOTABLE without this header.
+#
+# ⚠️ The paragraph below is ALSO the axis error RULE ZERO-P names: "bumping the fork does not help —
+# v1.25.19 still pins v0.21.5" was TRUE about the ggcr pin and BLIND to the fact that v1.25.19
+# carried the deadlock fix. A version bump moves TWO independent axes — the dependency pins AND the
+# project's own code. Naming only the axis you checked is what makes a note read as covering both.
+#
+# THE ORIGINAL, REFUTED TEXT FOLLOWS, kept so the reasoning is not lost:
 # THE PIN BELOW IS THEREFORE NOT KNOWN-GOOD. It is the last thing tried, and it FAILS. Do not read
 # it as a working configuration. The route under review is to stop feeding ggcr an IP LITERAL at
 # all: transport/bearer.go guards on `net.ParseIP(host) != nil` and says in as many words that
