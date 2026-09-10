@@ -9209,3 +9209,133 @@ whichever design ships would otherwise ship blind.
 ⚠️ Also flagged: a **timeout reparenting** (the inline copy honours `CURL_MAX_TIME_SECONDS`, the
 library `HARBOR_PROBE_TIMEOUT_SECONDS`; both default to 10, so it is invisible except to the operator
 on a slow lab who set the documented one), and **B710/B715 may be the same defect filed twice**.
+
+### ⚠️ 2026-09-10 — the decisive case above is now MEASURED, the mechanism is named, and TWO LIVE GATES ALREADY HAVE THE DEFECT
+
+A second idea round (dispatched because the 2026-09-09 handoff still listed the deletion as "next
+unit #2", **contradicting this very row** — see the process note at the end) re-derived the refutation
+and added two things this row did not have.
+
+**1. THE MECHANISM, and it is one line.** `lib/harbor.sh:225-229` `_harbor_ca_args` has exactly three
+arms, and the third is `else return 1` — no CA file and `HARBOR_INSECURE != 1` ⇒ **both** library
+entry points treat it as "cannot verify" and SKIP the auth probe. `02-env.sh:498-502` instead falls
+back to curl's **default system trust** and says so in a comment; `docs/scenario-2.md:790-794`
+documents exactly that as the tenant configuration (*"leave it empty only if Harbor's cert is
+publicly trusted"*).
+
+**MEASURED live against the lab's Harbor, wrong password, WITH A POSITIVE CONTROL:**
+
+    NO CA    verdict=unchecked:no CA yet (Step 8 fetches it)…   harbor_auth_report rc=0
+    WITH CA  verdict=rejected                                   harbor_auth_report rc=1   <- control fires
+
+The control discriminates, so the `unchecked` is real and not an instrument failure. Note the verdict
+string hands a **Scenario-1 remedy** (*"Step 8 fetches it"*) to a Scenario-2 tenant.
+
+⚠️ **Severity splits by Harbor's cert, and only one branch is observable here.** On a *self-signed*
+Harbor (this lab, KinD) the no-CA path is `http_code=000` — the TLS handshake fails — so nothing
+*accepts* a wrong credential. The silent accept needs a **publicly-trusted** Harbor, which is the
+documented tenant default and which **cannot be observed on this box**. Graded `lab-verified` for the
+library divergence, `inferred` for the operator-visible CRITICAL.
+
+**2. TWO LIVE GATES ALREADY USE THE REPORTER AS A VERDICT** — the thing `lib/harbor.sh:233` forbids
+in writing, shipped, today, independent of any deletion:
+
+    scripts/24-lab-preflight.sh:207     harbor_auth_report || problems=$((problems + 1))      # make preflight
+    scripts/09-harbor-auth-check.sh:43  if harbor_auth_report; then …"no rejection to report" # make harbor-auth-check
+
+Both return **rc=0** on a wrong password with no CA, by the measurement above. `lib/tls.sh:517`
+already records the mechanism verbatim. Meanwhile `22-harbor-robot.sh:70` and
+`28-harbor-admin-password.sh:80` use `harbor_auth_verdict` correctly — the right and wrong patterns
+sit side by side in one tree.
+
+**Order is load-bearing:** fix `_harbor_ca_args` FIRST (explicit arm for https + no CA + not insecure
+⇒ no extra args, i.e. system trust) and RED-prove that `noca + 401` is non-zero in **both**
+`harbor_auth_report` and `harbor_auth_verdict`, before switching any caller. That change alters
+behaviour for the two gates above, which is **UNMEASURED** — at scenario-1 Step 4 there is
+legitimately no CA yet.
+
+⚠️ **A baseline attempt at that measurement was VACUOUS and is not evidence.** Running
+`env HARBOR_CA_FILE= make harbor-auth-check` produced output byte-identical to the unmodified run,
+because `load_env` re-sources `.env` (which sets `HARBOR_CA_FILE`) and clobbers the override — the
+`.env` clobber class. Two arms, identical output, is the tell. The valid measurement is the
+subshell form above, which bypasses `load_env`.
+
+**PROCESS NOTE, worth more than the finding:** this row said REFUTED and the handoff said "do it".
+A round was spent re-deriving a filed refutation. A handoff's task list is a CLAIM about the backlog
+and must be checked against it, not just against the code.
+
+## 🔴 B722 — the REFUSED state arm still misinforms: its only remedy is a no-op LOOP, its cause is wrong, and its citation points at another stream
+
+Shipped in #1236: the refused arm no longer prescribes `make install-ingress`. **Four residuals from
+the same two rounds are NOT fixed**, all in `scripts/creds.sh`, all on the path a tenant hits when a
+state overlay belongs to another cluster.
+
+**1. THE LOOP (HIGH).** Even a *successful* `make install-ingress` leaves the report **byte-identical**.
+`state_set` (`lib/state.sh:57-60`) has **no mismatch guard** — contrast `state_unset` (`:74-93`), which
+explicitly refuses when `_VKS_STATE_SOURCED=0`. So the installer writes the correct lab IP into a sink
+whose `VKS_STATE_SERVER` still names the other cluster, and `state_check` refuses it again next run.
+MEASURED: sink rewritten to `INGRESS_LB_IP=192.168.101.134` with the stamp intact → `make creds` still
+prints `<needs ingress>` ×9. Run it, it "succeeds", output unchanged, run it again.
+
+**2. A CROSS-STREAM CITATION (HIGH).** `creds.sh:870` (stdout) says *"The ERROR block above names which
+cluster it belongs to"*. `_log` writes to **stderr** (`lib/os.sh:182-188`). MEASURED with split streams:
+**6** `level=ERROR` lines on stderr, **0** on stdout. So on every piped/non-tty run — including the walk
+harness, which `creds.sh:147` records as running each statement through a PIPE — the citation resolves
+to nothing. `creds.sh:1837` already legislates against exactly this: *"a marker that says 'see note'
+with no note is a citation that resolves to nothing — worse than no marker at all, because it reads as
+sourced."* Fix: print `stamped-for` / `you-selected` INTO Context on stdout (`$_stamp`, `$_live_srv` are
+already in scope) and drop the cross-stream reference.
+
+**3. THE DOCUMENTED LEVER IS UNWIRED (HIGH).** MEASURED: putting `INGRESS_LB_IP` in the environment
+FULLY restores every URL under a refusal. But `.env.example:1022-1027` forbids using it as an input
+(*"can never be trusted as an input"*) and directs the operator to **`INGRESS_LB_IP_OVERRIDE`** — which
+`creds.sh` references **ZERO** times (only `47-attach-istio.sh` reads it). So the one supported escape
+from this state is invisible to the report that describes the state.
+
+**4. THE CAUSE IS WRONG, AND THE RIGHT TEXT IS ALREADY IN-TREE (HIGH).** `creds.sh:1814` says *"no
+ingress address is configured here"*. `98-verify-ingress.sh:56-60` lists **three** causes for the
+identical missing variable, cause 3 being *"the state overlay was REFUSED (stamped for a different
+cluster) … The value exists on disk and is not in scope."* Port it, gated on `$_sink_refused`.
+
+**Done when:** a refused report names the real cause, cites nothing on another stream, names
+`INGRESS_LB_IP_OVERRIDE`, and prescribes no command that cannot change it.
+
+## 🔴 B723 — the archive is a WRITE-ONLY GRAVEYARD: 8 sinks hold 0600 passwords and nothing reads or prunes them
+
+`state_archive` is faithful — `mv`, never `rm` (and #1236 closed the one path that still `rm`'d). The
+missing half is **restore**. MEASURED on this box: **8** `.env.state.stale-*` files, oldest
+`2026-07-13`, each mode 0600, **0 of 8 carrying a stamp** — they are archived *because* they are
+unstamped, so nothing records which cluster they describe. `grep -rn "stale-" scripts/ Makefile docs/`
+→ **no product consumer**; there is no `make state-restore`, and nothing prunes them.
+
+Recovery is thinner than it looks — `make env-populate` (`02-env.sh:155-167`) discovers only
+`HARBOR_URL` and `ARGOCD_SERVER`:
+
+| key | recovery today |
+|---|---|
+| `HARBOR_URL` / `ARGOCD_SERVER` | `make env-populate` |
+| `HARBOR_CA_FILE` | `make fetch-harbor-ca` (tenant-safe) |
+| `ARGOCD_LB_IP` | `make argocd-address` — **SUPERVISOR ONLY** |
+| **`INGRESS_LB_IP`** / **`INGRESS_CONTROLLER`** | **NONE** — sole writer is the installer (`46-install-istio.sh:295,298`) |
+| generated passwords | **not derivable**; the archive is the only copy |
+
+**Done when:** one read-only command lists each archive with its stamped server/context/timestamp, and
+an explicit selection swaps one back (archiving the current sink first, so the swap is reversible).
+⚠️ Reporter first, deleter never-first (B704/B707 discipline). ⚠️ Do NOT solve this by splitting the
+sink per cluster — refuted: it makes B570 (open) materially worse, a four-way precedence no test
+asserts, and it re-derives `state_claim_kind`, which already exists.
+
+## 🟡 B724 — two offline tests are red on `main`, and one is green in CI and red on every box that has operator state
+
+Found while gating #1236; **neither is caused by that diff** — proven in a throwaway worktree of
+`origin/main` rather than asserted.
+
+- **`test-gate-vacuity.sh` → rc=1 on clean `origin/main`**, unconditionally.
+- **`test-workload-images.sh` → rc=0 on a pristine checkout, rc=1 the moment the gitignored
+  `.env`/`.env.state` are present.** MEASURED by copying them into the clean worktree: identical
+  failure, `empty-registry: ci/p pulled h.local/a/b:1`. The test and its subject are byte-identical to
+  `main`. So it is **GREEN IN CI AND RED ON EVERY DEVELOPER/OPERATOR BOX** — the hermeticity class,
+  inverted, and the direction that trains people to ignore `make test-scripts`.
+
+**Done when:** both are green on a clean `main` **and** on a box carrying `.env`/`.env.state`, or each
+is documented in-file as an accepted environment dependency with the measurement above.
