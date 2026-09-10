@@ -1587,12 +1587,16 @@ _sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-or-empty> [
 # are now a BANNER at the very top, printed only when something is wrong, and every affected cell
 # reads exactly `<not read>` -- so no per-row string can serve as a marker any more.
 #
+# ⚠️ THE MARKER IS THE *PROPERTY*, NOT THE SENTENCE. It moved once already: the banner now
+# presents the renew and the ArgoCD follow-up as TWO NUMBERED DEPENDENT STEPS, because the flat
+# list read as alternatives and an operator ran step 2 first and got Error 3. Any future re-word
+# must keep a substring emitted ONLY when `_argo_pw_expired=1` -- that flag is the observable.
 # creds/* EXPIRED therefore pins the BANNER. The site-2 row cannot: the banner fires for site 1 too,
 # and this row exists to reach the `:496` ArgoCD dispatch site. Its marker is the banner's
 # ArgoCD FOLLOW-UP line, which is emitted only when `_argo_pw_expired=1` -- set by that site's
 # EXPIRED arm and nowhere else. That flag IS the observable; the cell text no longer is.
 _sso_rows='creds/site1|creds||Supervisor token EXPIRED|has NOT expired|Expiry is unreadable
-creds/site2-sink|creds|VKS_STATE_KIND=1|then, for the ArgoCD row: make argocd-password|not read — the Supervisor token is still valid|run: make argocd-password
+creds/site2-sink|creds|VKS_STATE_KIND=1|2. THEN: make argocd-password|not read — the Supervisor token is still valid|run: make argocd-password
 argocd-password|argocd-password||EXPIRED at|has NOT expired|no readable expiry'
 
 # ⚠️ ASSERT THE PROPERTY, NOT AN EXACT COUNT. EXPIRED must name the command AT LEAST once (measured:

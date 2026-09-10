@@ -283,8 +283,10 @@ if command -v kubectl >/dev/null 2>&1; then
   if [ "$_wait" -gt 0 ] && [ -z "${ARGOCD_ADMIN_PASSWORD:-}" ] && ! _should_wait "$_ap_err"; then
     # classify_kube_failure WORDS this; it never DECIDES it (no NotFound arm — see _should_wait).
     _ap_cls="$(classify_kube_failure "$_ap_err" 2>/dev/null || true)"
-    log_warn "not waiting: the read did not fail with a NotFound naming argocd-initial-admin-secret,"
-    log_warn "so the secret is not merely reconciling (classified: ${_ap_cls:-UNKNOWN})."
+    # ONE sentence, in the reader's vocabulary. This was two lines of the classifier explaining
+    # its own reasoning ("the read did not fail with a NotFound naming …", "classified: X") --
+    # our words, not theirs. What they need is that waiting will not help and why.
+    log_warn "not waiting: the secret is not still being created — the cluster rejected our credential."
     # ⚠️ THE SSO COMMAND APPEARS ON EXACTLY ONE ARM BELOW: EXPIRED, where the token's own `exp`
     # makes the cause a FACT. Everywhere else there is deliberately NO command — the obvious remedy
     # performs a vSphere SSO bind and vCenter locks out PERMANENTLY after 3 failures, so it must
@@ -298,7 +300,11 @@ if command -v kubectl >/dev/null 2>&1; then
         # ONE sentence, from lib/os.sh — NOT a hand-written copy. A round measured the two copies
         # DISAGREEING on the undecidable arm, and "locks out PERMANENTLY" missing from this file's
         # arms entirely: the clause that is the whole REASON the command is withheld.
-        EXPIRED*) log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — $(supervisor_renew_how)" ;;
+        # ⚠️ DELIBERATELY SILENT. The ERROR block below now LEADS with this expiry and gives the two
+        # ordered steps; warning here as well printed the same fact twice, three lines apart. The
+        # other two arms keep their sentence -- they do NOT reach that ERROR arm, so theirs is the
+        # only telling.
+        EXPIRED*) : ;;
         VALID*)   log_warn "the cluster REJECTED this kubeconfig although its token has NOT expired (valid until ${_ap_exp#VALID }) — that is a ROTATED or REVOKED credential, not an expiry. $(supervisor_renew_how --ask-only)" ;;
         *)        log_warn "the cluster REJECTED this kubeconfig and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this may be a ROTATED credential rather than an expired one. $(supervisor_renew_how --no-command)" ;;
       esac
@@ -341,10 +347,28 @@ if [ "${_waited:-0}" = 1 ]; then
   log_error "      kubectl get argocd -A        # on VKS it is often argocd-instance-N"
   exit 4
 fi
-log_error "No ArgoCD 'admin' password is available locally for this context."
-log_error "  Looked for argocd-initial-admin-secret in ns/${ARGOCD_NAMESPACE} via: $(_candidates | tr '\n' ' ')"
-log_error "  • real VKS: the initial secret is created by the ArgoCD instance — 'make argocd-password'"
-log_error "    waits for it. If it is genuinely gone, someone has rotated the password."
+# ⚠️ LEAD WITH THE CAUSE WHEN WE KNOW IT. The expiry is already measured at :296 (`_ap_exp`) and was
+# reported as WARN #4, four lines above an ERROR whose headline said only "not available locally" --
+# so the eye landed on the generic line and the operator re-ran the same command. MEASURED
+# 2026-09-10: `make creds` sent them here, this exited 3, and nothing on the ERROR lines named the
+# token. ArgoCD is a Supervisor Service, so this row genuinely cannot be read without that token.
+#
+# The old bullet also cited THIS COMMAND back at the person running it ("'make argocd-password'
+# waits for it") -- a citation that resolves to the thing you just ran.
+case "${_ap_exp:-}" in
+  EXPIRED*)
+    log_error "Cannot read ArgoCD's password: the Supervisor token EXPIRED at ${_ap_exp#EXPIRED }."
+    log_error "  ArgoCD is a Supervisor Service, so reading it needs that token. Two steps, in order:"
+    log_error "    1. $(supervisor_renew_how)"
+    log_error "    2. THEN re-run: make argocd-password"
+    ;;
+  *)
+    log_error "No ArgoCD 'admin' password is available locally for this context."
+    log_error "  Looked for argocd-initial-admin-secret in ns/${ARGOCD_NAMESPACE} via: $(_candidates | tr '\n' ' ')"
+    log_error "  • real VKS: the secret is created by the ArgoCD instance. If it is genuinely gone,"
+    log_error "    someone has rotated the password."
+    ;;
+esac
 # ⚠️ Same rig-scoping as the arm above: this line prescribes a LOCAL-INFRA installer, so it prints only
 # when the stamp proves we are on the rig. Unguarded it let an operator ARM the conflict arm by hand.
 if [ "${VKS_STATE_KIND:-0}" = 1 ]; then

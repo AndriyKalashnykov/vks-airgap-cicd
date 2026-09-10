@@ -785,8 +785,17 @@ if [ "${_SUP_DEAD:-0}" = 1 ]; then
     printf '     FIRST: the recorded ingress did not answer either — check the lab is UP before spending\n'
     printf '     an SSO attempt. Three failures lock the vCenter account PERMANENTLY.\n'
   fi
-  printf '     %s\n' "$(_renew_how)"
-  [ "${_argo_pw_expired:-0}" = 1 ] && printf '     then, for the ArgoCD row: make argocd-password\n'
+  # ⚠️ TWO DEPENDENT STEPS, NUMBERED — NOT A LIST OF ALTERNATIVES. `make argocd-password` reads the
+  # SAME Supervisor token this banner has just declared dead, so offering it alongside the renew
+  # command read as "either of these". MEASURED 2026-09-10: the operator ran it and got
+  # `Error 3` plus four WARN lines -- sent there BY this report. The dependency is now in the text,
+  # and step 2 says what it needs and that it fails without it.
+  if [ "${_argo_pw_expired:-0}" = 1 ]; then
+    printf '     1. %s\n' "$(_renew_how)"
+    printf '     2. THEN: make argocd-password   (reads the token from step 1 — it FAILS without it)\n'
+  else
+    printf '     %s\n' "$(_renew_how)"
+  fi
 fi
 printf '\n  Context\n'
 case "$_prov" in
