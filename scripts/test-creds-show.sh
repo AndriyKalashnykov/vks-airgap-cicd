@@ -2029,6 +2029,124 @@ else
   ok "...and it is ABSENT with no ingress, so its presence is a real discriminator"
 fi
 
+# ══ THE /etc/hosts ADVICE BLOCK ═══════════════════════════════════════════════════════════════════
+# Two arms -- `stale DNS` (the name resolves, to the WRONG address) and `no DNS here` (it does not
+# resolve at all) -- each printing ROOT-LEVEL remediation. Three defects, all MEASURED, none pinned:
+#
+#   1. THE TRIGGER READ EVERY COLUMN. `case "$rows" in *'stale DNS'*)` matched the whole blob that
+#      `add_row` builds from all five columns, so a USERNAME or a URL containing the phrase fired a
+#      root command about DNS. Now keyed on flags armed from COLUMN 5 ONLY.
+#   2. THE TWO ARMS CO-OCCUR AND `case` IS FIRST-MATCH-ONLY. Measured: 2 rows `stale DNS` + 1 row
+#      `no DNS here` printed ONLY the stale block, under a sentence promising "every affected row
+#      should turn to serving" -- false for the row that got no advice. Now two independent `if`s.
+#   3. THE PRESCRIBED `sudo sed` DAMAGED UNRELATED ENTRIES. Measured on 7 realistic /etc/hosts
+#      shapes: `127.0.0.1 localhost gitea.vks.local` -> localhost REPOINTED at the ingress LB;
+#      `10.0.0.1 myserver.example.com stale.vks.local` -> an unrelated host repointed; TAB-separated
+#      and IPv6 lines silently UNCHANGED. A line routinely carries a vks.local alias AND names the
+#      operator needs, so no line-level rewrite is correct.
+#
+# ⚠️ THIS DRIVES A REAL PROBE, NOT A RENDER-ONLY FIXTURE. `_reach_ingress` only reaches its DNS
+# comparison when the TCP probe SUCCEEDS, so a loopback listener on an ephemeral port + a stub
+# `getent` on PATH is the only way to make column 5 genuinely carry these markers. Both are
+# in-house practice here (test-creds-reach-ingress.sh does the same).
+_dns_probe() {  # <label> <extra .env lines> ; echoes: <stale-rows> <nodns-rows> <stale-block> <nodns-block>
+  local t p lp out
+  t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+  p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+  python3 -m http.server "$p" --bind 127.0.0.1 >/dev/null 2>&1 &
+  lp=$!
+  sleep 1
+  # THE STUB IS THE FIXTURE: gitea fails to resolve (`no DNS here`); every other host resolves to an
+  # address that is NOT the ingress LB (`stale DNS`). That yields BOTH conditions in ONE report,
+  # which is exactly the state defect 2 could not print.
+  {
+    printf '#!/bin/sh\n'
+    printf 'case "$2" in gitea.vks.local) exit 2 ;; esac\n'
+    printf 'printf "10.9.9.9 %%s\\n" "$2"\n'
+  } > "$t/bin/getent"
+  chmod +x "$t/bin/getent"
+  printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=10.0.0.1\nHARBOR_PASSWORD=x\n%s' \
+    "$p" "${2:-}" > "$t/.env"
+  # CREDS_NO_PROBE is passed THROUGH (not defaulted) so a caller can pin column 5 to `not probed`
+  # and turn this helper into the discriminating control for the false-fire case.
+  out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+            CREDS_NO_PROBE="${CREDS_NO_PROBE:-0}" CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+  kill "$lp" 2>/dev/null || true
+  wait "$lp" 2>/dev/null || true
+  printf '%s %s %s %s' \
+    "$(printf '%s' "$out" | grep -c 'stale DNS' || true)" \
+    "$(printf '%s' "$out" | grep -c 'no DNS here' || true)" \
+    "$(printf '%s' "$out" | grep -c 'RESOLVE ON THIS MACHINE' || true)" \
+    "$(printf '%s' "$out" | grep -c 'do not RESOLVE on this machine' || true)"
+  rm -rf "$t"
+}
+if command -v python3 >/dev/null 2>&1; then
+  read -r _sr _nr _sb _nb <<< "$(_dns_probe co-occur)"
+  # THE CONTROL FIRST. If the fixture did not put BOTH markers in the table, the two assertions
+  # below prove nothing -- an absent block would be indistinguishable from an absent condition.
+  if [ "${_sr:-0}" -ge 1 ] && [ "${_nr:-0}" -ge 1 ]; then
+    ok "dns-advice: the fixture put BOTH conditions in the table (stale=$_sr, no-DNS=$_nr) — the case is live"
+  else
+    bad "dns-advice: the fixture rendered stale=$_sr no-DNS=$_nr — it cannot discriminate anything" \
+        "the loopback listener or the getent stub did not take effect; fix the fixture, not the product"
+  fi
+  if [ "${_sb:-0}" -ge 1 ] && [ "${_nb:-0}" -ge 1 ]; then
+    ok "dns-advice: BOTH arms printed — a first-match-only \`case\` printed only one (measured)"
+  else
+    bad "dns-advice: stale-block=$_sb no-DNS-block=$_nb with BOTH conditions present" \
+        "the arms must be independent \`if\`s; a \`case\` leaves the second host with NO remediation"
+  fi
+  # NEGATIVE: the same phrase in a NON-reachability column must not fire it. Quoted, because an
+  # unquoted value with a space makes load_env's \`set -a\` source run \`DNS\` as a command and the
+  # whole report renders NOTHING -- which reads as "the block is gone" for the wrong reason.
+  # ⚠️ `CREDS_NO_PROBE=1` IS THE CONTROL, and without it this case is BLIND. My first version
+  # reused the co-occurrence fixture, whose hosts are GENUINELY stale -- so the block fired for a
+  # legitimate reason in both arms and the assertion could not see the username's contribution at
+  # all (it stayed GREEN against the pre-fix code). Pinning column 5 to `not probed` makes column 3
+  # the ONLY possible source, so any advice at all is proof the trigger read the wrong column.
+  read -r _sr2 _nr2 _sb2 _nb2 <<< "$(CREDS_NO_PROBE=1 _dns_probe false-fire $'GITEA_ADMIN_USER=\'stale DNS\'\n')"
+  if [ "${_sr2:-0}" -ge 1 ]; then
+    ok "dns-advice: the false-fire fixture DID render the phrase in a non-reachability column"
+  else
+    bad "dns-advice: the false-fire fixture rendered no marker at all — it cannot discriminate"
+  fi
+  # ⚠️ THE VERDICT. My first version of this case stopped at the liveness check above -- it proved
+  # the fixture worked and asserted NOTHING about the product, which is the shape of a case that
+  # can never fail. The false-fire fixture ALSO holds two genuinely stale hosts, so the stale block
+  # is EXPECTED here; what must not happen is the phrase in column 3 CONTRIBUTING to it. Measured
+  # against the pre-fix code with column 5 pinned by CREDS_NO_PROBE: block=1 from the username
+  # alone. Here the discriminator is that the block count does not EXCEED the co-occurrence run's.
+  if [ "${_sb2:-0}" -eq 0 ]; then
+    ok "dns-advice: with column 5 pinned to 'not probed', a column-3 marker fires NOTHING"
+  else
+    bad "dns-advice: advice printed ($_sb2) while column 5 CANNOT hold a marker (CREDS_NO_PROBE=1)" \
+        "the trigger is reading a column other than 5 — a USERNAME fired a ROOT command about DNS"
+  fi
+else
+  bad "dns-advice: python3 is absent, so the ONLY behavioural control for this block cannot run" \
+      "this suite already depends on python3 elsewhere; do not soften this to a skip"
+fi
+# ⚠️ STRUCTURAL, and deliberately so: it is the ONE property no render can show. A `sudo` command
+# that rewrites /etc/hosts lines is wrong on more shapes than it is right on, and its absence is
+# invisible to any output assertion that does not know it used to be there.
+# ⚠️ COMMENTS STRIPPED FIRST, AND THIS IS NOT OPTIONAL. The fix's own comment QUOTES the command it
+# removed -- deliberately, so nobody reinstates it -- and a naive grep matched that, reporting the
+# defect as still present on a tree that had just removed it. A gate that reads the file it guards
+# reads its own explanation too; keying on a `printf` line is what makes it measure the OUTPUT.
+# ⚠️ A HERESTRING, NOT A PIPE, AND THAT IS THE WHOLE BUG THIS LINE ALREADY HAD. Written as
+# `sed … | grep -qE …` under this file's `set -uo pipefail`, `grep -q` exits at the FIRST match,
+# `sed` takes SIGPIPE (141), pipefail makes the PIPELINE non-zero, and the `if` takes the FALSE
+# branch -- so the gate reported "no sudo sed is prescribed" over a tree that HAD one. MEASURED:
+# the pipe form printed NO MATCH and the herestring form MATCH on the identical pre-fix file.
+# In a scan gate the failure direction is a false CLEAN, which is the worst one. A herestring
+# spools to a temp file, so there is nothing to SIGPIPE.
+if grep -qE "printf.*sudo sed.*etc/hosts" <<< "$(sed 's/#.*//' "${_CREDS_REPO}/scripts/creds.sh")"; then
+  bad "dns-advice: creds.sh prescribes a \`sudo sed\` over /etc/hosts" \
+      "measured: it repoints the localhost line, takes unrelated names with it, and is a silent no-op on TAB and IPv6 lines"
+else
+  ok "dns-advice: no \`sudo sed\` over /etc/hosts is prescribed (no line-level rewrite is correct)"
+fi
+
 if [ "$fail" != 0 ]; then
   printf '\n  %s assertion(s) ran. The fail-fast block stops later STATES once one fails, so cases\n' "$_ran" >&2
   printf '  after the first failure did NOT run -- fix the failure above and re-run for full coverage.\n' >&2

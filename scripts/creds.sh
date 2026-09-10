@@ -1819,8 +1819,24 @@ fi
 CREDS_MAX_CELL="${CREDS_MAX_CELL:-44}"
 _long_notes=""
 _rows_capped=""
-while IFS=$'\t' read -r c1 c2 c3 c4 c5; do
+# ⚠️ THE DNS FLAGS ARE ARMED HERE, FROM COLUMN 5 ONLY, and this loop is the right home for two
+# measured reasons. (a) It runs BEFORE the advice block, over the same rows. (b) It is fed by a
+# HEREDOC, not a pipe, so it is NOT a subshell and these assignments survive -- `_un_ing`/`_un_oth`
+# at :1868 already rely on exactly that, which is the in-file precedent. No restructure of the
+# ~12 add_row call sites is needed; a proposed one was refuted as redundant.
+# ⚠️ `_rest` IS LOAD-BEARING. Without it a future SIXTH column lands inside c5, and the scoping
+# this whole change exists for silently widens again.
+_dns_stale=0
+_dns_absent=0
+while IFS=$'\t' read -r c1 c2 c3 c4 c5 _rest; do
   [ -n "$c1" ] || continue
+  # COLUMN 5 IS THE ONLY PRODUCER. `_reach_ingress` (:1206) emits these two strings; nothing else
+  # does. The old gate matched the WHOLE `rows` blob -- every column -- so a username or a URL
+  # containing the phrase fired a ROOT `sed` on /etc/hosts. MEASURED by an idea-round with the
+  # discriminating control in place (CREDS_NO_PROBE=1 pins column 5 to `not probed`, so a fire
+  # under it cannot have come from column 5): GITEA_ADMIN_USER='stale DNS' -> sed advice printed.
+  case "$c5" in *'stale DNS'*)   _dns_stale=1  ;; esac
+  case "$c5" in *'no DNS here'*) _dns_absent=1 ;; esac
   # A MARKER (`<...>`) is a placeholder, not a value — never footnote one. Measured: capping at 44
   # sent the 53-char "hidden, re-run with SHOW_SECRETS=1" marker to the footnote, which then read
   # "full value (too long for the table): <hidden: ...>". The cap exists for real secrets that are
@@ -1913,27 +1929,45 @@ EOF
 # The `robot$` test is a pure STRING test, and this repo records that such a test must never GATE an
 # auth decision. It does not gate here -- it only decides whether to print a hint, so its residual
 # (an unusual robot name prefix) costs a missing hint, never a false claim.
-case "$rows" in
-  *'stale DNS'*)
+# ⚠️ TWO INDEPENDENT `if`s, NOT A `case`. A `case` is FIRST-MATCH-ONLY and these two conditions
+# CO-OCCUR: an idea-round MEASURED one report with 1 host `no DNS here` and 8 rows `stale DNS`, and
+# only the first arm printed -- so the no-DNS host got NO remediation, under a closing sentence
+# promising "every affected row should turn to serving". Realistic trigger: a newly added app host
+# absent from /etc/hosts while the existing hosts are stale.
+if [ "${_dns_stale:-0}" = 1 ]; then
     printf '\n  ⚠️  Some hosts above RESOLVE ON THIS MACHINE TO A DIFFERENT ADDRESS than the ingress\n'
     printf '      that is serving them — almost always an /etc/hosts line left by a PREVIOUS lab.\n'
     printf '      The service is NOT broken; the link is. A browser here will fail to connect.\n'
     printf '      ⚠️ APPENDING a second line is UNRELIABLE: it helps only if the stale address is\n'
-    printf '      dead, and if that lab is still running the stale entry keeps winning. REPLACING\n'
-    printf '      works either way (needs root) — check what is there first:\n'
-    printf '        grep -n vks.local /etc/hosts\n'
-    printf '        sudo sed -i "s/^[0-9.]\\+\\( \\+.*vks\\.local\\)/%s\\1/" /etc/hosts\n' "${INGRESS_LB_IP:-<ingress-lb-ip>}"
-    printf '      Then re-run this report; every affected row should turn to serving.\n'
-    ;;
-  *'no DNS here'*)
+    printf '      dead, and if that lab is still running the stale entry keeps winning.\n'
+    printf '      See what is there, then remove ONLY the *.%s names from those lines:\n' "${APP_DOMAIN:-vks.local}"
+    printf '        grep -n %s /etc/hosts\n' "${APP_DOMAIN:-vks.local}"
+    printf '      …and add the single line this report prints above. Editing needs root.\n'
+    # ⚠️ NO `sudo sed` HERE ANY MORE, AND THAT IS THE POINT. The line this replaces was
+    #     sudo sed -i "s/^[0-9.]\+\( \+.*vks\.local\)/<LB>\1/" /etc/hosts
+    # MEASURED on seven realistic /etc/hosts shapes -- DESTRUCTIVE on two and a silent NO-OP on two:
+    #   127.0.0.1 localhost gitea.vks.local           -> localhost REPOINTED at the ingress LB
+    #   10.0.0.1 myserver.example.com stale.vks.local -> an unrelated host REPOINTED
+    #   192.168.1.7<TAB>tabbed.vks.local              -> UNCHANGED (`\( \+` demands literal spaces)
+    #   fe80::1 v6.vks.local                          -> UNCHANGED (`^[0-9.]\+` cannot match v6)
+    # A single /etc/hosts line routinely carries a *.vks.local alias AND names the operator needs,
+    # so NO line-level rewrite is correct -- only removing the vks.local TOKENS is. There is no
+    # make target that does it (checked: `show-dns-records` prints A records for a real DNS server,
+    # it does not touch /etc/hosts), and RULE ZERO-B forbids naming one that does not exist. So the
+    # report diagnoses and instructs, and does not hand out a root command that is wrong on more
+    # shapes than it is right on.
+    # ⚠️ SAME DEFECT, SAME CLASS, STILL LIVE ELSEWHERE: 98-uninstall-all.sh:332 prescribes
+    # `sudo sed -i '/vks.local/d' /etc/hosts`, which DELETES the whole `127.0.0.1 localhost
+    # gitea.vks.local` line -- removing localhost. Filed, not fixed here.
+fi
+if [ "${_dns_absent:-0}" = 1 ]; then
     printf '\n  ⚠️  Some hosts above are SERVED by the ingress but do not RESOLVE on this machine,\n'
     printf '      so a browser here gets DNS_PROBE_FINISHED_NXDOMAIN. The service is not broken —\n'
     printf '      the name is. Add the /etc/hosts line printed above (needs root):\n'
     printf '        sudo sh -c '"'"'printf "%%s  %%s\\n" "%s" "%s" >> /etc/hosts'"'"'\n' \
       "${INGRESS_LB_IP:-<ingress-lb-ip>}" "$(ingress_infra_hosts)$(app_names | while read -r _a; do if [ -n "$_a" ]; then printf '%s ' "$(app_host "$_a")"; fi; done)"
     printf '      Or create those names as A records pointing at %s in your DNS: make show-dns-records\n' "${INGRESS_LB_IP:-<ingress-lb-ip>}"
-    ;;
-esac
+fi
 
 # The values too long to sit in a cell, printed where width does not matter. One per line, the
 # service named, so it is still copy-pasteable — which is the whole point of this report.
