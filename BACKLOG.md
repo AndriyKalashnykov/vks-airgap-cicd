@@ -9534,6 +9534,104 @@ not a pipe, or `grep -q` + `pipefail` reports a false CLEAN over a present defec
 
 **Grade:** `measured` (fixture run locally 2026-09-10; the file's line number read from the tree).
 
+---
+
+### ⚠️ CORRECTED AND WIDENED 2026-09-10 by an idea-round — my filing UNDERSTATED it and the fix I sketched does not work
+
+**The damage is 6x what I wrote.** My fixture had 4 lines; the round's had 7. Measured, GNU sed 4.9:
+
+```
+BEFORE (7 lines)                                 AFTER  sed -i '/vks.local/d'
+127.0.0.1 localhost gitea.vks.local              ::1 ip6-localhost ip6-loopback
+10.0.0.1 myserver.example.com stale.vks.local    ^^^ THAT IS THE ENTIRE REMAINING FILE
+192.168.1.7<TAB>tabbed.vks.local
+fe80::1 v6.vks.local
+192.168.1.9 two.vks.local also.vks.local
+::1 ip6-localhost ip6-loopback
+10.0.0.2 pureapp.vks.local
+```
+
+It removes **6 of 7 lines** — every IPv4 line, including the whole `127.0.0.1 localhost` definition.
+Nothing attributes a broken files-first `localhost` lookup to a teardown run days earlier.
+
+**🔴 THE `${APP_DOMAIN}` DERIVATION DOES NOT ACHIEVE ITS OWN STATED GOAL (HIGH, verified here).**
+`98-uninstall-all.sh:325`'s comment says using `APP_DOMAIN` makes this agree with the add side. It
+does not — measured against the tree:
+
+| source | derives from `APP_DOMAIN`? |
+|---|---|
+| `.env.example:855 GITEA_HOST=gitea.vks.local` | **no — independent literal** |
+| `.env.example:889 TEKTON_DASHBOARD_HOST=tekton.vks.local` | **no — independent literal** |
+| `.env.example:2369 HEADLAMP_HOST=headlamp.vks.local` | **no**, and the comment does not even name it |
+| `lib/apps.sh:97 app_host()` | yes — the ONLY one |
+
+And `.env.example:880-885` documents exactly this configuration in its own words: *"setting
+`APP_DOMAIN=vks.test` moves the APP hosts and leaves gitea+tekton behind: two domains, two
+`/etc/hosts` lines, and **no gate asserts a shared suffix**"*. In that configuration
+`/vks.test/d` **misses the gitea, tekton and headlamp lines** — the stale-entry-survives-teardown
+failure the comment claims to have fixed. Today `HEADLAMP_HOST` is caught **by luck**, because it
+happens to share the domain.
+
+**🔴 AND B528's GATE IS STRUCTURALLY BLIND TO THIS SITE (HIGH).**
+`check-infra-hosts-single-source.sh` exists for precisely this class — its header records *"adding
+headlamp updated the MANIFESTS but none of those seven lists"*. Its pattern requires
+`${GITEA_HOST…}` **and** `${TEKTON_DASHBOARD_HOST…}`; `:332` names neither, so it contributes zero
+hits. Deriving the removal from `ingress_infra_hosts()` + `app_host()` fixes the defect **and**
+brings the site under that gate for free.
+
+**THE ASYMMETRY IS THE REAL BUG.** Five *add*-side sites are single-sourced through
+`ingress_infra_hosts()` (`45-install-traefik.sh:162`, `46-install-istio.sh:302`,
+`47-attach-istio.sh:123`, `43-install-istio-package.sh`, `creds.sh:1104`). The *remove/repair*-side
+sites each hand-rolled their own matcher, and every one is wrong. B528's gate watches only the add
+side.
+
+**DENOMINATOR CORRECTED — 3 sites, not 2:**
+
+| # | site | shape | verdict |
+|---|---|---|---|
+| 1 | `98-uninstall-all.sh:332` | `sed -i '/DOMAIN/d'` | destroys 6/7 lines — **OPEN** |
+| 2 | `creds.sh` stale-DNS advice | `sed -i 's/^[0-9.]\+…/LB\1/'` | repoints `localhost` AND an unrelated corporate host at our ingress LB — **FIXED on #1249** (the round's worktree was `origin/main`, which predates that branch, so it correctly reported this one as live) |
+| 3 | **`creds.sh` no-DNS advice** | `sudo sh -c 'printf … >> /etc/hosts'` | **I MISSED THIS.** Non-destructive but **NOT IDEMPOTENT** — re-running duplicates the line. `creds.sh` already documents that appending loses to a live stale entry, so it is a known-weak third instance — **OPEN** |
+
+**DO NOT PRESCRIBE A COMMAND — measured, not stylistic.** The round needed **4 iterations** to build
+a correct one; two were silently wrong (a `g` with no `:a`/`ta` loop removes every *other* adjacent
+name, so the line visibly changes and reads as success; a later iteration edited a *comment* line).
+The correct form is **381 characters** with a labelled loop and a 5-way alternation written twice —
+not auditable by the person pasting it as root. And it is GNU sed 4.9: Photon's `sed` is **toybox**,
+where `-E`, `-i.bak` and labelled loops are UNVERIFIED, so it may not run on the documented jump-box
+OS at all.
+
+⚠️ **NEVER `awk`.** `sudo awk … > /etc/hosts` truncates **unconditionally, not on failure** —
+measured: `awk '{print}' file > file` exits **0** and leaves the file at **0 bytes**. The shell
+truncates before awk opens it.
+
+**WHOLE-LINE DELETE IS RIGHT UNDER ONE SELF-CHECKING PRECONDITION.** `creds.sh` tells the operator
+to append **one line** carrying only our names, so deleting that line is correct and complete. But
+`98-uninstall-all.sh:321` states the rule eleven lines above the defect — *"delete only what you can
+prove you created"*. The two collapse: *"delete the line iff every token is ours"* ≡ *"remove our
+tokens, then drop any line left with no hostname"*. Measured, that gets all cases right, including
+preserving a pre-existing IP-only orphan.
+
+⚠️ Accept one asymmetry deliberately, and SAY it: name-scoped removal leaves a **foreign**
+`*.vks.local` that no app in `apps/registry.tsv` produces. Correct by the teardown rule, surprising
+to anyone expecting "all vks.local gone".
+
+**THE IN-REPO MODEL TO COPY:** `00-install-prereqs.sh:235` prints
+`sudo sed -i '/^${subid_user}:${start}:65536$/d' ${f}` — anchored `^…$`, full-record, cannot
+over-match. Someone already got this right once.
+
+**Done when:** the removal names are DERIVED from `ingress_infra_hosts()` + `app_host()` (which also
+brings the site under B528's gate); no root mutation command is printed; and a test extracts the
+note function from the SHIPPING script and asserts **the positive control first** — that the output
+names EVERY host, RED-proven with `HEADLAMP_HOST=headlamp.other.tld`, which the current
+`${APP_DOMAIN}` form fails. A refute-only suite passes over a function that prints nothing.
+
+⚠️ Test the OUTPUT, never the source text: comments cannot appear on stdout, which kills the
+matched-its-own-comment trap structurally rather than with a fragile comment-strip.
+
+**Grade:** `measured` (idea-round, GNU sed 4.9 / gawk 5.2.1; the `APP_DOMAIN` and B528 claims
+re-verified against the tree here).
+
 ## 🔴 B728 — `harbor-auth-check` prints "silent above = you have it" when it probed NOTHING
 
 **MEASURED 2026-09-10** by an implementation-round adversary, and it is the reassuring direction.
