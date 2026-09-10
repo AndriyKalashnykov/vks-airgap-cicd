@@ -331,7 +331,12 @@ assert_starved check-namespace-labelled.sh "check-namespace-labelled dies with n
 # declarations land in their OWN commit, BEFORE the fixes, so the harness records seven real
 # `VACUOUS` lines in CI. A case that is `ok` from birth is indistinguishable from one that was
 # never blind; this ordering is what makes the demonstrated RED an observation instead of a claim.
-assert_starved check-doc-make-targets.sh  "check-doc-make-targets dies with no commands examined"  'README.md' 'docs/*.md'
+# ⚠️ THE DECLARATION WAS INCOMPLETE, WHICH IS THE FALSE-RED DIRECTION THIS HARNESS WARNS ABOUT.
+# check-doc-make-targets.sh:48 reads THREE pathspecs -- 'README.md' 'docs/*.md'
+# 'apps/*/*/README.md' -- and only the first two were starved, so the gate still examined 36
+# commands across 40 docs and was reported VACUOUS. The gate is fine; the declaration was not.
+# The third pathspec was added when the corpus was widened; this line was not updated with it.
+assert_starved check-doc-make-targets.sh  "check-doc-make-targets dies with no commands examined"  'README.md' 'docs/*.md' 'apps/*/*/README.md'
 assert_starved check-prose-secrets.sh     "check-prose-secrets dies with no lines examined"        '*.md'
 assert_starved check-how-provenance.sh    "check-how-provenance dies with no '# how:' lines"       '.env.example'
 assert_starved check-app-hardcodes.sh     "check-app-hardcodes dies with no (file,app) pairs"      'apps/registry.tsv'
