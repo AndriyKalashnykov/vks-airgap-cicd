@@ -9485,3 +9485,51 @@ never a mechanism, per `gates.md` §"ONE OPERATING POINT"); the refutation of th
 is already recorded in `rules/shell/coding-style.md`. Surfaced as an out-of-scope find by
 adversary-bash-git-cli while reviewing an unrelated diff — this repo's recurring pattern that the
 highest-value finding is about something already shipped.
+
+## 🔴 B727 — `make uninstall-all` prescribes a root `sed` that DELETES the localhost line from /etc/hosts
+
+**MEASURED 2026-09-10** on a fixture holding an ordinary `/etc/hosts`. `98-uninstall-all.sh:332`
+prints, for the operator to paste:
+
+```sh
+sudo sed -i '/vks.local/d' /etc/hosts
+```
+
+Against `127.0.0.1 localhost gitea.vks.local` it deletes **the whole line** — removing `localhost`
+from `/etc/hosts`. It also takes `10.0.0.1 myserver.example.com stale.vks.local` with it.
+
+```
+before                                            after `sed '/vks.local/d'`
+127.0.0.1 localhost gitea.vks.local               127.0.1.1 thisbox
+127.0.1.1 thisbox                                 (both other lines GONE)
+10.0.0.1 myserver.example.com stale.vks.local
+192.168.99.9 javawebapp.vks.local
+```
+
+**Root cause, shared with the sibling already fixed:** a **line-level** operation on a file whose
+lines carry MULTIPLE names. A `*.vks.local` alias routinely shares a line with `localhost` or a real
+host, so neither *deleting* nor *repointing* the LINE is ever correct — only removing the vks.local
+**tokens** is.
+
+**CLASS DENOMINATOR — 2 instances in the printed-advice surface, 1 fixed:**
+
+| site | prescribed | measured result |
+|---|---|---|
+| `creds.sh` (stale-DNS advice) | `sudo sed -i "s/^[0-9.]\+\( \+.*vks\.local\)/<LB>\1/"` | localhost line REPOINTED — **FIXED**, no root rewrite is prescribed any more, and a test asserts its absence |
+| **`98-uninstall-all.sh:332`** | `sudo sed -i '/vks.local/d'` | localhost line **DELETED** — **OPEN** |
+
+**Why it is not fixed in the same change:** the creds fix replaced the command with a diagnosis plus
+an instruction, which suits a report. `uninstall-all` is a *teardown*, where the operator genuinely
+wants the entries gone, so the honest replacement is different (remove the tokens, or say plainly
+that a line may carry names they need). That is a design decision and needs its own idea-round.
+
+**No make target exists for it** — checked: `show-dns-records` prints A records for a real DNS
+server and does not touch `/etc/hosts`. RULE ZERO-B forbids naming one that does not exist, so the
+fix cannot delegate.
+
+**Done when:** `uninstall-all` prints no root command that operates on whole `/etc/hosts` lines, and
+a test asserts it — the creds sibling's assertion is the model, including its two traps (strip
+comments first, because the fix's own comment quotes the removed command; and use a **herestring**,
+not a pipe, or `grep -q` + `pipefail` reports a false CLEAN over a present defect).
+
+**Grade:** `measured` (fixture run locally 2026-09-10; the file's line number read from the tree).
