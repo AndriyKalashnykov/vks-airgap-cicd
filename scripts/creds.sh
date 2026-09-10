@@ -835,6 +835,12 @@ case "$_prov" in
                 # vCenter/SSO rows are deliberately NEVER probed (SSO locks out after 3 binds). A
                 # reader scanning down for a verdict on those rows finds none and reads the absence
                 # as "nothing wrong with that one".
+                # ⚠️ DO NOT CUT THIS. I did, and test-creds-show caught it. It reads like
+                # mechanism, but it is the REASON provenance is STORED rather than DISCOVERED, and
+                # the assertion guarding it records an operator complaint plus the re-wording that
+                # fixed it ("carries no cluster stamp" was OUR jargon; this phrasing is already the
+                # improved one). The ROW TEST cuts lines the reader cannot act on -- not the one
+                # sentence that explains the state they are in.
                 printf '                   Nothing records which cluster they came from — normal, but unverified here.\n'
                 # ⚠️ SCOPED, because the unqualified word was FALSE. MEASURED: `env_validate`
                 # (02-env.sh) has ZERO references to `supervisor_kubeconfig` and ZERO to
@@ -847,8 +853,9 @@ case "$_prov" in
                 # this lab `make env-validate` returns rc=0 with "Harbor credentials accepted
                 # (HTTP 412)". It also cited an internal backlog id at an operator who has only this
                 # repo. Both gone. What it re-checks is stated once, plainly.
-                printf '                   re-check: make env-validate  (Harbor login + KUBECONFIG only —\n'
-                printf '                   it cannot tell whether a robot credential can PUSH)\n'
+                # KEPT, on ONE line: not mechanism -- it changes what a reader concludes from a
+                # green env-validate (B715: it cannot judge a robot's PUSH right).
+                printf '                   re-check: make env-validate  (it cannot prove a robot can PUSH)\n'
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
                 printf '                   passwords below belong to that one, not to the cluster you are talking to.\n'
@@ -1870,9 +1877,11 @@ fi
 # ---- notes the TABLE CELLS point at. A cell may carry a short marker; the sentence lives here.
 # A marker that says "see note" with no note is a citation that resolves to nothing -- worse than no
 # marker at all, because it reads as sourced.
-if [ "${_headlamp_note:-0}" = 1 ]; then
-  printf '\n  Headlamp: if the token screen comes straight back, the token expired — copy a fresh one above.\n'
-fi
+# CUT (the whole if/fi): "Headlamp: if the token screen comes straight back, the token expired --
+# copy a fresh one above." The token cell already carries `(valid until <ts>)`, so this warned
+# about something that had not happened and told the reader to re-copy a value already on screen.
+# ROW TEST: no action. `_headlamp_note` is now unread -- if a real Headlamp remedy is ever needed,
+# write it from the cell's marker, not from a guess about what the browser did.
 # WHY the Harbor admin password is missing, and what to ACTUALLY do about it. Printed only when the
 # cell did not resolve, so a healthy run stays quiet.
 #
@@ -1898,7 +1907,9 @@ fi
 # runs it, gets rc=0 and two INFO lines, and still has no password. Say what is true of BOTH arms.
 if [ -n "${_h_admin_why:-}" ]; then
   case "${_h_admin_why}" in
-    *"Supervisor token expired"*) printf '\n  Harbor admin password NOT read (see the banner above).\n' ;;
+    # "see the banner above" pointed ~40 lines up. Name the cause here; the NEXT line already
+    # carries the only thing a reader acts on (harbor-admin-password will not help, and why).
+    *"Supervisor token expired"*) printf '\n  Harbor admin password NOT read (the Supervisor token expired).\n' ;;
     *) printf '\n  Harbor admin password NOT read: %s\n' "$_h_admin_why" ;;
   esac
   # No backticks: shellcheck reads them as command substitution inside a single-quoted printf
@@ -1937,7 +1948,11 @@ case "${_argo_tls_flag:-0}" in
     # DISCRIMINATE"), and `make env-validate` cannot judge a robot at all (B715).
     printf '\n  Reachable = the address answered. Username/Password are AS CONFIGURED, not tested.\n'
     printf '\n  untrusted cert: browser -> click through; curl/CLI -> --insecure.\n'
-    printf '  ArgoCD is at a bare IP and its cert has no IP SAN, so nothing can verify it there.\n' ;;
+    # CUT: "ArgoCD is at a bare IP and its cert has no IP SAN, so nothing can verify it there."
+    # TRUE (measured: DNS SANs only, zero IP SANs) and pure mechanism -- the line above already
+    # tells the reader what to DO about an untrusted cert, and the WHY changes no action.
+    # ⚠️ this line carried the case arm's `;;` -- removing it naively breaks the script.
+    ;;
 esac
 
 # --- footnote: WHAT IS NOT REAL YET, and whose job it is to fix ------------------------
