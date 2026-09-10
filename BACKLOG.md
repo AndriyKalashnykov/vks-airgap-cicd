@@ -4904,6 +4904,20 @@ one place in the repo (its own data row), `grep -c v1.25.19 BACKLOG.md` = 0, and
 `v1.25.18` 3x and `v1.25.19` 0x. The only behavioural proof in the file was for a **local patch on
 v1.25.18 that was then deleted**. ⚠️ That is the ABSENCE of a record — **not** a measurement that
 the pin fails. Kaniko is on the default build path for all six apps.
+**✅ 2026-09-10 — (b) IS SETTLED, GREEN, AND (a) IS FIXED. The row is down to ONE residual.**
+`make e2e-kind` ran to completion: **0 errors, 0 make errors**, and **TWELVE `-build` TaskRuns True
+across ALL SIX apps**, with the build step's image read off the running TaskRuns as verbatim
+`172.18.0.3/cicd/kaniko-project/executor:v1.25.19-gcr0.21.9-debug` — measured, not inferred from the
+pipeline name. So the shipped pin BUILDS AND PUSHES, and `images/selfbuilt.tsv`'s *"THE PIN BELOW IS
+THEREFORE NOT KNOWN-GOOD … it FAILS"* is now refuted by measurement rather than merely contradicted
+by a line 65 rows above it. **(a) fixed in the same change:** that paragraph now carries a SUPERSEDED
+header and is unquotable without it — kept, not deleted, because deleting refuted text is how the
+next session rebuilds the refuted design. ⚠️ **The e2e REUSED a warm cluster and says so itself**, so
+this is NOT evidence for namespace create-ordering (B42); `E2E_FRESH=1` is what proves that, and it
+is a different question from this row's. **SURVIVING RESIDUAL:** nothing yet records the pin's proof
+anywhere a Renovate bump would invalidate — the next fork bump re-opens (b) with no gate to notice.
+That is worth its own row, not a re-opening of this one.
+
 **Cost to settle (b): one `make e2e-kind`, no lab** — `Makefile:989` chains `install-all`, whose 2nd
 prereq is `selfbuilt-image`. A first attempt 2026-09-10 died earlier, at `mirror-verify`, on an
 unrelated defect (a publisher metadata bug read as CORRUPT) that has since been fixed.
