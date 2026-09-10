@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
-# ── 09-harbor-auth-check.sh — fail in SECONDS on a Harbor credential that cannot push ─────────────
+# ── 09-harbor-auth-check.sh — fail in SECONDS on a Harbor credential Harbor REJECTS ──────────────
+#
+# ⚠️ THE TITLE USED TO SAY "that cannot push", AND THAT WAS A FALSE PROMISE (B710). This gate checks
+# AUTHENTICATION, never PUSH CAPABILITY, and the two are not the same question. An idea round traced
+# goharbor v2.15.2's middleware chain and found THREE separate things that let a credential
+# authenticate, carry a `push` grant, and still be refused at push time — Harbor read-only mode
+# (`readonly.Middleware`; the token endpoint is a GET and is skipped, the blob-upload POST is not),
+# per-project QUOTA (`quota.PostInitiateBlobUploadMiddleware`), and IMMUTABLE TAG RULES
+# (`immutable.Middleware`, PreconditionCode). The immutability one is the operationally likely case
+# here: `make mirror` re-pushes the SAME tags every run, and immutable-tag rules are standard
+# hardening on a platform team's Harbor — i.e. the RULE ZERO-B default posture. The round also
+# enumerated more middlewares it did NOT check, so THREE is a floor, not a total.
+#
+# So: no read-only RBAC probe can promise "can push". Only a real write can, and that is a write on
+# the credential path — it needs its own idea round and is NOT built here. Saying what this gate
+# actually does is the fix; promising more is what B710 filed.
 #
 # WHY THIS EXISTS (B209). `make install-all` already gates: preflight -> lab-preflight ->
 # harbor_auth_report, so it dies in the first seconds on a stale credential and says so. `make
@@ -26,10 +41,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 if harbor_auth_report; then
-  log_info "Harbor auth gate: nothing to report (either the credential works, or there was nothing to probe)."
+  # ⚠️ TWO STATES, NOT ONE SENTENCE. This line used to read "either the credential works, or there
+  # was nothing to probe" — conflating a VERIFIED credential with a gate that checked NOTHING, which
+  # is the reassuring direction. `harbor_auth_report` prints which of the two happened; this line
+  # must not paper over it. And neither state is a statement about PUSH — see the header.
+  log_info "Harbor auth gate: no rejection to report (see the line above for whether a credential was actually probed)."
+  log_info "  This checks AUTHENTICATION only. It cannot tell you whether the credential may PUSH."
   exit 0
 fi
 
-log_error "Harbor auth gate FAILED — refusing to start a ~20-minute mirror that cannot push."
+log_error "Harbor auth gate FAILED — Harbor REJECTED the credential; refusing to start a ~20-minute mirror."
 harbor_settle_note "  "
 exit 1

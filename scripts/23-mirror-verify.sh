@@ -110,7 +110,24 @@ log_info "verifying ${#IMAGES[@]} images in Harbor $HARBOR_URL/$HARBOR_INFRA_PRO
 # manifests PRESENT and blobs gone, which is **BLOB_UNKNOWN** — that stays CORRUPT.
 _verify_class() {
   case "$1" in
-    *"mismatched digest"*|*"mismatched diffid"*|*"undersized layer"* \
+    # ⚠️ ARCH-ABSENT FIRST, and it is EXCLUSIVE: `crane validate --platform` errors out before it
+    # validates anything, so this string cannot co-occur with a corruption string. It is an operator
+    # CONFIG fault (MIRROR_ARCH names an arch this index does not contain), not an integrity verdict,
+    # and without its own arm it fell to UNCLASSIFIED -> probe -> CORRUPT -> "re-carry 12 GB".
+    *"no child with platform"*) printf 'ARCH-ABSENT' ;;
+    # ⚠️ THESE ARE THE STRINGS go-containerregistry 0.21.9 ACTUALLY EMITS, extracted from the module
+    # cache, NOT written from memory. An idea round measured that the previous patterns matched
+    # almost NONE of them: `mismatched digest` does not match `mismatched layer[0] digest:`, nor
+    # `mismatched config digest:`, nor `mismatched manifest digest:`. EIGHT of ten real corruption
+    # signatures classified UNCLASSIFIED and were caught ONLY by `_verify_probe` — so the text arm
+    # was very nearly decorative on the image path, while its own test pinned it green with a
+    # SYNTHETIC string (`mismatched digest: got ... want ...`) that occurs only on the non-image
+    # `default:` branch of validateChildren and therefore never on the path every mirrored image
+    # takes. `mismatched number of diffids` is 0.22.x's; harmless here and correct after a bump.
+    *"mismatched layer["*|*"mismatched config digest"*|*"mismatched config size"* \
+      |*"mismatched manifest digest"*|*"mismatched number of diffids"* \
+      |*"error verifying "*|*"does not match requested digest"* \
+      |*"mismatched digest"*|*"mismatched diffid"*|*"undersized layer"* \
       |*"does not match expected size"*|*BLOB_UNKNOWN*) printf 'CORRUPT' ;;
     *"no such host"*|*"connection refused"*|*"i/o timeout"*|*"no route to host"* \
       |*"certificate signed by unknown authority"*|*"x509:"*|*"TLS handshake"* \
@@ -154,13 +171,31 @@ _verify_probe() {
   if [ "$_mrc" -eq 0 ]; then printf 'CORRUPT'; else _verify_class "$_mout"; fi
 }
 
-fails=0; warns=0; transport_fails=0; absent_fails=0; auth_fails=0
+fails=0; warns=0; transport_fails=0; absent_fails=0; auth_fails=0; arch_fails=0
 pg_init "${#IMAGES[@]}"
 for src in "${IMAGES[@]}"; do
   dst="$(mirror_target_ref "$src")"
   pg_step "verify $dst"
   # 1. INTEGRITY (hard gate)
-  if ! err="$(crane validate --remote "$dst" "${FAST[@]}" "${INSECURE[@]}" 2>&1)"; then
+  # ⚠️ `--platform` IS THE FIX, and it is upstream-sanctioned: go-containerregistry PR #1776, which
+  # ADDED the index-wide platform check, says in as many words "If you pass a --platform flag, it
+  # will behave how it previously behaved." With it, crane runs validate.Image on the ONE child that
+  # matters -- full layer/config/manifest verification -- and never invokes validatePlatform.
+  # MEASURED on the failing index: no flag -> rc=1 FAIL in 6.6s (8 children); --platform linux/amd64
+  # -> rc=0 PASS in 1.3s. Safe on single-arch images too (verified on distroless), so it is applied
+  # unconditionally rather than only to indexes.
+  #
+  # ⚠️ SCOPE REDUCTION, DISCLOSED: for a multi-arch index we now blob-validate ONE child (the arch
+  # this box runs) and skip validateIndexManifest. The other children's blobs are NOT validated --
+  # a Harbor that lost only an arm64 blob would read green here. That is bounded (nothing pulls
+  # them) and it is the honest cost of not asking a text classifier to adjudicate a publisher's
+  # metadata. The digest evidence below, and images.lock, are what cover the index itself.
+  #
+  # ⚠️ NOT AT THE MIRROR. Copying a single arch was refuted by lib/mirror.sh's own comment: digest-
+  # pinned refs must copy EVERY arch or the index digest changes and the by-digest pull that
+  # 41-install-tekton.sh rewrites would fail MANIFEST_UNKNOWN on every TaskRun. Narrow the CHECK,
+  # never the COPY.
+  if ! err="$(crane validate --platform "linux/${MIRROR_ARCH:-amd64}" --remote "$dst" "${FAST[@]}" "${INSECURE[@]}" 2>&1)"; then
     cls="$(_verify_class "$err")"
     # FLAPPING-LINK MITIGATION (B703, graded `inferred` — the hole this guards is reasoned, not
     # observed). `crane validate` fetches EVERY blob (long, many requests) while `_verify_probe`'s
@@ -179,7 +214,11 @@ for src in "${IMAGES[@]}"; do
     # i.e. the same event as the 2026-07-13 incident.
     # So probe ONLY when the text classifier was inconclusive. Also saves a request.
     case "$cls" in
-      TRANSPORT|CORRUPT) : ;;                       # already definitive — do not second-guess it
+      # ⚠️ ARCH-ABSENT MUST BE HERE. A round measured that adding a class to `_verify_class` WITHOUT
+      # adding it to this list is a NO-OP: it falls to `*)`, the probe runs, `crane manifest` on an
+      # index returns rc=0, and the verdict is overwritten with CORRUPT. The class is computed and
+      # immediately discarded. Trace any new class through to the `die`, not just to the classifier.
+      TRANSPORT|CORRUPT|ARCH-ABSENT) : ;;           # already definitive — do not second-guess it
       *) # see _verify_probe's header: the probe's inference is UNSOUND with --fast, so in fast
          # mode leave the text verdict standing rather than manufacture a CORRUPT.
          if [ "${MIRROR_VERIFY_FAST:-0}" != "1" ]; then
@@ -202,6 +241,9 @@ for src in "${IMAGES[@]}"; do
       AUTH)
         log_error "  UNAUTHORIZED    $dst  (credential rejected — NOT an integrity verdict)"
         auth_fails=$((auth_fails+1)) ;;
+      ARCH-ABSENT)
+        log_error "  ARCH ABSENT     $dst  (MIRROR_ARCH not in this index — a CONFIG fault, NOT corruption)"
+        arch_fails=$((arch_fails+1)) ;;
       *)
         log_error "  INTEGRITY FAIL  $dst${cls:+  [${cls}]}"
         fails=$((fails+1)) ;;
@@ -210,6 +252,20 @@ for src in "${IMAGES[@]}"; do
     # it. Truncating below the length of the thing you are truncating is how the evidence for the
     # correct diagnosis gets removed while the wrong one is printed in full.
     log_error "    $(printf '%s' "$err" | tr '\n' ' ' | cut -c1-800)"
+    # ⚠️ REPORT THE PROVENANCE DIGEST ON THE FAILING PATH TOO. It used to `continue` straight past
+    # section 2, so the ONE structural discriminator was withheld from exactly the operator facing a
+    # 12 GB decision -- and this incident had to be settled by hand with two `crane digest` calls.
+    # A digest that MATCHES images.lock beside a validate failure is definitionally "our copy is
+    # byte-for-byte what we pulled", which is evidence no text classifier can produce.
+    _w="$(lock_digest "$src")"
+    if [ -n "$_w" ]; then
+      _g="$(crane digest "$dst" "${INSECURE[@]}" 2>/dev/null || true)"
+      if [ "$_g" = "$_w" ]; then
+        log_error "    evidence: Harbor's digest MATCHES images.lock ($_g) — the copy is byte-for-byte what we pulled."
+      else
+        log_error "    evidence: Harbor's digest ${_g:-<unreadable>} does NOT match images.lock $_w"
+      fi
+    fi
     continue
   fi
   # 2. PROVENANCE (reported; WARN-only when integrity already passed)
@@ -263,6 +319,9 @@ fi
 if [ "$auth_fails" -gt 0 ]; then
   die "$auth_fails/${#IMAGES[@]} images could not be read because Harbor REJECTED the credential — this is NOT an integrity verdict and NOTHING is known to be missing or corrupt. Per RULE ZERO-B the common case is a tenant whose robot credential was handed over and CANNOT be self-renewed: request a fresh one, then re-run. Do NOT re-mirror and do NOT re-carry the bundle."
 fi
+if [ "$arch_fails" -gt 0 ]; then
+  die "$arch_fails/${#IMAGES[@]} images do not contain platform linux/${MIRROR_ARCH:-amd64} — this is a CONFIG fault in .env, NOT corruption and NOT a missing image. Harbor's copy is NOT known to be bad. Set MIRROR_ARCH to an arch these indexes actually carry (amd64|arm64) and re-run. Do NOT re-mirror and do NOT re-carry the bundle."
+fi
 if [ "$absent_fails" -gt 0 ]; then
   die "$absent_fails/${#IMAGES[@]} images are ABSENT from Harbor — the manifest is not served, so Harbor's copy of the REMAINING images is NOT known to be bad. Re-push just these ('make mirror' is resumable and cache-skips what is already intact). Do NOT re-carry the 12 GB bundle on the strength of this."
 fi
@@ -272,8 +331,8 @@ fi
 # carrying a literally false sentence, on the gate that stands before an air-gap install. This guard
 # makes the success line structurally unreachable whenever ANY tally is non-zero, so a future class
 # added without its own die fails LOUD instead of passing silently.
-_tot=$((fails + transport_fails + absent_fails + auth_fails))
+_tot=$((fails + transport_fails + absent_fails + auth_fails + arch_fails))
 if [ "$_tot" -gt 0 ]; then
-  die "INTERNAL: ${_tot} image(s) failed but no specific verdict fired (fails=$fails transport=$transport_fails absent=$absent_fails auth=$auth_fails) — refusing to report the mirror intact. A verification class was added without a matching die."
+  die "INTERNAL: ${_tot} image(s) failed but no specific verdict fired (fails=$fails transport=$transport_fails absent=$absent_fails auth=$auth_fails arch=$arch_fails) — refusing to report the mirror intact. A verification class was added without a matching die."
 fi
 pg_done "mirror-verify: ${#IMAGES[@]} images intact in Harbor${warns:+ (${warns} provenance warnings)}"
