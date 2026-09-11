@@ -9788,7 +9788,48 @@ RESIDUAL, still open and NOT fixed: the TABLE still shows `silent` on the first 
 aggregate no longer repeats that split (both are out of the denominator), but an operator reading
 the column sees it. The producer is where the rows must be made to agree.
 
-## 🔴 B731 — `no backend` is the ONLY finding this report names without a remedy, and the comment that would justify one is FALSE
+## ⚪ B731 — CLOSED by PR #1252: `no backend` had no remedy — and the FIRST fix was FALSE for a 404
+
+⚠️ **CLOSED 2026-09-11, and read the two refutations before touching this area again.** The fix
+took THREE commits because the first two were each refuted by the round that followed them.
+
+**Round 5 (the original finding — below) was right.** The gate was conjoined on `_reach_ok == 0`,
+so the live state that produced it (10 serving + 2 `no backend`) suppressed the only sentence that
+explains a 5xx. And that conjunct never did the job its comment claimed: the stale-DNS state it
+cited has `_reach_half == 0`, so `_reach_half > 0` alone already excluded it.
+
+**Round 6 refuted the fix, in both halves.**
+
+1. **`_reach_half` IS NOT THE 5xx BUCKET.** It is `_reach_class`'s `answered` CLASS —
+   `no backend` (5xx) **plus `no route` (404) plus the catch-all** (`HTTP <n>`). Relaxing the gate
+   to `_reach_half > 0` therefore turned a rarely-fired vague sentence into a frequently-fired
+   specific one that is **FALSE for a 404**. MEASURED on the parent commit with a 404 fixture: it
+   printed *"the route IS rendered"* and *"kubectl -n \<app\> get pods"* for a hostname the
+   ingress never learned — **two lines under a legend the same diff added** saying *"no route = the
+   ingress does not know that hostname"*, and **certified by an assertion the same diff added**.
+   Fixed with `_reach_5xx` / `_reach_404`, counted on the **CELL** not the class; 404 now gets its
+   own sentence pointing at the ingress.
+2. **"Its namespace is the name in the Service column" is FALSE.** The column reads `Gitea` and
+   `Tekton`; the namespaces are `gitea` and `tekton-pipelines` — and all three infra namespaces are
+   operator knobs, so **no rule over that column can be right**. The values were in scope via
+   `load_env` and referenced **zero** times. The namespace is now carried as a **sixth `add_row`
+   field**. Verified independently: all six `deploy/*/kustomization.yaml` namespaces equal their
+   registry name, and the three infra defaults match `49-psa-check.sh`'s triple exactly.
+
+**Also shipped with it:** the kubectl remedy carries its **precondition** (this report prints
+`cluster : not reachable` in renders where a row can still read `no backend` — the ingress answers
+from its own LB and does not need our kubeconfig); `silent` was the **FIFTH** producer value with
+no reader-facing definition, while the legend's own comment listed it among those "explained".
+
+**Caught before it shipped:** `${6//[$_sep]/ }` under `set -u` dies `6: unbound variable` on the
+three call sites that legitimately pass five arguments.
+
+`test-creds-show.sh` 177 → 190; **8 new assertions RED-proven against the parent** in a worktree.
+The table is **byte-unchanged**, measured: the whole no-probe render diffs parent-vs-tip to a
+single temp-path line. ⚠️ One of those assertions first **passed on the parent** because it matched
+the **legend** rather than the remedy — the trap that file records one block up.
+
+### The original finding, kept
 
 MEASURED on the live lab 2026-09-11, during the post-restart window:
 
@@ -9865,3 +9906,39 @@ prints recipe TEXT while a target-specific `export` lives in the ENVIRONMENT, so
 look identical. Guarded by `scripts/test-e2e-ingress-pin.sh`.
 
 Row added 2026-09-11 so the citation resolves (B719).
+
+## ⚪ B732 — REFUTED: the Lab-access legend is NOT incomplete; its markers are explained by a STRONGER mechanism
+
+**Filed from a persona read** (2026-09-10) as: *the Lab-access legend defines `<not set>` while the
+cells use `<not read>` (9), `<could not read node addresses>` (7) and `<not readable>` (2)* — so a
+derived legend, like the one the Reachable column already has, was the obvious fix.
+
+**MEASURED 2026-09-11, and the premise does not survive it.** Two things were wrong with the filing:
+
+1. **The counts are of occurrences in the SOURCE, not in a render**, and most of them are in the
+   **services** table (headlamp's `<not read>`, Harbor's `<not read>`), not the lab one.
+2. **The SSH row's markers are already explained — by name, with their CAUSE**, which is strictly
+   more than a legend entry would give. Driven with a `kubectl` stub returning a Forbidden on the
+   node query (`CREDS_NO_PROBE=0`, `VKS_NAMESPACE` set), the render is:
+
+        guest node SSH: the server ANSWERED but the addresses were not readable — see the
+                        note below.
+        ...
+        guest node SSH  <not allowed to read addresses>  vmware-system-user  <forbidden>
+        ...
+        Guest-node SSH password NOT read: could not ask — FORBIDDEN: this identity may not read
+          that in 'ns1'. Ask your platform admin.
+        Guest-node ADDRESSES not read either — same cause as the line above.
+
+   `_ssh_header_line` (five arms, keyed on the RETURN CODE not the rendered cell) sits above the
+   table and `_ssh_state` / `_ssh_ep_state` each get their own sentence below it. Both markers in
+   that render are accounted for, and the reader is told what to DO.
+
+**So a derived legend here would DUPLICATE an explanation that already names the cause** — and a
+second, weaker statement of the same fact is how two homes drift apart. Do not build it.
+
+⚠️ **What is NOT refuted, and is the honest residual:** only the FORBIDDEN arm was measured. The
+other `_ssh_tok` values (`<no kubeconfig>`, `<ambiguous>`, `<none>`, `<no key>`, `<empty>`) and the
+`<no node address yet>` endpoint were not driven. If one of those renders WITHOUT a matching
+sentence, that is a real gap — but it is a gap in the SENTENCE, not in the legend, and the fix is
+another arm beside the four that exist.

@@ -1132,11 +1132,12 @@ operator knobs, so **no rule over that column can be right**. The values were al
    `noca + 401` is non-zero in **both** entry points before switching any caller. Two live gates
    (`24-lab-preflight.sh:207`, `09-harbor-auth-check.sh:43`) already use the REPORTER as a VERDICT,
    which `lib/harbor.sh:233` forbids in writing.
-4. **D1 is NOT yet measured and must not be actioned on its filing.** It says the Lab-access legend
-   defines `<not set>` while cells use other markers. The counts in that filing are of occurrences
-   in the SOURCE, most of them in the **services** table, not the lab one. In the two renders I have,
-   the one other marker that appears (`<not probed>`) is explained by `_ssh_header_line` directly
-   above the table. Re-measure before touching it.
+4. ~~D1~~ **MEASURED AND REFUTED — filed as B732, do NOT build the derived legend.** Driven with a
+   `kubectl` stub returning Forbidden on the node query, the SSH row's markers
+   (`<not allowed to read addresses>`, `<forbidden>`) are BOTH explained — by `_ssh_header_line`
+   above the table and by two named sentences below it, which give the CAUSE, not just the word. A
+   derived legend would duplicate a stronger explanation. Residual named in the row: only the
+   FORBIDDEN arm was driven.
 5. **B719** · untouched: **B484**, **B498**, **B565**, **B523**, **B716** stages 2–3.
 
 ⚠️ **`static-check-fast` — what runs on a push — contains neither `lint` nor `test-scripts`**, so a
