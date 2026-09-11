@@ -64,13 +64,12 @@ trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" "${_h_err:-}" "${_
 # 1.0s once the first failure stops the rest. An 18-second credentials report is one nobody runs.
 # It is a FILE and not a variable ON PURPOSE: `_reach_ingress` is called inside $( ), a SUBSHELL,
 # so an assignment there is discarded — the function's own comment says so. A file crosses.
-_route_dead="${TMPDIR:-/tmp}/.creds-route-dead.$$"
-# ⚠️ CLEAR IT AT START. The path is PREDICTABLE and the EXIT trap does not run on SIGKILL or a
-# crash, so a stale sentinel from a previous run survives — and after PID reuse this run inherits
-# it. MEASURED by a round: an EMPTY zero-byte file planted there turned "reachable: 3 of 5 serving,
-# 2 silent" into "0 of 2 — NOTHING answered ... Consistent with the lab being OFF" against an
-# ingress serving HTTP 200. On a shared box that is also a denial-of-truth anyone can plant.
-rm -f "$_route_dead" 2>/dev/null || true
+# ⚠️ mktemp, NOT a PREDICTABLE `$$` NAME — and an `rm -f` at start could NOT close this. On a shared
+# box /tmp is 1777: the STICKY BIT forbids unlinking another user's file, so the `rm -f` fails
+# (swallowed by `|| true`), the append fails too, and `wc -c` then returns the PLANTER's count —
+# arming the cache before row 1 so every ingress row goes un-probed. An unpredictable, freshly
+# created path removes the class instead of guarding it. The EXIT trap already removes it.
+_route_dead="$(mktemp "${TMPDIR:-/tmp}/.creds-route-dead.XXXXXX" 2>/dev/null || printf '')"
 
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
@@ -1239,9 +1238,24 @@ _reach_ingress() {
   # one read dead. Both were attempts to classify away a defect in the MEASUREMENT.
   # Two strikes costs one extra timeout on a genuinely dead ingress (4s at the 2s default, still far
   # under the 18.1s the cache was introduced to prevent) and removes the class.
+  # ⚠️ DEGRADE THE TIMEOUT — NEVER SUPPRESS THE PROBE. Two earlier versions SKIPPED later rows once
+  # the LB had failed (first after ONE failure, then after TWO), and BOTH reported a HEALTHY,
+  # SERVING ingress as "Consistent with the lab being OFF" — a row that was never asked cannot
+  # contradict the verdict. Raising the threshold from 1 to 2 only moved the boundary: MEASURED over
+  # 9 real ingress rows with the LB recovering after N failed requests,
+  #     N=1        -> "8 of 11 serving"   (the ONE case the old fixture happened to cover)
+  #     N=2,3,5,8  -> "0 of 4 — NOTHING answered ... Consistent with the lab being OFF"
+  # with the listener log proving requests 4..10 were never issued. The committed fixture failed
+  # EXACTLY ONE request — calibrated to the threshold it validated, which is why it read as a fix.
+  # Asking EVERY row on a short budget keeps the cost bound the cache exists for (measured against a
+  # hanging listener: 6.38s/4 connections -> 9.97s/11, still far under the 18.1s that motivated it)
+  # and makes the denominator honest: 11 rows counted, not 4.
+  local _rt="${CREDS_ROUTE_TIMEOUT_SECONDS:-${CREDS_PROBE_TIMEOUT_SECONDS:-2}}"
   if [ -s "${_route_dead:-/nonexistent}" ]; then
-    _rd_n="$(wc -c < "${_route_dead}" 2>/dev/null || printf 0)"
-    [ "${_rd_n:-0}" -ge 2 ] && { printf 'LB up'; return; }
+    local _rd_n; _rd_n="$(wc -c < "${_route_dead}" 2>/dev/null || printf 0)"
+    # A DEGRADED BUDGET IS STILL A PROBE: a row that answers fast still reads `serving`; only one
+    # that is ALSO slow reads `silent` — and `silent` is COUNTED, where `LB up` was not.
+    [ "${_rd_n:-0}" -ge 2 ] && _rt="${CREDS_ROUTE_DEGRADED_TIMEOUT_SECONDS:-0.5}"
   fi
   local _h="${1:-}"
   # ⚠️ RESOLVING IS NOT ENOUGH — IT MUST RESOLVE TO *THIS* INGRESS.
@@ -1358,7 +1372,7 @@ _reach_ingress() {
   local _u; _u="$(_ing_authority)"
   local _code
   _code="$(curl -sS -o /dev/null -w '%{http_code}' \
-             --max-time "${CREDS_ROUTE_TIMEOUT_SECONDS:-${CREDS_PROBE_TIMEOUT_SECONDS:-2}}" \
+             --max-time "$_rt" \
              -H "Host: ${_h}" "http://${_u}/" 2>/dev/null || true)"
   case "$_code" in
     # 000 is curl's "the request did not complete" (connect refused, timeout, TLS abort). It is
@@ -3164,9 +3178,12 @@ printf '\n  Lab access. <not set> = this report lacks it, not the lab.\n'
 # `KUBECONFIG_UNUSABLE` both mean kubectl never reached the endpoint — one fell back to
 # localhost:8080, the other could not read its own config — so "asked, and NOTHING answered" is a
 # claim about the LAB made from a fault entirely inside this box.
-# A FUNCTION so it can be TESTED. ⚠️ CORRECTED — the suite is NOT blind: `render()` never sets CREDS_NO_PROBE,
-# `render_with_env` and `_agg_probe` default it to 0 against real listeners. The claim that the
-# probing surface is untested by construction — a round measured 127 ok BOTH BEFORE AND AFTER a
+# A FUNCTION so it can be TESTED. ⚠️ CORRECTED — the OLD text here claimed the suite sets
+# CREDS_NO_PROBE=1 at every render site, so the probing surface was untested BY CONSTRUCTION. That
+# is measurably false (`render()` never sets it; `render_with_env` and `_agg_probe` default it to 0
+# against real listeners) — and the claim ITSELF is why a round once measured 127 ok both before and
+# after a change to this very line: nobody added a rendered assertion, because this comment said one
+# was impossible.
 # change to this very line. A pure classifier can be extracted and driven with the rc classes
 # without a cluster, which is the only way this gets a demonstrated RED.
 _ssh_header_line() {   # <answered> <rc> <state> <never-asked> <answered-but-unreadable> -> the sentence

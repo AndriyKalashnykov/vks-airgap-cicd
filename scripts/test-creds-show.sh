@@ -2583,10 +2583,15 @@ while True:
     *)  ok "stale-sentinel: a leftover sentinel does NOT poison the next run" ;;
   esac
   # CONTROL: the first request really did fail, or this case is testing a healthy listener.
-  if [ "$(printf '%s' "$_cs_out" | grep -c 'silent')" -ge 1 ]; then
-    ok "coldstart: the first request really failed (at least one row reads 'silent') — the case is live"
+  # ⚠️ SCOPED TO THE INGRESS ROWS. A bare `grep -c 'silent'` over the WHOLE report matched three
+  # things that are not an ingress row: Harbor's cell (deliberately pointed at a dead port), ArgoCD's
+  # cell, and the SUMMARY LINE'S OWN PROSE ("3 silent."). Measured with the listener failing NOTHING,
+  # the control reported the case LIVE and all four assertions passed — so it could not tell "the fix
+  # works" from "the fixture never induced a failure".
+  if [ "$(printf '%s\n' "$_cs_out" | grep -E '^[[:space:]]*(Gitea|Tekton|headlamp)[[:space:]]' | grep -c 'silent')" -ge 1 ]; then
+    ok "coldstart: an INGRESS row really failed (the case is live)"
   else
-    bad "coldstart: no row reads 'silent' — the listener served everything" \
+    bad "coldstart: no INGRESS row reads 'silent' — the listener served everything" \
         "the fixture is not producing a cold start; fix the fixture, not the product"
   fi
   # THE VERDICT: rows AFTER the transient failure must be probed, and must read serving.
@@ -2620,15 +2625,18 @@ while True:
         "fix the fixture, not the product: creds.sh probably died sourcing lib/os.sh"
   fi
   # ...and that the SHORT-CIRCUIT actually occurred, or this is not the state we came to test.
-  # ⚠️ >=1, NOT >=2, AND THE REASON IS THE TWO-STRIKES CACHE. The sentinel now arms only after TWO
-  # independent failed probes, so with THREE ingress rows exactly ONE is suppressed (rows 1-2 probe
-  # and read `silent`, row 3 short-circuits). A `>=2` threshold was correct under the one-strike
-  # cache and went RED the moment that defect was fixed — a test pinned to the arithmetic of a bug.
-  if [ "$(printf '%s' "$_agg_out" | grep -c 'LB up')" -ge 1 ]; then
-    ok "aggregate-render: the _route_dead short-circuit fired (>=1 row read 'LB up')"
+  # ⚠️ THE OPPOSITE OF WHAT THIS USED TO ASSERT, and the inversion IS the fix. It required at least
+  # one row to read `LB up` — i.e. it DEMANDED that a row go UNPROBED, which is the defect itself:
+  # an un-asked row cannot contradict "NOTHING answered", so a recovering ingress read as a dead
+  # estate. Rows are now always probed (the BUDGET degrades instead), so NO row may read `LB up`
+  # here, and the denominator covers every probeable row rather than shrinking to the ones asked
+  # first. This case has now pinned the arithmetic of TWO successive defects (>=2 under the
+  # one-strike cache, >=1 under two-strike) — assert the property, never the skipping.
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'LB up')" -eq 0 ]; then
+    ok "aggregate-render: no row is SKIPPED — every ingress row was probed (none reads 'LB up')"
   else
-    bad "aggregate-render: no 'LB up' rows — the accept-then-close listener did not produce the cache" \
-        "without the short-circuit this case cannot see the CRITICAL it exists for"
+    bad "aggregate-render: a row read 'LB up', i.e. it was never probed" \
+        "an un-asked row cannot contradict the verdict — that is how a serving lab reads as OFF"
   fi
   # THE VERDICT. Rows nobody probed must not be counted as answers.
   case "$_agg_out" in
