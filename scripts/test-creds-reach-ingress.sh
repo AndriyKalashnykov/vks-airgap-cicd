@@ -155,6 +155,23 @@ ck "after a 000 the sentinel is SET (the first row still says silent)" \
    "$( ( eval "$_fn"; _ing="127.0.0.1:1"; _ing_live=1; _route_dead="$_sc"
          CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=1 _reach_ingress dead.local ) )" "silent"
 ck "the sentinel file was created" "$( [ -e "$_sc" ] && echo yes || echo no )" "yes"
+# ⚠️ TWO STRIKES, AND THIS CASE USED TO PIN THE BUG'S ARITHMETIC. It armed ONE failure and then
+# expected the next row to short-circuit — which is precisely the behaviour a round proved wrong:
+# a single TRANSIENT failure (a cold-start ingress, the documented 5-60s LB-wiring window) was
+# generalised to every later row WITHOUT PROBING, and the aggregate then reported a HEALTHY estate
+# as "Consistent with the lab being OFF". The cache now needs TWO independent failures. A test
+# written against the arithmetic of a defect goes RED when the defect is fixed, which is what
+# happened here — the product side was the correct one.
+#
+# THE COLD-START PROTECTION, asserted first because it is the property that was missing:
+ck "after ONE failure a later row is still PROBED (a transient 000 must not speak for the rest)" \
+   "$( ( eval "$_fn"; _ing="127.0.0.1:${PORT}"; _ing_live=1; _route_dead="$_sc"
+         CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _reach_ingress ok.local ) )" "serving"
+# ...and the SECOND failure is what actually arms it (the cost bound this cache exists for).
+ck "a SECOND 000 adds the second strike (this row still says silent)" \
+   "$( ( eval "$_fn"; _ing="127.0.0.1:1"; _ing_live=1; _route_dead="$_sc"
+         CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=1 _reach_ingress dead2.local ) )" "silent"
+ck "the sentinel now carries TWO strikes" "$( [ "$(wc -c < "$_sc")" -ge 2 ] && echo yes || echo no )" "yes"
 ck "a LATER row short-circuits to LB up instead of timing out again" \
    "$( ( eval "$_fn"; _ing="127.0.0.1:${PORT}"; _ing_live=1; _route_dead="$_sc"
          CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _reach_ingress ok.local ) )" "LB up"
