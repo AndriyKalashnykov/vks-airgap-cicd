@@ -9821,3 +9821,47 @@ cluster read this printer deliberately does not do for the app rows.
 
 Fix the comment FIRST (it is a false claim in a guarded file), then design the note.
 Do NOT implement the note without an idea-round: it is a new operator-facing remedy (RULE ZERO-V).
+
+## ⚪ B566 — CLOSED: a fixed `/tmp` fixture path made two parallel gate runs read each other's data
+
+A gate test reused `ci.yml`'s literal `/tmp/ci-jobs.tsv`. That path is CORRECT in the workflow — a
+GitHub runner is a fresh VM with one job in it — and unsafe in a test, where two runs in parallel
+worktrees share the one file and silently read each other's fixture. Fixed by redirecting into the
+run's own directory; the substitution is a PATH only, so the logic under test is untouched.
+
+Cited by `scripts/test-ci-pass-retry.sh:70` as "the B566 class". Row added 2026-09-11 so the
+citation resolves — it had none (B719).
+
+## ⚪ B567 — CLOSED: Tekton pulled a PUBLIC image from inside the air gap, for the life of the repo
+
+Tekton's controller injects a `place-scripts` init container from a hardcoded `-shell-image` FLAG
+STRING, so `cgr.dev/chainguard/busybox` was fetched from the public internet on every TaskRun —
+inside the air gap. The incident shape is what makes it nasty: **a public image in an INIT
+container**, which a naive "check the workload image" scan does not look at.
+
+Guarded by `scripts/97-verify-workload-images.sh` + `scripts/test-workload-images.sh` (which carries
+the init-container case explicitly). ⚠️ Its named blind spot: kaniko's `.image` is the DESTINATION it
+pushes, not the base it pulled FROM, so a public `FROM` is INVISIBLE to any run-time pod-image check
+— that half is covered at build time by `check-selfbuilt` and by the manifest host scan (B568).
+
+Row added 2026-09-11 so the citation resolves (B719).
+
+## ⚪ B568 — CLOSED: the unhandled-registry-host scanner, the BUILD-TIME half of B567
+
+`lib/hostscan.sh` scans manifests for registry hosts that nothing remaps to Harbor — the static
+counterpart to B567's run-time gate. Tested by `scripts/test-hostscan.sh`.
+
+Row added 2026-09-11 so the citation resolves (B719).
+
+## ⚪ B569 — CLOSED: `e2e-kind` pinned the ingress controller TWICE, and the second pin silently won
+
+The target carried a `$(origin INGRESS_CONTROLLER)` export AND a literal `INGRESS_CONTROLLER=istio`
+in the `$(MAKE)` goal list. A sub-make COMMAND-LINE variable outranks the caller's own command line,
+so `make e2e-kind INGRESS_CONTROLLER=traefik` silently ran **istio** — verbatim the bug the comment
+above the target claimed to have FIXED, and an inversion of the invariant at `Makefile:147`.
+
+⚠️ THE OBVIOUS RED-PROOF DOES NOT WORK, and an adversary round prescribed it anyway: `make -n`
+prints recipe TEXT while a target-specific `export` lives in the ENVIRONMENT, so the two invocations
+look identical. Guarded by `scripts/test-e2e-ingress-pin.sh`.
+
+Row added 2026-09-11 so the citation resolves (B719).
