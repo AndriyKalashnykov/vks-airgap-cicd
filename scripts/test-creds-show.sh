@@ -2426,6 +2426,11 @@ while True:
     sleep 1
     # every host RESOLVES TO THE INGRESS, so the DNS arms cannot short-circuit and the route probe
     # is genuinely reached — without this the rows would be `stale DNS` and prove nothing here.
+    # ⚠️ SC2016 IS CORRECT AND DELIBERATE, exactly as in the sibling fixture above: `$2` is the
+    # STUB's positional, written LITERALLY into the file being generated — expanding it here would
+    # bake THIS shell's $2 into the stub. The disable scopes to the NEXT COMMAND, and the
+    # `{ … } > file` compound IS one command, so it must sit immediately above it.
+    # shellcheck disable=SC2016
     { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
     chmod +x "$t/bin/getent"
     # ⚠️ HARBOR POINTS AT THE SAME DEAD LISTENER, and that is not tidiness. My first version used
