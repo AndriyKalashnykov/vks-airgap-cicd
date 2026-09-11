@@ -2474,6 +2474,80 @@ while True:
     printf '%s' "$out"
     rm -rf "$t"
   }
+  # ── THE MIXED STATE: some rows serving, some 5xx — B731's own measured state ────────────────────
+  # ⚠️ THIS STATE HAD ZERO COVERAGE, and it is the one B731 was filed for: 10 serving + 2 `no
+  # backend` on the live lab, with `grep -cE 'build-apps|run the pipeline|still starting'` = 0 over
+  # the whole render. The remedy sentence EXISTED but was guarded on `_reach_ok == 0`, so ten serving
+  # rows suppressed the only line that explains a 5xx. A gating defect, not a missing feature.
+  _mixed_probe() {
+    local t p lp out
+    trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    local dp
+    dp="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # The first TWO vhost requests get 503 (route rendered, nothing healthy behind it); the rest 200.
+    # shellcheck disable=SC2016
+    python3 -c '
+import socket,sys
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(64); seen=0
+while True:
+    try:
+        c,_=s.accept(); c.settimeout(0.4)
+        try: req=c.recv(400)
+        except Exception: req=b""
+        if not req: c.close(); continue
+        if b"vks.local" in req:
+            seen+=1
+            if seen<=2:
+                c.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 3\r\n\r\nnope"); c.close(); continue
+        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); c.close()
+    except Exception: break
+' "$p" >/dev/null 2>&1 &
+    lp=$!
+    sleep 1
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$dp" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _mx_out="$(_mixed_probe)"
+  # CONTROL: the state really is MIXED — some serving AND some 5xx — or nothing below discriminates.
+  if [ "$(printf '%s\n' "$_mx_out" | grep -E '^  [A-Za-z]' | grep -c 'no backend')" -ge 1 ] \
+     && [ "$(printf '%s\n' "$_mx_out" | grep -E '^  [A-Za-z]' | grep -c 'serving')" -ge 1 ]; then
+    ok "mixed: the fixture produced BOTH serving and 'no backend' rows (the case is live)"
+  else
+    bad "mixed: the fixture is not mixed — it cannot discriminate" \
+        "fix the fixture, not the product"
+  fi
+  # THE VERDICT: the 5xx explanation must survive the presence of serving rows.
+  if [ "$(printf '%s' "$_mx_out" | grep -c 'answered but served nothing: the route IS rendered')" -ge 1 ]; then
+    ok "mixed: a 5xx is EXPLAINED even when other rows are serving (the gating defect is gone)"
+  else
+    bad "mixed: the 5xx rows carry no explanation because other rows are serving" \
+        "the remedy is guarded on _reach_ok == 0, so the common mixed case is silenced"
+  fi
+  # ...and it must say only what a 5xx PROVES — the arm is 5??, so a 500 from a LIVE app lands here.
+  case "$_mx_out" in
+    *'build-apps'*|*'run the pipeline'*)
+      bad "mixed: it prescribes building/running the pipeline for a 5xx" \
+          "the trigger cannot occur (install-all ends with build-apps) and it is false for a 500" ;;
+    *)  ok "mixed: it does NOT prescribe a build — the remedy hangs off what the reader observes" ;;
+  esac
+  # THE LEGEND: the term must be defined where it appears, and nowhere else.
+  if [ "$(printf '%s' "$_mx_out" | grep -c 'no backend = the route is rendered')" -ge 1 ]; then
+    ok "mixed: 'no backend' is DEFINED for the reader when a row uses it"
+  else
+    bad "mixed: 'no backend' appears in the table with no definition anywhere in the render" \
+        "4 of 8 producer values reached the operator with no reader-facing meaning"
+  fi
+
   # ── POWERED OFF: TCP REFUSED, and this is where the STRONG claim belongs ───────────────────────
   # ⚠️ MEASURABLY DISJOINT from the hung shape above, and that fact is what makes the confirmation
   # affordable: `_ing_live=0` short-circuits every row to `silent` BEFORE any curl, so a powered-off
@@ -2681,7 +2755,11 @@ while True:
   # here, and the denominator covers every probeable row rather than shrinking to the ones asked
   # first. This case has now pinned the arithmetic of TWO successive defects (>=2 under the
   # one-strike cache, >=1 under two-strike) — assert the property, never the skipping.
-  if [ "$(printf '%s' "$_agg_out" | grep -c 'LB up')" -eq 0 ]; then
+  # ⚠️ SCOPED TO THE TABLE ROWS. A bare `grep -c 'LB up'` over the whole render also matches the
+  # LEGEND line that now DEFINES the term — so adding the definition reddened this case for a reason
+  # that had nothing to do with a row being skipped. A service row starts with two spaces and a name;
+  # the legend lines are indented four. Same class as the cold-start control below.
+  if [ "$(printf '%s\n' "$_agg_out" | grep -E '^  [A-Za-z]' | grep -c 'LB up')" -eq 0 ]; then
     ok "aggregate-render: no row is SKIPPED — every ingress row was probed (none reads 'LB up')"
   else
     bad "aggregate-render: a row read 'LB up', i.e. it was never probed" \

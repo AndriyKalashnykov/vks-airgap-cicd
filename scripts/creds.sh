@@ -1437,8 +1437,7 @@ _reach_argocd() {
 #   * post-`install-all` (⚠️ NOT because it "builds no app image" — that clause is RETRACTED, see
 #     _reach_ingress's 503 arm: Makefile:1076 ends install-all with `build-apps`): six app rows read `no backend` — a 503,
 #     i.e. the route is RENDERED and a server REPLIED — under "0 of 11 — NOTHING answered", printed
-#     28 lines beneath the six cells that say otherwise. `_reach_ingress`'s own comment calls that
-#     state THE NORMAL ONE after an install.
+#     28 lines beneath the six cells that say otherwise.
 #
 # AND THE DENOMINATOR IS NOT "EVERY ROW". A row where no probe ever reached a service — no ingress
 # address recorded, no URL configured, a name that does not resolve, CREDS_NO_PROBE — is not a
@@ -2452,6 +2451,31 @@ fi
 # Only a real push discriminates a Harbor robot (CLAUDE.md, "THREE HARBOR AUTH CHECKS THAT DO NOT
 # DISCRIMINATE"); `make env-validate` cannot judge one at all (B715).
 printf '\n  Reachable = the address answered — NOT that the credential works. Nothing here is auth-tested.\n'
+# ⚠️ THE CELLS THAT HAVE NO MEANING WITHOUT THIS LINE. A round counted them: of the EIGHT strings the
+# producers emit, FOUR reached the operator's table with NO reader-facing definition anywhere in the
+# render — `no backend`, `no route`, `HTTP <n>` and `LB up`. `serving` / `silent` / `no DNS here` /
+# `stale DNS` were explained; these were not. Defining a term you invented is not the same as
+# explaining a cause, and silence about an undefined word is not defensible the way silence about a
+# cause can be. This also covers `no route`, which — unlike a 5xx — does NOT clear itself.
+# ⚠️ ONLY THE CELLS THAT ACTUALLY APPEAR. Defining four terms on a lab where all twelve rows read
+# `serving` is advice attached to a CATEGORY, not to a finding — the shape this repo's own rules
+# forbid, and it pushes the numbers the reader came for further down. Derived from the rendered
+# rows, so a cell can never appear without its definition and a definition can never appear without
+# its cell. ⚠️ Match the ROWS, not the whole render: these very lines contain the terms, and a
+# whole-render grep made an existing assertion match the legend instead of a row.
+_legend_rows="$(printf '%s\n' "$rows" | cut -f5)"
+case "$_legend_rows" in *'no backend'*)
+  printf '    no backend = the route is rendered and something replied, but it did not serve a page.\n' ;;
+esac
+case "$_legend_rows" in *'no route'*)
+  printf '    no route   = the ingress does not know that hostname (a rendering or attach fault).\n' ;;
+esac
+case "$_legend_rows" in *'LB up'*)
+  printf '    LB up      = the load balancer answered; this report could not ask about that route.\n' ;;
+esac
+case "$_legend_rows" in *'HTTP '*)
+  printf '    HTTP <n>   = it replied with a status this report does not classify.\n' ;;
+esac
 # ⚠️ HERE, NOT IN THE Context BLOCK: the rows do not exist when Context prints (`add_row` runs ~300
 # lines later), so the count cannot be computed up there. This sits with the legend that DEFINES the
 # column, which is where the reader is already being told what it means.
@@ -2550,9 +2574,31 @@ if [ "${_reach_total:-0}" -gt 0 ]; then
     # STALE DNS — whose remedy is the /etc/hosts line printed ~30 lines ABOVE and which the
     # disjunction excluded. `_reach_class`'s own header says "the fix is the /etc/hosts line above,
     # not anything in the cluster"; the sentence contradicted its own rationale.
-    if [ "${_reach_ok:-0}" -eq 0 ] && [ "${_reach_half:-0}" -gt 0 ]; then
-      printf '             Something IS answering, so the estate is not off — it is either still coming\n'
-      printf '             up or its backends are not running yet.\n'
+    # ⚠️ THE `_reach_ok == 0` CONJUNCT WAS A GATING DEFECT, and it is why B731 measured ZERO
+    # remedy text on a live lab. The state there was 10 serving + 2 `no backend`, so `_reach_ok=10`
+    # suppressed the only sentence that explains a 5xx. And the conjunct never did the job its
+    # comment claims: the stale-DNS state it cites has `_reach_half == 0`, so `_reach_half > 0`
+    # ALONE already excluded it. It only ever suppressed the MIXED case — the common one.
+    if [ "${_reach_half:-0}" -gt 0 ]; then
+      if [ "${_reach_ok:-0}" -eq 0 ]; then
+        # All-down: "the estate is not off" is TRUE and load-bearing here.
+        printf '             Something IS answering, so the estate is not off — it is either still coming\n'
+        printf '             up or its backends are not running yet.\n'
+      else
+        # ⚠️ MIXED, AND IT MUST SAY ONLY WHAT A 5xx PROVES. The producer arm is `5??`, not `503`, so
+        # a 500 from a LIVE app lands here too — "the backend is not running" would be false for it,
+        # and so would "run the pipeline". What is true across 500/502/503/504 is: the route is
+        # rendered, something replied, it did not serve a page.
+        # ⚠️ AND THE REMEDY HANGS OFF AN OBSERVATION THE READER MAKES, not off a category. Both
+        # rounds refused an unconditional `make build-apps`: its stated trigger cannot occur
+        # (Makefile:1076 ends install-all with build-apps) and the cause measured on the live lab
+        # was neither — the pods were still starting and cleared themselves ~3 minutes later.
+        printf '             %s answered but served nothing: the route IS rendered and the app behind it\n' "$_reach_half"
+        printf '             did not serve a page. Its namespace is the name in the Service column:\n'
+        printf '                 kubectl -n <app> get pods\n'
+        printf '             no pods there at all -> nothing has been deployed yet; pods not Ready -> they\n'
+        printf '             are starting or failing, and the pod'"'"'s own status says which.\n'
+      fi
     fi
     if [ "${_reach_dns:-0}" -gt 0 ]; then
       printf '             The unresolvable ones need the /etc/hosts line above, not a cluster change.\n'
