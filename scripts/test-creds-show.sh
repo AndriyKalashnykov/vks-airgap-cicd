@@ -2474,6 +2474,55 @@ while True:
     printf '%s' "$out"
     rm -rf "$t"
   }
+  # ── POWERED OFF: TCP REFUSED, and this is where the STRONG claim belongs ───────────────────────
+  # ⚠️ MEASURABLY DISJOINT from the hung shape above, and that fact is what makes the confirmation
+  # affordable: `_ing_live=0` short-circuits every row to `silent` BEFORE any curl, so a powered-off
+  # lab writes ZERO strikes and never reaches the degraded path. MEASURED: powered off -> 9 rows
+  # silent, 0 strikes, 0.3s; hung LB -> 9 rows silent, 9 strikes, 7.6s.
+  _off_probe() {
+    local t out
+    trap 'rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    # bind, read the port, CLOSE it: nothing listens, so connections are REFUSED.
+    local p dp
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    dp="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$dp" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _off_out="$(_off_probe)"
+  if [ "$(printf '%s' "$_off_out" | grep -c 'Reachable = the address answered')" -ge 1 ]; then
+    ok "powered-off: the fixture rendered a real report (the case is live)"
+  else
+    bad "powered-off: the fixture rendered NO report — it cannot discriminate anything" \
+        "fix the fixture, not the product"
+  fi
+  case "$_off_out" in
+    *'NOTHING answered on this run'*)
+      ok "powered-off: a REFUSED port gets the strong claim (this is what it exists for)" ;;
+    *)  bad "powered-off: the strong claim was withheld from a genuinely refused port" \
+            "the confirmation must never reach this path — a refused lab writes ZERO strikes" ;;
+  esac
+  if [ "$(printf '%s' "$_off_out" | grep -c 'needs the lab')" -ge 1 ]; then
+    ok "powered-off: the precondition FIRES — every remedy needs an estate that answers"
+  else
+    bad "powered-off: the precondition is ABSENT on a genuinely refused port" \
+        "this is the regression five rounds were spent preventing"
+  fi
+  # ...and it must be CHEAP: no curl runs at all, so this path cannot pay the confirmation's cost.
+  if [ "$(printf '%s' "$_off_out" | grep -c 'probed on a SHORTENED')" -eq 0 ]; then
+    ok "powered-off: no row was degraded, so the confirmation never ran (0 strikes)"
+  else
+    bad "powered-off: rows were degraded on a REFUSED port" \
+        "degradation must be disjoint from powered-off, or the confirmation costs on the wrong path"
+  fi
+
   # ── THE COLD-START CASE: the CRITICAL, in the direction that cannot be seen by classifying cells ──
   # A round measured that a ONE-strike `_route_dead` cache makes a HEALTHY ingress report
   # "0 of 3 — NOTHING answered ... Consistent with the lab being OFF", because one transient failure
@@ -2638,20 +2687,30 @@ while True:
     bad "aggregate-render: a row read 'LB up', i.e. it was never probed" \
         "an un-asked row cannot contradict the verdict — that is how a serving lab reads as OFF"
   fi
-  # THE VERDICT. Rows nobody probed must not be counted as answers.
+  # ⚠️ THIS FIXTURE IS THE **HUNG** SHAPE (accepts TCP, never replies), NOT powered-off — and the
+  # two assertions that used to live here demanded the STRONG claim ("NOTHING answered ... lab being
+  # OFF") for it. That was pinning the old behaviour: a hung LB writes strikes, so its rows are
+  # measured on a SHORTENED budget, and a shortened-budget silence does not entitle the report to
+  # say the estate is off (a healthy backend merely slower than that budget produces it). The hung
+  # shape already has its OWN dedicated banner — "accepts TCP connections but completed no HTTP
+  # request" — so the strong claim is not the sole carrier here.
+  # The POWERED-OFF case is asserted separately below, against a REFUSED port, because that is the
+  # state the strong claim exists for and it is measurably disjoint from this one (0 strikes).
   case "$_agg_out" in
+    *'probed on a SHORTENED'*)
+      ok "aggregate-render: a hung ingress does NOT get the strong claim — it names the shortened budget" ;;
     *'NOTHING answered on this run'*)
-      ok "aggregate-render: a wholly-unresponsive ingress reports NOTHING answered" ;;
+      bad "aggregate-render: a hung ingress is declared OFF on shortened-budget evidence" \
+          "a backend merely slower than the degraded budget produces the same silence" ;;
     *)
-      bad "aggregate-render: an ingress that served nothing is reported as having answered" \
+      bad "aggregate-render: neither sentence printed for a hung ingress" \
           "got: $(printf '%s' "$_agg_out" | grep -m1 'reachable:' | tr -d '\n')" ;;
   esac
-  # ...AND THE COUPLING, which is the whole reason this fixture exists.
-  if [ "$(printf '%s' "$_agg_out" | grep -c 'needs the lab')" -ge 1 ]; then
-    ok "aggregate-render: the powered-off precondition FIRES when nothing answered"
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'needs the lab')" -eq 0 ]; then
+    ok "aggregate-render: the powered-off precondition is WITHHELD on shortened-budget evidence"
   else
-    bad "aggregate-render: the precondition block is ABSENT while nothing answered" \
-        "every remedy this report prints then needs an estate it just showed to be unresponsive"
+    bad "aggregate-render: the precondition fired on shortened-budget evidence" \
+        "that is the false-OFF class: five refuted fixes moved a threshold instead of gating the claim"
   fi
   # ⚠️ AND THE HOIST: HARBOR_INSECURE=1 means NO row carries a cert marker, so the untrusted-cert
   # block is absent. The precondition used to be NESTED INSIDE that block and therefore vanished in

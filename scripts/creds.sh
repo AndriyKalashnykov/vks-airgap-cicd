@@ -55,7 +55,7 @@ _no_probe_snapshot="${CREDS_NO_PROBE:-0}"
 # ⚠️ _ssh_verr ADDED 2026-09-05. It was MY OWN leak, and it is precisely the class this trap was
 # introduced for (the pre-existing _argo_err mktemp leaked on every error path): any death between
 # its mktemp and its rm left a temp file per run.
-trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" "${_h_err:-}" "${_route_dead:-}" 2>/dev/null || true' EXIT
+trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" "${_h_err:-}" "${_route_dead:-}" "${_route_degraded:-}" 2>/dev/null || true' EXIT
 
 # B528/F3 — the route probe's COST BOUND. Every ingress row targets the SAME LB, so once one HTTP
 # probe fails to complete, the remaining eight will too — and each costs a full timeout.
@@ -70,6 +70,11 @@ trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" "${_h_err:-}" "${_
 # arming the cache before row 1 so every ingress row goes un-probed. An unpredictable, freshly
 # created path removes the class instead of guarding it. The EXIT trap already removes it.
 _route_dead="$(mktemp "${TMPDIR:-/tmp}/.creds-route-dead.XXXXXX" 2>/dev/null || printf '')"
+# The hosts that were probed on the DEGRADED budget and came back silent. A file, for the same
+# reason as `_route_dead`: `_reach_ingress` runs inside $( ), a SUBSHELL, so an assignment there is
+# discarded. This is what the confirmation below re-probes, and it is why the confirmation can be
+# BOUNDED — it never has to guess which host to ask.
+_route_degraded="$(mktemp "${TMPDIR:-/tmp}/.creds-route-degraded.XXXXXX" 2>/dev/null || printf '')"
 
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
@@ -1380,7 +1385,15 @@ _reach_ingress() {
     # reads as a status a server returned. Nothing answered; that is `silent`, the same word the
     # LB-down arm above uses. Caught by test-creds-reach-ingress.sh, not by review.
     # APPEND, never truncate: the byte count IS the strike count (see the two-strikes gate above).
-    ''|000|*[!0-9]*) printf '.' >> "${_route_dead:-/dev/null}" 2>/dev/null || true; printf 'silent' ;;
+    ''|000|*[!0-9]*)
+      printf '.' >> "${_route_dead:-/dev/null}" 2>/dev/null || true
+      # ⚠️ RECORD IT WHEN THE BUDGET WAS SHORTENED. A `silent` measured on a DEGRADED budget is
+      # WEAKER EVIDENCE than one measured on the full budget — a healthy backend merely slower than
+      # the degraded value produces it. The confirmation below re-probes exactly these hosts, which
+      # is what lets it be bounded instead of guessing which of nine to ask.
+      [ "$_rt" = "${CREDS_ROUTE_DEGRADED_TIMEOUT_SECONDS:-0.5}" ] && \
+        printf '%s\n' "$_h" >> "${_route_degraded:-/dev/null}" 2>/dev/null || true
+      printf 'silent' ;;
     2??|3??)     printf 'serving' ;;
     # 401/403 proves MORE than a 200 would about the thing this row is about: the route resolved
     # AND a live app answered AND it wants the credential printed beside it. Filing that under the
@@ -2450,11 +2463,59 @@ _reach_nothing=0
 if [ "${_reach_total:-0}" -gt 0 ]; then
   # "NOTHING answered" must mean NOTHING answered — in ANY bucket. Gating it on `serving` alone
   # printed it over six `no backend` cells (a 503 IS a reply) and over eight `LB up` ones.
-  if [ "${_reach_ok:-0}" -eq 0 ] && [ "${_reach_half:-0}" -eq 0 ] && [ "${_reach_dns:-0}" -eq 0 ]; then
+  # ⚠️ THE STRONG CLAIM IS GATED ON EVIDENCE QUALITY, NOT ON A TIMEOUT VALUE — and that distinction
+  # is what five refuted attempts were missing. Each of those moved a threshold; any threshold V
+  # makes every healthy backend slower than V read `silent` (a cold JVM after a rollout is routinely
+  # >1s), so the false "Consistent with the lab being OFF" simply reappeared at the new boundary.
+  #
+  # 🔴 THE FACT THAT MAKES THIS AFFORDABLE: A POWERED-OFF LAB WRITES ZERO STRIKES. `_ing_live=0`
+  # (TCP refused) short-circuits every row to `silent` BEFORE any curl. MEASURED: powered off -> 9
+  # rows silent, 0 strikes; hung LB -> 9 rows silent, 9 strikes, 7616ms. So degradation is DISJOINT
+  # from powered-off: this confirmation costs NOTHING on the powered-off path and therefore CANNOT
+  # suppress the precondition — the failure mode that killed the `_reach_suppressed` proposal.
+  #
+  # ⚠️ AND IT RE-PROBES THE RECORDED HOSTS, NOT AN ARBITRARY ONE. A single-host confirmation was
+  # measured to relocate the defect rather than remove it: with 3 infra hosts hung and 6 app hosts
+  # healthy, confirming on `gitea` printed the false OFF while confirming on `javawebapp` withheld
+  # it — same lab, same instant, opposite verdicts from an arbitrary choice. Stop at the FIRST
+  # answer and CAP at K: K bounds what we spend before admitting we do not know; it decides nothing
+  # about the claim's TRUTH.
+  _deg_n=0
+  [ -s "${_route_degraded:-/nonexistent}" ] && _deg_n="$(grep -c . "${_route_degraded}" 2>/dev/null || printf 0)"
+  _confirm_answered=0 _confirm_tried=0
+  if [ "${_reach_ok:-0}" -eq 0 ] && [ "${_reach_half:-0}" -eq 0 ] && [ "${_reach_dns:-0}" -eq 0 ] \
+     && [ "${_deg_n:-0}" -gt 0 ]; then
+    _cap="${CREDS_CONFIRM_MAX_HOSTS:-3}"
+    while IFS= read -r _ch; do
+      [ -n "$_ch" ] || continue
+      [ "$_confirm_tried" -ge "$_cap" ] && break
+      _confirm_tried=$((_confirm_tried + 1))
+      _cc="$(curl -sS -o /dev/null -w '%{http_code}' \
+               --max-time "${CREDS_ROUTE_TIMEOUT_SECONDS:-${CREDS_PROBE_TIMEOUT_SECONDS:-2}}" \
+               -H "Host: ${_ch}" "http://$(_ing_authority)/" 2>/dev/null || true)"
+      case "$_cc" in ''|000|*[!0-9]*) : ;; *) _confirm_answered=1; break ;; esac
+    done < "${_route_degraded}"
+  fi
+  if [ "${_reach_ok:-0}" -eq 0 ] && [ "${_reach_half:-0}" -eq 0 ] && [ "${_reach_dns:-0}" -eq 0 ] \
+     && [ "${_deg_n:-0}" -eq 0 ]; then
     _reach_nothing=1
     printf '  reachable: 0 of %s — NOTHING answered on this run, on either the guest ingress or the\n' "$_reach_total"
     printf '             Supervisor services. Consistent with the lab being OFF; this report cannot\n'
     printf '             tell "off" from "still booting" or "not reachable from here".\n'
+  elif [ "${_reach_ok:-0}" -eq 0 ] && [ "${_reach_half:-0}" -eq 0 ] && [ "${_reach_dns:-0}" -eq 0 ]; then
+    # Everything read silent, but %s of those were measured on a SHORTENED budget, so this run is
+    # NOT entitled to say the estate is off. Say what is true instead.
+    printf '  reachable: 0 of %s answered — but %s row(s) were probed on a SHORTENED %ss budget after\n' \
+      "$_reach_total" "$_deg_n" "${CREDS_ROUTE_DEGRADED_TIMEOUT_SECONDS:-0.5}"
+    printf '             the ingress had already failed twice, so a backend that is merely SLOWER than\n'
+    printf '             that reads silent here. This run cannot tell that from an estate being off.\n'
+    if [ "${_confirm_answered:-0}" = 1 ]; then
+      printf '             ...and a re-check at the full budget DID get an answer, so something IS up:\n'
+      printf '             the shortened budget hid it. Re-run, or raise CREDS_ROUTE_DEGRADED_TIMEOUT_SECONDS.\n'
+    else
+      printf '             A re-check of %s of them at the full budget got nothing either — so it may\n' "$_confirm_tried"
+      printf '             genuinely be down, but this run did not prove it. Re-run to confirm.\n'
+    fi
   elif [ "${_reach_ok}" -eq "${_reach_total}" ]; then
     printf '  reachable: %s of %s — everything probed is serving.\n' "$_reach_ok" "$_reach_total"
   else

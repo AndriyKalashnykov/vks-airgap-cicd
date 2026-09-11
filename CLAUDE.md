@@ -1093,17 +1093,39 @@ That swing IS the tell (`agents.md`) that the question was under-determined by t
 | `skip` | a **HEALTHY** ingress reads as dead: *"Consistent with the lab being OFF"* |
 
 **NO CLASSIFICATION COULD BE RIGHT.** A dead ingress and a cold-start ingress emit **identical
-cells** under the old cache, so the information was not there to classify. Both fixes were attempts
-to classify away a defect in the MEASUREMENT. The answer was a FOURTH thing: `_route_dead` now
-requires **TWO** independent failed probes before one row speaks for the rest. Measured both ways —
-cold-start now reads `2 of 5 serving`, genuinely-dead still fires the precondition, and the listener
-log proves the one-strike version never issued requests 3 and 4.
+cells**, so the information was not there to classify. Every fix that tried to classify it away was
+refuted — **FIVE rounds, five refutations**, and the sequence is the lesson:
 
-⚠️ **I DECLINED THE ROUND'S OWN PRESCRIPTION** (a `_reach_suppressed` guard) and recorded why: it
-reintroduces the CRITICAL the SAME reviewer found one round earlier, because a dead ingress also
-produces `suppressed>0`. An adversary's FIX is a separate claim from its FINDING.
+| attempt | refuted because |
+|---|---|
+| `LB up` = `answered` | a DEAD ingress read as alive; the powered-off precondition VANISHED |
+| `LB up` = `skip` | a HEALTHY ingress read as dead |
+| a `_reach_suppressed` guard | I declined it; the round later agreed (a dead ingress also has suppressed>0) |
+| TWO strikes before skipping | MOVED the boundary; my fixture failed exactly ONE request, "calibrated to the threshold it validates" |
+| degrade the budget, never skip | the false OFF returns at ANY backend slower than the degraded value — a CLIFF (7 of 9 -> 0), because a degraded failure writes ANOTHER strike |
+| a single-host confirmation probe | relocates the class to WHICH HOST you pick: 3 infra hung + 6 apps healthy -> confirm on `gitea` = false OFF, on `javawebapp` = withheld |
 
-The first CRITICAL, kept because it is the one that bites hardest:
+⚠️ **DO NOT PROPOSE A THRESHOLD. No fixed value is the lever** — any V makes every healthy backend
+slower than V read `silent`, and a cold JVM after a rollout is routinely >1s.
+
+🔴 **THE FACT THAT RESOLVES IT, and it took five rounds to surface: A POWERED-OFF LAB WRITES ZERO
+STRIKES.** `_ing_live=0` (TCP refused) short-circuits every row to `silent` BEFORE any curl.
+Measured: powered off -> 9 rows silent, **0 strikes**; hung LB -> 9 rows silent, **9 strikes**,
+7616ms. So degradation is **DISJOINT** from powered-off. A confirmation therefore costs NOTHING on
+the powered-off path and CANNOT suppress the precondition — which is why gating the strong claim on
+EVIDENCE QUALITY works where five threshold tweaks did not.
+
+The endorsed shape: no row degraded -> claim as today; degraded AND all silent -> re-probe the
+degraded-silent rows at full budget, **stop at the first answer, cap K=3** (+6s -> 15.6s, under the
+18.1s bound, correct on both measured false-OFF states); all K fail -> print the weaker TRUE
+sentence naming the degradation, not the strong claim. **No threshold decides the claim's TRUTH;
+K only bounds what you spend before admitting you do not know.**
+
+⚠️ **STATUS: the K=3 design is ENDORSED and NOT YET IMPLEMENTED at the time of writing.** The tree
+carries the degrade-only version, which still has the CRITICAL above.
+
+The FIRST CRITICAL, kept as history — ⚠️ its mechanism (`LB up`, the short-circuit) NO LONGER
+EXISTS in the tree; read it as the origin of the arc, not as current behaviour:
 
 > `_route_dead` is a **PERFORMANCE CACHE** — the first ingress row whose route curl returns 000
 > writes a sentinel and every later row short-circuits to `LB up` **without probing**. Classing
