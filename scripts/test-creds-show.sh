@@ -2396,6 +2396,101 @@ else
       "the header then prints 'read live.' above a cell that contradicts it"
 fi
 
+# ══ THE AGGREGATE, RENDERED END-TO-END THROUGH THE REAL creds.sh ══════════════════════════════════
+# ⚠️ THIS IS THE HALF THE FALSE COMMENT (corrected below) SUPPRESSED. Driving `_reach_class` proves
+# the classifier; it does NOT prove the counting loop, the band assembly, or — the one that matters
+# — the `_reach_nothing` -> PRECONDITION coupling. A round found the session's CRITICAL by rendering
+# through a fixture exactly like this one, and all three of its render-only findings lived here.
+#
+# THE FIXTURE IS THE POINT: a listener that ACCEPTS TCP AND CLOSES. `_ing_live` (a bare TCP connect)
+# passes, so the rows are not `silent` for the trivial reason; the first row's route curl then gets
+# 000, writes the `_route_dead` sentinel, and EVERY LATER ROW SHORT-CIRCUITS TO `LB up` WITHOUT
+# PROBING. That is the exact shape in which classing `LB up` as an ANSWER made a wholly-dead ingress
+# report "Something IS answering, so the estate is not off" and DELETED the precondition block.
+if command -v python3 >/dev/null 2>&1; then
+  _agg_probe() {   # -> the whole rendered report, against an accept-then-close listener
+    local t p lp out
+    trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # accept, close immediately, never speak HTTP -> TCP up, every request 000
+    python3 -c '
+import socket,sys
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(64)
+while True:
+    try: c,_=s.accept(); c.close()
+    except Exception: break
+' "$p" >/dev/null 2>&1 &
+    lp=$!
+    sleep 1
+    # every host RESOLVES TO THE INGRESS, so the DNS arms cannot short-circuit and the route probe
+    # is genuinely reached — without this the rows would be `stale DNS` and prove nothing here.
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    # ⚠️ HARBOR POINTS AT THE SAME DEAD LISTENER, and that is not tidiness. My first version used
+    # `HARBOR_URL=10.0.0.1` (copied from the sibling fixture, where Harbor's verdict is irrelevant)
+    # and the row rendered `serving` — SOMETHING ON THIS BOX ANSWERS 10.0.0.1, so `_reach_ok` was 1
+    # and the "NOTHING answered" assertion failed for a reason that had nothing to do with the
+    # product. A fixture whose verdict depends on the developer's routing table is not a fixture.
+    # Aiming it at the accept-then-close listener makes every row deterministic.
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$p" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _agg_out="$(_agg_probe)"
+  # THE CONTROL FIRST: if the fixture did not actually render a report, every assertion below is
+  # vacuous — and a creds.sh that dies while sourcing prints ZERO lines, which is indistinguishable
+  # from "the block is gone" (this suite has been fooled that way before).
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'Reachable = the address answered')" -ge 1 ]; then
+    ok "aggregate-render: the fixture rendered a real report (the case is live)"
+  else
+    bad "aggregate-render: the fixture rendered NO report — it cannot discriminate anything" \
+        "fix the fixture, not the product: creds.sh probably died sourcing lib/os.sh"
+  fi
+  # ...and that the SHORT-CIRCUIT actually occurred, or this is not the state we came to test.
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'LB up')" -ge 2 ]; then
+    ok "aggregate-render: the _route_dead short-circuit fired (>=2 rows read 'LB up')"
+  else
+    bad "aggregate-render: no 'LB up' rows — the accept-then-close listener did not produce the cache" \
+        "without the short-circuit this case cannot see the CRITICAL it exists for"
+  fi
+  # THE VERDICT. Rows nobody probed must not be counted as answers.
+  case "$_agg_out" in
+    *'NOTHING answered on this run'*)
+      ok "aggregate-render: a wholly-unresponsive ingress reports NOTHING answered" ;;
+    *)
+      bad "aggregate-render: an ingress that served nothing is reported as having answered" \
+          "got: $(printf '%s' "$_agg_out" | grep -m1 'reachable:' | tr -d '\n')" ;;
+  esac
+  # ...AND THE COUPLING, which is the whole reason this fixture exists.
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'needs the lab')" -ge 1 ]; then
+    ok "aggregate-render: the powered-off precondition FIRES when nothing answered"
+  else
+    bad "aggregate-render: the precondition block is ABSENT while nothing answered" \
+        "every remedy this report prints then needs an estate it just showed to be unresponsive"
+  fi
+  # ⚠️ AND THE HOIST: HARBOR_INSECURE=1 means NO row carries a cert marker, so the untrusted-cert
+  # block is absent. The precondition used to be NESTED INSIDE that block and therefore vanished in
+  # exactly this configuration, while the DNS advice and the `re-check:` register still printed.
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'untrusted cert')" -eq 0 ]; then
+    ok "aggregate-render: no cert block here (HARBOR_INSECURE=1) — so the precondition above is NOT nested in it"
+  else
+    bad "aggregate-render: a cert block rendered under HARBOR_INSECURE=1" \
+        "the hoist assertion above is then vacuous — it cannot tell nested from hoisted"
+  fi
+  # NEGATIVE: it must not claim the estate is alive off un-probed rows.
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'the estate is not off')" -eq 0 ]; then
+    ok "aggregate-render: it does NOT claim the estate is alive on the strength of un-probed rows"
+  else
+    bad "aggregate-render: 'the estate is not off' printed for an ingress that answered nothing" \
+        "a memoised 'we did not ask' is being read as an answer"
+  fi
+fi
+
 # ══ THE REACHABILITY AGGREGATE: ITS CLASSIFIER, WHICH THE SUITE COULD NOT REACH AT ALL ════════════
 # ⚠️ CORRECTED — THE SENTENCE THAT WAS HERE WAS MEASURED FALSE, AND IT WAS THE THING KEEPING THE
 # GAP OPEN. It claimed "EVERY RENDER SITE IN THIS FILE SETS CREDS_NO_PROBE=1, so the counting loop's

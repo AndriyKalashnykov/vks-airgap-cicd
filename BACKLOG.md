@@ -9756,6 +9756,7 @@ before quoting it again.
 
 **Grade:** `measured` (impl-round on #1250, product-tier: real `creds.sh` driven by a loopback
 listener and a `getent` stub, `/etc/hosts` semantics in `debian:12` under podman).
+
 ## ⚪ B730 — CLOSED BY #<pr>: `LB up` was classed as an ANSWER, which SUPPRESSED the powered-off warning
 
 Filed 2026-09-11 as "the `LB up` / `silent` split is an artifact of ROW ORDER" — true, and it
