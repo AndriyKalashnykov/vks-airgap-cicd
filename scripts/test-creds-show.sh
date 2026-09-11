@@ -2266,13 +2266,34 @@ _pwsrc="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh")"
 # is also how the variable is DECLARED, so deleting the withdrawal left the case GREEN. It could not
 # tell the fix from its own initialiser. Extract the arm and look inside it.
 _arm124="$(printf '%s' "$_pwsrc" | awk '/_argo_rc:-0.*=.*124/{p=1} p{print} p&&/^  fi$/{exit}')"
-case "$_arm124" in
-  *'_pw_unset_argo=0'*)
-    ok "pw-note: the rc=124 correction withdraws ArgoCD's contribution to the note" ;;
-  *)
-    bad "pw-note: a cell corrected downstream still arms the overlay note" \
-        "the note then blames the overlay for a value the cell says OUR OWN cap prevented reading" ;;
-esac
+# ⚠️ LINE-ANCHORED, because `$_pwsrc` strips only FULL-LINE comments (`^[[:space:]]*#`). A substring
+# match is satisfied by a TRAILING comment: a round DELETED the withdrawal, left the token in a
+# `# ... _pw_unset_argo=0 ...` note on a code line, and the suite reported 136 ok / 0 FAIL over the
+# defect this case exists for. The assignment must be the WHOLE line.
+if printf '%s\n' "$_arm124" | grep -qE '^[[:space:]]*_pw_unset_argo=0[[:space:]]*$'; then
+  ok "pw-note: the rc=124 correction withdraws ArgoCD's contribution to the note"
+else
+  bad "pw-note: a cell corrected downstream still arms the overlay note" \
+      "the note then blames the overlay for a value the cell says OUR OWN cap prevented reading"
+fi
+# ...and so does EVERY other site that REPLACES `_unset_pw`'s marker. A round found the withdrawal
+# was 1 of 4 arms: the `_have_sink` branch (whose every case says "could not read") and the
+# ARGOCD_AUTH_TOKEN branch (which installs a REAL, USABLE credential — the sharpest contradiction of
+# "not published in the state overlay") both left the flag armed. Count the anchored withdrawals so
+# a new replacing arm that forgets one cannot land silently.
+# ⚠️ FROM THE ARMING LINE ONWARD, NOT THE WHOLE FILE. `_pw_unset_argo=0` is ALSO how the variable
+# is DECLARED, and the declaration matches this anchored pattern exactly — counting the whole file
+# gives 4 for 3 withdrawals, so a threshold of 3 would pass with only TWO. That is the very
+# "it could not tell the fix from its own initialiser" defect the case above records, re-committed
+# one line below it. Slice at the ARM (`_pw_unset_argo=1`), which sits after the declaration.
+_nwd="$(printf '%s\n' "$_pwsrc" | awk '/_pw_unset_argo=1/{p=1} p' \
+          | grep -cE '^[[:space:]]*_pw_unset_argo=0[[:space:]]*$' || true)"
+if [ "${_nwd:-0}" -ge 3 ]; then
+  ok "pw-note: every arm that replaces the ArgoCD cell withdraws the flag ($_nwd of 3)"
+else
+  bad "pw-note: only $_nwd of 3 ArgoCD arms withdraw the overlay-note flag" \
+      "an arm that replaces the cell but keeps the flag makes the note contradict the cell beside it"
+fi
 # ...and the note must be DERIVED from the per-source flags, not from one shared flag armed early.
 case "$_pwsrc" in
   *'_pw_unset_harbor'*'_pw_unset_gitea'*'_pw_unset_argo'*)
@@ -2307,9 +2328,9 @@ _extract_fn() {
   printf '%s' "$_o"
 }
 _hdr="$(_extract_fn _ssh_header_line)"
-_hdr_says() { bash -c 'eval "$1"; _ssh_header_line "$2" "$3" "$4"' _ "$_hdr" "${1:-0}" "${2:-1}" "${3:-}"; }
-_hdr_case() {  # <label> <answered> <rc> <state> <expected-substring>
-  local got; got="$(_hdr_says "$2" "$3" "$4")"
+_hdr_says() { bash -c 'eval "$1"; _ssh_header_line "$2" "$3" "$4" "$5"' _ "$_hdr" "${1:-0}" "${2:-1}" "${3:-}" "${4:-0}"; }
+_hdr_case() {  # <label> <answered> <rc> <state> <expected-substring> [never-asked]
+  local got; got="$(_hdr_says "$2" "$3" "$4" "${6:-0}")"
   case "$got" in
     *"$5"*) ok "ssh-header: $1" ;;
     *)      bad "ssh-header: $1" "got: $(printf '%s' "$got" | tr -d '\n')" ;;
@@ -2327,6 +2348,66 @@ _hdr_case "rc=119 (token expired, never dialled)"   0 119 "some state"  "NOT pro
 _hdr_case "forbidden -> read live (a refusal IS an answer)" 1 403 "some state" "read live"
 # never probed at all
 _hdr_case "never probed -> NOT probed"              0 1   ""            "NOT probed"
+# NOTHING WAS ASKED: the kube config named no reachable target, so "asked, and NOTHING answered"
+# would be a claim about the LAB made from a fault inside this box.
+_hdr_case "never-asked -> NOT probed, not a lab fact"  0 1 "some state" "kube config named no reachable target" 1
+# ...and the never-asked flag must NOT override a real answer.
+_hdr_case "answered beats never-asked"                 1 1 "some state" "read live" 1
+
+# ══ THE REACHABILITY AGGREGATE: ITS CLASSIFIER, WHICH THE SUITE COULD NOT REACH AT ALL ════════════
+# ⚠️ EVERY RENDER SITE IN THIS FILE SETS CREDS_NO_PROBE=1, so `$c5` is `not probed` on every row and
+# the counting loop's classification is STRUCTURALLY UNREACHABLE by a rendered assertion. A round
+# changed SIX classifications and flipped the rendered sentence in THREE states while this suite
+# went 136 ok -> 136 ok (`gates.md`: green at the same count is blind to the change). Extracting
+# `_reach_class` is the only way the aggregate gets a demonstrated RED without a live lab.
+_rc_fn="$(_extract_fn _reach_class)"
+_rc_says() { bash -c 'eval "$1"; _reach_class "$2"' _ "$_rc_fn" "${1:-}"; }
+_rc_case() {  # <cell> <expected bucket>
+  local got; got="$(_rc_says "$1")"
+  if [ "$got" = "$2" ]; then ok "reach-class: '$1' -> $2"
+  else bad "reach-class: '$1' -> $2" "got: $got"; fi
+}
+# THE POSITIVE CONTROL, and the defect's own case: a 503 means the route is RENDERED and a server
+# REPLIED. `_reach_ingress`'s own comment calls it THE NORMAL state after `make install-all`.
+# Classing it as a failure printed "0 of 11 — NOTHING answered" 28 lines under six such cells.
+_rc_case 'no backend' answered
+_rc_case 'no route'   answered
+_rc_case 'LB up'      answered
+_rc_case 'HTTP 418'   answered
+_rc_case 'serving'    serving
+_rc_case 'silent'     silent
+# THE DNS PAIR ANSWERED — both arms are reachable ONLY AFTER `_ing_live` proved the LB responds, so
+# the SERVICE is up and THIS BOX cannot reach it by name. Calling that `silent` tells a first-time
+# operator their lab is down when the remedy is the /etc/hosts line this report already printed.
+_rc_case 'no DNS here' dns
+_rc_case 'stale DNS'   dns
+# NO PROBE WAS ISSUED -> OUT OF THE DENOMINATOR. Counting these made a fully healthy lab whose
+# names do not resolve read as a ~45% failure rate.
+_rc_case 'not probed' skip
+_rc_case 'not set'    skip
+_rc_case 'unresolved' skip
+_rc_case 'unknown'    skip
+_rc_case '-'          skip
+_rc_case ''           skip
+# ⚠️ AND EVERY STRING THE PRODUCERS CAN EMIT MUST BE ENUMERATED HERE. A value that reaches the
+# catch-all is still COUNTED (never silently dropped from the denominator), but it is a bug in the
+# enumeration, and this case is what makes a ninth producer string visible instead of quietly
+# reclassified. Derived from the producers, so a new `printf` in _reach_ingress/_reach_harbor/
+# _reach_argocd that nobody classified turns this red.
+_rc_missing=""
+for _v in 'not probed' '-' 'not set' unresolved unknown serving silent 'no DNS here' 'stale DNS' \
+          'no route' 'no backend' 'LB up'; do
+  case "$(_rc_says "$_v")" in
+    skip|serving|answered|dns|silent) : ;;
+    *) _rc_missing="${_rc_missing} '${_v}'" ;;
+  esac
+done
+if [ -z "$_rc_missing" ]; then
+  ok "reach-class: every producer string classifies into a named bucket"
+else
+  bad "reach-class: unclassified producer string(s):$_rc_missing" \
+      "an unenumerated cell falls to the catch-all and is reported as 'answered'"
+fi
 # ⚠️ AND THE DISCRIMINATION, which is the point: the timeout and the never-probed cases must not
 # produce the SAME sentence. Before the fix they produced the same WRONG one.
 if [ "$(_hdr_says 0 124 'x')" = "$(_hdr_says 0 1 '')" ]; then

@@ -653,6 +653,16 @@ else
     # blames the overlay. Withdraw it here, beside the correction, rather than in the note.
     _pw_unset_argo=0
   elif [ "$_have_sink" = 1 ]; then
+    # ⚠️ WITHDRAW HERE TOO. Every arm below REPLACES the cell with a "could not read" explanation,
+    # so none of them leaves an "unset" claim standing — and a note blaming the overlay would then
+    # contradict the cell, which is the defect the rc=124 arm above was fixed for. MEASURED on a
+    # HALF-UP lab (Supervisor token expired, guest cluster reachable): the EXPIRED arm fired and the
+    # report printed "those passwords are not published in the state overlay" over a cell that says
+    # the token expired. Second instance of one class, one arm over, found only by rendering a state
+    # I had not thought to test.
+    # ⚠️ NOT before the enclosing `if`: if NEITHER branch runs, the cell keeps `_unset_pw`'s marker
+    # and the flag must STAY armed.
+    _pw_unset_argo=0
     # ⚠️ REUSE :116's PROBE, do not re-run it. Byte-identical inputs, but each call reads the clock
     # independently (lib/os.sh's `date -u +%s`), so a token expiring BETWEEN the two reads yielded
     # `<not read>` + `_argo_pw_expired=1` with NO banner and no explanation anywhere in the report.
@@ -687,6 +697,12 @@ if [ -n "${ARGOCD_AUTH_TOKEN:-}" ]; then
   # advertising `make argocd-password` for a row that already holds a working credential -- and a
   # tenant cannot run that command at all (it reads a Supervisor secret; RULE ZERO-A0).
   _argo_pw_expired=0
+  # ⚠️ AND THE FOURTH WITHDRAWAL, for the same reason as the other three. This cell now holds a
+  # REAL, USABLE credential — the exact opposite of "unset" — so ArgoCD must stop contributing to a
+  # note that says "those passwords are not published in the state overlay". The rc=124 arm and the
+  # `_have_sink` arm were each fixed for this; every site that REPLACES `_unset_pw`'s marker owes
+  # the same withdrawal, and this is the one where the contradiction is sharpest.
+  _pw_unset_argo=0
 else
   argo_user="${ARGOCD_USERNAME:-admin}"
 fi
@@ -1354,6 +1370,40 @@ _reach_argocd() {
   esac
   _probe_tcp "$_h" "$_port" && printf 'serving' || printf 'silent'
 }
+# ── _reach_class: THE AGGREGATE'S CLASSIFIER, kept BESIDE the producers that emit these strings ──
+# ⚠️ FOUR OUTCOMES, NOT TWO — because "answered" and "serving" are different questions, and
+# conflating them made the summary CONTRADICT the column beside it. MEASURED twice:
+#   * HALF-UP lab: 8 rows read `LB up` (the LoadBalancer took the TCP connection and served no
+#     route) under a summary that said "1 of 12 answered". The LB plainly answered.
+#   * post-`install-all`, which builds no app image (B529): six app rows read `no backend` — a 503,
+#     i.e. the route is RENDERED and a server REPLIED — under "0 of 11 — NOTHING answered", printed
+#     28 lines beneath the six cells that say otherwise. `_reach_ingress`'s own comment calls that
+#     state THE NORMAL ONE after an install.
+#
+# AND THE DENOMINATOR IS NOT "EVERY ROW". A row where no probe ever reached a service — no ingress
+# address recorded, no URL configured, a name that does not resolve, CREDS_NO_PROBE — is not a
+# failure to report. Counting those made a FULLY HEALTHY lab read as a 45% failure rate.
+#
+# `dns` is its own bucket for the same reason, and it is the one a first-time operator hits:
+# `no DNS here` / `stale DNS` are reachable ONLY AFTER `_ing_live` proved the LB answers, so the
+# SERVICE is up and it is THIS BOX that cannot reach it by name. That is the default state of
+# someone who has not yet pasted the /etc/hosts line this report prints ~20 lines above. Filing it
+# under `silent` would tell them their lab is down; its remedy is the DNS advice block below, not
+# the "is the estate on?" precondition.
+#
+# ⚠️ THE CATCH-ALL COUNTS, IT DOES NOT SKIP. A ninth producer value must not vanish from the
+# denominator — a `skip` default would hide it in exactly the direction that makes the aggregate
+# under-count. Every string a producer can emit that is not enumerated above comes from a COMPLETED
+# HTTP exchange (`_reach_ingress`'s `HTTP %s` arm), so `answered` is the honest default.
+_reach_class() {   # <the Reachable cell> -> skip | serving | answered | dns | silent
+  case "${1:-}" in
+    ''|'-'|'not probed'|'not set'|unresolved|unknown)  printf 'skip' ;;
+    serving)                                           printf 'serving' ;;
+    'no DNS here'|'stale DNS')                         printf 'dns' ;;
+    silent)                                            printf 'silent' ;;
+    *)                                                 printf 'answered' ;;
+  esac
+}
 # ⚠️ TABS ARE STRIPPED FROM EVERY CELL, and this is load-bearing rather than tidy. `rows` is a
 # TAB-separated record and every reader splits it with `IFS=$'\t' read -r c1..c5`; a TAB inside a
 # cell adds a field and shifts every later column left. MEASURED on the DNS flags: with a TAB in the
@@ -1895,6 +1945,8 @@ _rows_capped=""
 # this whole change exists for silently widens again.
 _reach_total=0
 _reach_ok=0
+_reach_half=0
+_reach_dns=0
 _dns_stale=0
 _dns_absent=0
 _dns_stale_hosts=""
@@ -1919,10 +1971,18 @@ while IFS=$'\t' read -r c1 c2 c3 c4 c5 _rest; do
   # `cluster: UNDETERMINED` and the reader was left to compute the verdict from twelve cells. The
   # report holds enough evidence to say one true sentence; not saying it is the defect.
   # Only rows actually PROBED count -- `not probed` and `-` are not failures to answer.
-  case "$c5" in
-    'not probed'|'-'|'') : ;;
-    *) _reach_total=$((_reach_total + 1))
-       case "$c5" in serving) _reach_ok=$((_reach_ok + 1)) ;; esac ;;
+  # ⚠️ THE ENUMERATION LIVES IN `_reach_class` (beside the producers), NOT HERE. It was inline
+  # once and it was WRONG IN BOTH DIRECTIONS — see that function's header for the two measurements.
+  # Keeping it a pure function is also the only way it is testable: every render site in
+  # test-creds-show.sh sets CREDS_NO_PROBE=1, so `$c5` is `not probed` on every row and this loop's
+  # classification is UNREACHABLE by the suite. A round changed six classifications and flipped the
+  # rendered sentence in three states while the suite went 136 -> 136.
+  case "$(_reach_class "$c5")" in
+    skip)     : ;;
+    serving)  _reach_total=$((_reach_total + 1)); _reach_ok=$((_reach_ok + 1)) ;;
+    answered) _reach_total=$((_reach_total + 1)); _reach_half=$((_reach_half + 1)) ;;
+    dns)      _reach_total=$((_reach_total + 1)); _reach_dns=$((_reach_dns + 1)) ;;
+    silent)   _reach_total=$((_reach_total + 1)) ;;
   esac
   # COLUMN 5 IS THE ONLY PRODUCER. `_reach_ingress` (:1206) emits these two strings; nothing else
   # does. The old gate matched the WHOLE `rows` blob -- every column -- so a username or a URL
@@ -2316,16 +2376,53 @@ printf '\n  Reachable = the address answered — NOT that the credential works. 
 # row failed, and those rows span the guest ingress AND the Supervisor services (Harbor, ArgoCD),
 # which have their own LoadBalancers. This file records a previous version of exactly this sentence
 # being FALSE because it generalised from a single guest-ingress probe.
+_reach_nothing=0
 if [ "${_reach_total:-0}" -gt 0 ]; then
-  if [ "${_reach_ok:-0}" -eq 0 ]; then
+  # "NOTHING answered" must mean NOTHING answered — in ANY bucket. Gating it on `serving` alone
+  # printed it over six `no backend` cells (a 503 IS a reply) and over eight `LB up` ones.
+  if [ "${_reach_ok:-0}" -eq 0 ] && [ "${_reach_half:-0}" -eq 0 ] && [ "${_reach_dns:-0}" -eq 0 ]; then
+    _reach_nothing=1
     printf '  reachable: 0 of %s — NOTHING answered on this run, on either the guest ingress or the\n' "$_reach_total"
     printf '             Supervisor services. Consistent with the lab being OFF; this report cannot\n'
     printf '             tell "off" from "still booting" or "not reachable from here".\n'
-  elif [ "${_reach_ok}" -lt "${_reach_total}" ]; then
-    printf '  reachable: %s of %s answered.\n' "$_reach_ok" "$_reach_total"
+  elif [ "${_reach_ok}" -eq "${_reach_total}" ]; then
+    printf '  reachable: %s of %s — everything probed is serving.\n' "$_reach_ok" "$_reach_total"
   else
-    printf '  reachable: %s of %s — everything probed answered.\n' "$_reach_ok" "$_reach_total"
+    # The middle bands are what needed naming, and each sends the reader somewhere DIFFERENT:
+    #   answered but served nothing -> the route is rendered, the backend is not up (run the
+    #                                  pipeline / wait); the estate is demonstrably ON.
+    #   unreachable by name         -> the SERVICE is up and THIS BOX cannot resolve it. The fix is
+    #                                  the /etc/hosts line above, not anything in the cluster.
+    printf '  reachable: %s of %s serving' "$_reach_ok" "$_reach_total"
+    [ "${_reach_half:-0}" -gt 0 ] && printf ', %s answered but served nothing' "$_reach_half"
+    [ "${_reach_dns:-0}" -gt 0 ] && printf ', %s up but not resolvable from this box' "$_reach_dns"
+    printf ', %s silent.\n' "$(( _reach_total - _reach_ok - _reach_half - _reach_dns ))"
+    if [ "${_reach_ok:-0}" -eq 0 ]; then
+      printf '             Something IS answering, so the estate is not off — it is either still coming\n'
+      printf '             up or its backends are not running yet.\n'
+    fi
   fi
+fi
+
+# ⚠️ A REMEDY NEEDS ITS PRECONDITION, AT THE POINT OF PRESCRIPTION — and this block must NOT sit
+# inside the untrusted-cert `if` it was first written into. A round MEASURED five actionable
+# commands in one powered-off render — `make fetch-harbor-ca`, `make fetch-argocd-ca`, two `curl`s,
+# and `make argocd-password (uncapped)` — every one of which needs the estate this same report had
+# just shown answering nothing. `argocd-password (uncapped)` is the worst: its ladder is 2x10s, so
+# the reader waits ~20s to be told nothing.
+# ⚠️ NESTING IT UNDER `_tls_note_needed` made it VANISH exactly where it is still needed: with
+# HARBOR_INSECURE=1 no row carries a cert marker, so the whole cert block is skipped — while the
+# DNS advice, the `re-check:` register and `make argocd-password` are all still printed, all still
+# dead ends. The precondition is about the ESTATE, not about certificates.
+# ⚠️ AND IT MUST NOT INVENT A CHORE (RULE ZERO-B): a tenant cannot start someone else's lab, so the
+# honest second clause is a DEPENDENCY, not an instruction.
+if [ "${_reach_nothing:-0}" = 1 ]; then
+  # "in this report", not "below": the `re-check:` register in the Context block is ABOVE this
+  # line and is equally a dead end when nothing answers.
+  printf '\n  ⚠️  every command in this report — including the re-check above — needs the lab\n'
+  printf '      ANSWERING, and nothing did on this run.\n'
+  printf '      If the estate is off, start it. If you do not control it, there is no self-service\n'
+  printf '      path — ask whoever runs it.\n'
 fi
 
 # ⚠️ THE CERT NOTE KEYS ON "DID ANY ROW CARRY A MARKER", NOT ON ArgoCD.
@@ -2335,22 +2432,6 @@ fi
 # The old blanket line said "curl/CLI -> --insecure" for both, i.e. it told the operator to turn
 # verification OFF for the one endpoint we can verify.
 if [ "${_tls_note_needed:-0}" = 1 ]; then
-  # ⚠️ A REMEDY NEEDS ITS PRECONDITION, AT THE POINT OF PRESCRIPTION. A round MEASURED five
-  # actionable commands in one powered-off render — `make fetch-harbor-ca`, `make fetch-argocd-ca`,
-  # two `curl`s, and `make argocd-password (uncapped)` — every one of which needs the estate this
-  # same report had just shown answering nothing. The `Check the lab is up FIRST` caveat existed
-  # once, ~30 lines above, scoped to the ingress. `argocd-password (uncapped)` is the worst: its
-  # ladder is 2x10s, so the reader waits ~20s to be told nothing.
-  # ⚠️ AND IT MUST NOT INVENT A CHORE (RULE ZERO-B): a tenant cannot start someone else's lab, so
-  # the honest second clause is a DEPENDENCY, not an instruction.
-  if [ "${_reach_total:-0}" -gt 0 ] && [ "${_reach_ok:-0}" -eq 0 ]; then
-    # "in this report", not "below": the `re-check:` register in the Context block is ABOVE this
-    # line and is equally a dead end when nothing answers.
-    printf '\n  ⚠️  every command in this report — including the re-check above — needs the lab\n'
-    printf '      ANSWERING, and nothing did on this run.\n'
-    printf '      If the estate is off, start it. If you do not control it, there is no self-service\n'
-    printf '      path — ask whoever runs it.\n'
-  fi
   printf '\n  untrusted cert — what to do, per target:\n'
   printf '    browser: click through on the marked rows above.\n'
   # ⚠️ BUILT FROM THE SOURCE, NEVER FROM `harbor_url` -- that variable CONTAINS the marker, so
@@ -2708,6 +2789,7 @@ _ssh_ep="<not probed>"   # the ENDPOINT cell: an address, or a marker naming why
 # cell's text. Declared here, above every arm that arms it, so an init cannot wipe it afterwards --
 # this file has had that exact trap once already.
 _ssh_answered=0
+_ssh_never_asked=0
 if [ "$_no_probe_snapshot" = "1" ]; then
   _ssh_state="not probed (CREDS_NO_PROBE=1)"; _ssh_tok="<not probed>"
 elif [ -z "${VKS_NAMESPACE:-}" ]; then
@@ -2866,15 +2948,34 @@ else
       # short token.
       _kube_classify "$_ssh_verr" "the node addresses" "${_ssh_vrc}"
       _ssh_ep_state="$_kube_state"
+      # ⚠️ DERIVED FROM THE CLASSIFIER, NOT FROM ONE SUBSTRING. This arm keyed `_ssh_answered` on
+      # `grep -qi forbidden` -- ONE error substring standing in for an eight-class enumeration that
+      # `_kube_classify` had ALREADY computed two lines up. It swapped an enumeration of three
+      # display strings for an enumeration of one, which is not a derivation.
+      # MEASURED against the eight classes `classify_kube_failure` emits, FIVE of the seven
+      # non-timeout ones were wrong:
+      #   UNAUTHORIZED   the apiserver replied 401  -> AN ANSWER, reported as "nothing answered"
+      #   STALE_CA       it presented a certificate -> AN ANSWER, reported as "nothing answered"
+      #   PLAINTEXT      it returned an HTTP reply  -> AN ANSWER, reported as "nothing answered"
+      #   NO_KUBE_TARGET kubectl dialled localhost:8080; the real endpoint was NEVER ASKED
+      #   KUBECONFIG_UNUSABLE  nothing was ever dialled
+      # The last two are the dangerous pair in the OTHER direction: "asked, and NOTHING answered"
+      # is a claim about the LAB, made when the fault is entirely in this box's kube configuration.
+      # `_ssh_never_asked` keeps them out of it.
       case "${_ssh_vrc}" in
         119) _ssh_ep="<not read>" ;;
-        *)   if grep -qi 'forbidden' "$_ssh_verr" 2>/dev/null; then
-               # ⚠️ A REFUSAL IS AN ANSWER. The server replied; it said no. That IS a live read and
-               # a genuine RBAC fact, so it must NOT be lumped with "nothing answered".
-               _ssh_ep="<not allowed to read addresses>"; _ssh_answered=1
-             else
-               _ssh_ep="<could not read node addresses>"; _ssh_answered=0
-             fi ;;
+        *)   case "$(classify_kube_failure "$_ssh_verr" 2>/dev/null || true)" in
+               # A REFUSAL IS AN ANSWER. The server replied; it said no. That IS a live read and a
+               # genuine RBAC fact, so it must NOT be lumped with "nothing answered".
+               FORBIDDEN)
+                 _ssh_ep="<not allowed to read addresses>"; _ssh_answered=1 ;;
+               UNAUTHORIZED|STALE_CA|PLAINTEXT)
+                 _ssh_ep="<could not read node addresses>"; _ssh_answered=1 ;;
+               NO_KUBE_TARGET|KUBECONFIG_UNUSABLE)
+                 _ssh_ep="<could not read node addresses>"; _ssh_answered=0; _ssh_never_asked=1 ;;
+               *)
+                 _ssh_ep="<could not read node addresses>"; _ssh_answered=0 ;;
+             esac ;;
       esac
     elif [ -z "$_ssh_addr" ]; then
       _ssh_ep="<no node address yet>"
@@ -2964,24 +3065,32 @@ printf '\n  Lab access. <not set> = this report lacks it, not the lab.\n'
 # not. Four real classes, derived, so a NINTH `_ssh_ep` value cannot silently re-open this:
 #   answered      -> we asked and the server replied (including a REFUSAL: that is an RBAC fact)
 #   119           -> the token expired BEFORE dialling, so nothing was asked
+#   never-asked   -> the kube CONFIG was unusable / had no target, so the endpoint was never dialled
 #   classified    -> we asked and nothing came back; the sentence under the table says what
 #   otherwise     -> never probed
+# ⚠️ `never-asked` IS A FOURTH ARM, NOT A SHADE OF THE THIRD. `NO_KUBE_TARGET` and
+# `KUBECONFIG_UNUSABLE` both mean kubectl never reached the endpoint — one fell back to
+# localhost:8080, the other could not read its own config — so "asked, and NOTHING answered" is a
+# claim about the LAB made from a fault entirely inside this box.
 # A FUNCTION so it can be TESTED. The suite sets CREDS_NO_PROBE=1 in every case, so the entire
 # probing surface is untested by construction — a round measured 127 ok BOTH BEFORE AND AFTER a
-# change to this very line. A pure classifier can be extracted and driven with the four rc classes
+# change to this very line. A pure classifier can be extracted and driven with the rc classes
 # without a cluster, which is the only way this gets a demonstrated RED.
-_ssh_header_line() {   # <answered> <rc> <state> -> the sentence
+_ssh_header_line() {   # <answered> <rc> <state> <never-asked> -> the sentence
   if [ "${1:-0}" = 1 ] || [ "${2:-1}" -eq 0 ]; then
     printf '    guest node SSH: read live.\n'
   elif [ "${2:-1}" -eq 119 ]; then
     printf '    guest node SSH: NOT probed.\n'
+  elif [ "${4:-0}" = 1 ]; then
+    printf '    guest node SSH: NOT probed — this box'"'"'s kube config named no reachable target. That is\n'
+    printf '                    not a lab fact — see the note below.\n'
   elif [ -n "${3:-}" ]; then
     printf '    guest node SSH: asked, and NOTHING answered. That is not a lab fact — see the note below.\n'
   else
     printf '    guest node SSH: NOT probed.\n'
   fi
 }
-_ssh_header_line "${_ssh_answered:-0}" "${_ssh_vrc:-1}" "${_ssh_ep_state:-}"
+_ssh_header_line "${_ssh_answered:-0}" "${_ssh_vrc:-1}" "${_ssh_ep_state:-}" "${_ssh_never_asked:-0}"
 printf '\n  %-*s  %-*s  %-*s  %s\n' "$_lw1" "Target" "$_lw2" "Endpoint" "$_lw3" "Username" "Password"
 printf '  %-*s  %-*s  %-*s  %s\n' \
   "$_lw1" "$(printf '%*s' "$_lw1" '' | tr ' ' '-')" \
