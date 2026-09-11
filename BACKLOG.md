@@ -9756,3 +9756,112 @@ before quoting it again.
 
 **Grade:** `measured` (impl-round on #1250, product-tier: real `creds.sh` driven by a loopback
 listener and a `getent` stub, `/etc/hosts` semantics in `debian:12` under podman).
+
+## ⚪ B730 — CLOSED BY #<pr>: `LB up` was classed as an ANSWER, which SUPPRESSED the powered-off warning
+
+Filed 2026-09-11 as "the `LB up` / `silent` split is an artifact of ROW ORDER" — true, and it
+understated the defect. An implementation round measured the consequence:
+
+`_reach_ingress` writes the `_route_dead` sentinel the FIRST time a curl returns 000; every later
+ingress row short-circuits to `LB up` WITHOUT PROBING. That is a performance cache. Promoting
+`LB up` to the `answered` bucket gave it semantic weight it never had, and the aggregate then said
+the estate was alive on the strength of rows nobody asked about.
+
+MEASURED by the round against a listener that accepts TCP and closes — exactly ONE HTTP probe
+issued in the whole run, returning 000:
+
+    reachable: 0 of 11 serving, 8 answered but served nothing, 3 silent.
+               Something IS answering, so the estate is not off ...
+    grep -c 'needs the lab'  ->  0        <- THE PRECONDITION BLOCK GONE
+
+...while `make fetch-harbor-ca` and the `re-check:` register still printed. Same facts with the
+cache removed: `0 of 11 — NOTHING answered ... Consistent with the lab being OFF`, and the
+precondition FIRES. One optimisation, two opposite verdicts — and the wrong one hid the warning
+that stops a 2x10s `make argocd-password` dead end.
+
+FIXED: `_reach_class` classes `LB up` as `skip`. Its producer's own comment already said "the TCP
+probe passed and we did not learn anything about this route", which is the `skip` bucket's
+definition. RED-proven by putting it back.
+
+RESIDUAL, still open and NOT fixed: the TABLE still shows `silent` on the first ingress row and
+`LB up` on the rest for one identical state, so two cells disagree by evaluation order. The
+aggregate no longer repeats that split (both are out of the denominator), but an operator reading
+the column sees it. The producer is where the rows must be made to agree.
+
+## 🔴 B731 — `no backend` is the ONLY finding this report names without a remedy, and the comment that would justify one is FALSE
+
+MEASURED on the live lab 2026-09-11, during the post-restart window:
+
+    javawebapp    ...  no backend
+    dotnetwebapp  ...  no backend
+    reachable: 10 of 12 serving, 2 answered but served nothing, 0 silent.
+
+`grep -cE 'build-apps|run the pipeline|still starting'` over that whole render: **0**. Every other
+finding in this report carries a remedy — the DNS advice block, the per-target cert block, the
+estate-down precondition. This one names a problem and stops.
+
+⚠️ AND THE OBVIOUS REMEDY IS PREMISED ON A FALSE CLAIM. `_reach_ingress`'s own comment says a 503 is
+
+    "the NORMAL state after `make install-all`, which builds no app image (B529) —
+     so it means 'run the pipeline', not 'the ingress is broken'."
+
+`Makefile:1076` ends `install-all` with **`build-apps`**, and its help says "so the demo actually
+SERVES". The comment was TRUE in the B529 era and a later change falsified it — the same
+un-gateable class (`hooks.md`) a round caught in this file this morning. Writing "run the pipeline"
+from it would ship advice whose stated trigger cannot occur.
+
+⚠️ AND THE CAUSE I ACTUALLY MEASURED WAS NEITHER. Both rows went to `serving` ~3 minutes later with
+NOTHING done in between — the pods were still starting after the lab restart. So a remedy that says
+"run the pipeline" would send an operator to run a build for a condition that clears itself.
+
+So the honest note must DISCRIMINATE, and this report cannot do it from a status code alone:
+a 503 is identical whether the pods are starting, crash-looping, or were never built. Any remedy
+must therefore either say both and cost nothing, or acquire the discriminating fact — which is a
+cluster read this printer deliberately does not do for the app rows.
+
+Fix the comment FIRST (it is a false claim in a guarded file), then design the note.
+Do NOT implement the note without an idea-round: it is a new operator-facing remedy (RULE ZERO-V).
+
+## ⚪ B566 — CLOSED: a fixed `/tmp` fixture path made two parallel gate runs read each other's data
+
+A gate test reused `ci.yml`'s literal `/tmp/ci-jobs.tsv`. That path is CORRECT in the workflow — a
+GitHub runner is a fresh VM with one job in it — and unsafe in a test, where two runs in parallel
+worktrees share the one file and silently read each other's fixture. Fixed by redirecting into the
+run's own directory; the substitution is a PATH only, so the logic under test is untouched.
+
+Cited by `scripts/test-ci-pass-retry.sh:70` as "the B566 class". Row added 2026-09-11 so the
+citation resolves — it had none (B719).
+
+## ⚪ B567 — CLOSED: Tekton pulled a PUBLIC image from inside the air gap, for the life of the repo
+
+Tekton's controller injects a `place-scripts` init container from a hardcoded `-shell-image` FLAG
+STRING, so `cgr.dev/chainguard/busybox` was fetched from the public internet on every TaskRun —
+inside the air gap. The incident shape is what makes it nasty: **a public image in an INIT
+container**, which a naive "check the workload image" scan does not look at.
+
+Guarded by `scripts/97-verify-workload-images.sh` + `scripts/test-workload-images.sh` (which carries
+the init-container case explicitly). ⚠️ Its named blind spot: kaniko's `.image` is the DESTINATION it
+pushes, not the base it pulled FROM, so a public `FROM` is INVISIBLE to any run-time pod-image check
+— that half is covered at build time by `check-selfbuilt` and by the manifest host scan (B568).
+
+Row added 2026-09-11 so the citation resolves (B719).
+
+## ⚪ B568 — CLOSED: the unhandled-registry-host scanner, the BUILD-TIME half of B567
+
+`lib/hostscan.sh` scans manifests for registry hosts that nothing remaps to Harbor — the static
+counterpart to B567's run-time gate. Tested by `scripts/test-hostscan.sh`.
+
+Row added 2026-09-11 so the citation resolves (B719).
+
+## ⚪ B569 — CLOSED: `e2e-kind` pinned the ingress controller TWICE, and the second pin silently won
+
+The target carried a `$(origin INGRESS_CONTROLLER)` export AND a literal `INGRESS_CONTROLLER=istio`
+in the `$(MAKE)` goal list. A sub-make COMMAND-LINE variable outranks the caller's own command line,
+so `make e2e-kind INGRESS_CONTROLLER=traefik` silently ran **istio** — verbatim the bug the comment
+above the target claimed to have FIXED, and an inversion of the invariant at `Makefile:147`.
+
+⚠️ THE OBVIOUS RED-PROOF DOES NOT WORK, and an adversary round prescribed it anyway: `make -n`
+prints recipe TEXT while a target-specific `export` lives in the ENVIRONMENT, so the two invocations
+look identical. Guarded by `scripts/test-e2e-ingress-pin.sh`.
+
+Row added 2026-09-11 so the citation resolves (B719).

@@ -137,6 +137,14 @@ trap restore EXIT
 # Per-case overrides (`KUBECONFIG="$_kc" render ...`) still win, which is how the one case that
 # genuinely wants a kubeconfig keeps working.
 export KUBECONFIG="/nonexistent/test-creds-show-sandbox.kubeconfig"
+# ⚠️ UNSET THE HARBOR/ARGOCD SELECTORS TOO. `load_env` SNAPSHOT-PROTECTS them (lib/os.sh), which
+# means an EXPORTED value deliberately OUTRANKS the throwaway `.env` every fixture here writes. A
+# round measured the suite going RED — two FAILs blaming the INGRESS — merely because HARBOR_URL was
+# exported in the caller's environment, which is the shape of any operator who sourced `.env` or any
+# jump-box container run with `-e HARBOR_URL=...`. The KUBECONFIG sandbox above had the right idea
+# and did not cover the selectors that decide the Harbor and ArgoCD rows.
+unset HARBOR_URL HARBOR_PASSWORD HARBOR_INSECURE HARBOR_CA_FILE \
+      ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_CA_FILE INGRESS_CONTROLLER INGRESS_LB_IP
 export ARGOCD_KUBECONFIG="$KUBECONFIG"
 
 render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; SKIP_DOTENV=1 CREDS_TOKEN=1 ./scripts/creds.sh 2>/dev/null; }
@@ -2249,6 +2257,849 @@ case "$_ar" in
         "a newline splits the record as thoroughly as a tab — measured: a phantom row, the tail in
       the Service column, and a BLANK Reachable cell" ;;
 esac
+
+# ══ THE PASSWORD NOTE MUST FOLLOW ITS CELL ═══════════════════════════════════════════════════════
+# MEASURED on a POWERED-OFF lab: `argocd-password.sh` hit our own 3s cap (rc=124); the `else` arm
+# armed the shared note flag, and ~26 lines later the rc=124 arm REPLACED the cell with
+# "<not read — MY OWN 3s cap expired, not the token>". The cell was corrected; the note was not. The
+# report then printed "those passwords are not published in the state overlay" — which its OWN
+# adjacent cell refutes. I introduced that earlier the same day by adding the rc=124 arm downstream
+# of the arming, and the suite did not move (134 ok before and after the fix).
+#
+# STRUCTURAL, and deliberately: reaching the rc=124 path needs a real timing-out child, which this
+# offline suite cannot produce. What it CAN pin is that the correction WITHDRAWS its contribution,
+# which is the property that was missing.
+_pwsrc="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh")"
+# ⚠️ SCOPED TO THE rc=124 ARM. My first version grepped the WHOLE file for `_pw_unset_argo=0` — which
+# is also how the variable is DECLARED, so deleting the withdrawal left the case GREEN. It could not
+# tell the fix from its own initialiser. Extract the arm and look inside it.
+# ⚠️ TERMINATE AT THE `elif`, NOT AT `fi` — the `elif` belongs to the SAME if/elif chain, so
+# stopping at `fi` swallows the sibling `_have_sink` arm AND ITS withdrawal. MEASURED: with the
+# rc=124 withdrawal deleted and only a trailing comment left in its place, this case stayed GREEN,
+# satisfied by the neighbour's line. The comment above said "SCOPED TO THE rc=124 ARM" and was TRUE
+# when written — the `_have_sink` withdrawal, added the same morning, falsified it silently. Found
+# by reading WHICH case went red in the RED-proof, not by reading the code.
+_arm124="$(printf '%s' "$_pwsrc" | awk '/_argo_rc:-0.*=.*124/{p=1} p{print} p&&(/^  elif /||/^  fi$/){exit}')"
+# ⚠️ THE TERMINATOR IS COUPLED TO A LITERAL 2-SPACE INDENT, so a future enclosing `if` makes awk run
+# to EOF and swallow the sibling arms again — byte-identical to the defect just fixed. Assert the
+# slice is SHORT: the arm is ~4 lines, and an over-run is >=11. This closes the CLASS, not only the
+# instance, and it fails LOUDLY instead of going quietly green.
+_arm124_n="$(printf '%s\n' "$_arm124" | grep -c '' || true)"
+if [ "${_arm124_n:-0}" -ge 1 ] && [ "${_arm124_n:-0}" -le 8 ]; then
+  ok "pw-note: the rc=124 slice is scoped ($_arm124_n lines) — the extraction did not over-run"
+else
+  bad "pw-note: the rc=124 extraction captured $_arm124_n lines — it over-ran its own arm" \
+      "the indent-coupled terminator stopped matching; the case below is now satisfied by a SIBLING arm"
+fi
+# ⚠️ LINE-ANCHORED, because `$_pwsrc` strips only FULL-LINE comments (`^[[:space:]]*#`). A substring
+# match is satisfied by a TRAILING comment: a round DELETED the withdrawal, left the token in a
+# `# ... _pw_unset_argo=0 ...` note on a code line, and the suite reported 136 ok / 0 FAIL over the
+# defect this case exists for. The assignment must be the WHOLE line.
+if printf '%s\n' "$_arm124" | grep -qE '^[[:space:]]*_pw_unset_argo=0[[:space:]]*$'; then
+  ok "pw-note: the rc=124 correction withdraws ArgoCD's contribution to the note"
+else
+  bad "pw-note: a cell corrected downstream still arms the overlay note" \
+      "the note then blames the overlay for a value the cell says OUR OWN cap prevented reading"
+fi
+# ...and so does EVERY other site that REPLACES `_unset_pw`'s marker. A round found the withdrawal
+# was 1 of 4 arms: the `_have_sink` branch (whose every case says "could not read") and the
+# ARGOCD_AUTH_TOKEN branch (which installs a REAL, USABLE credential — the sharpest contradiction of
+# "not published in the state overlay") both left the flag armed. Count the anchored withdrawals so
+# a new replacing arm that forgets one cannot land silently.
+# ⚠️ FROM THE ARMING LINE ONWARD, NOT THE WHOLE FILE. `_pw_unset_argo=0` is ALSO how the variable
+# is DECLARED, and the declaration matches this anchored pattern exactly — counting the whole file
+# gives 4 for 3 withdrawals, so a threshold of 3 would pass with only TWO. That is the very
+# "it could not tell the fix from its own initialiser" defect the case above records, re-committed
+# one line below it. Slice at the ARM (`_pw_unset_argo=1`), which sits after the declaration.
+_pwslice="$(printf '%s\n' "$_pwsrc" | awk '/_pw_unset_argo=1/{p=1} p{print} p&&/^fi$/{exit}')"
+_nwd="$(printf '%s\n' "$_pwslice" | grep -cE '^[[:space:]]*_pw_unset_argo=0[[:space:]]*$' || true)"
+# ⚠️ DERIVED, NOT THE CONSTANT 3. A `-ge 3` threshold counted WITHDRAWALS and never ARMS, so ADDING
+# a fourth replacing arm that forgets its withdrawal left the count at 3 and the case GREEN — it
+# could only catch a REMOVAL, which is half a gate, and the `3` was additionally hand-typed into
+# the pass message. Count the arms in the same slice; every arm but the plain `if` opener that
+# REPLACES the cell owes a withdrawal.
+# ⚠️ ARMS THAT REPLACE THE CELL, not every `if`/`elif` in the slice. A round measured a FALSE RED:
+# inserting one NESTED conditional that replaces no cell took narm 2 -> 3 with no defect present,
+# and the cheapest way to silence a false RED is to weaken the gate. Require the `argo_pw=` write,
+# which is what actually owes a withdrawal.
+_narm="$(printf '%s\n' "$_pwslice" \
+          | awk '/^[[:space:]]*(if|elif) /{a=1} a&&/argo_pw=/{c++; a=0} END{print c+0}')"
+if [ "${_nwd:-0}" -ge "${_narm:-99}" ]; then
+  ok "pw-note: every arm that replaces the ArgoCD cell withdraws the flag ($_nwd withdrawal(s), $_narm arm(s))"
+else
+  bad "pw-note: $_nwd withdrawal(s) for $_narm replacing arm(s)" \
+      "an arm that replaces the cell but keeps the flag makes the note contradict the cell beside it"
+fi
+# ...and the note must be DERIVED from the per-source flags, not from one shared flag armed early.
+case "$_pwsrc" in
+  *'_pw_unset_harbor'*'_pw_unset_gitea'*'_pw_unset_argo'*)
+    ok "pw-note: one flag per source, so a correction to one cell cannot leave the note armed" ;;
+  *)
+    bad "pw-note: a single shared flag arms the note" \
+        "a downstream correction to any one cell then cannot withdraw it" ;;
+esac
+
+# ══ THE "guest node SSH" HEADER: "read live" IS A CLAIM ═══════════════════════════════════════════
+# ⚠️ CORRECTED — ONE site hardcodes CREDS_NO_PROBE=1; `render()` never sets it and `render_with_env`
+# and `_agg_probe` default it to 0 against real listeners. The old text here said the whole suite was
+# blind to the probing surface, which is measurably false and is what kept the gap open. A round
+# MEASURED 127 ok BOTH BEFORE AND AFTER a change to the very line below — the `gates.md` "green at
+# the same count" tell. These cases extract the classifier and drive it directly, which is the only
+# way this gets a demonstrated RED without a live cluster.
+#
+# THE DEFECT: `_ssh_ep` takes EIGHT values and the header used to `case` on THREE of them, so the
+# TIMEOUT path (rc=124 -> `<could not read node addresses>`) fell to the catch-all and printed
+# `read live.` — measured on a powered-off estate, one report claiming eighteen lines apart that the
+# live cluster HAD been read, that it could NOT be read, and that the failure "says NOTHING about
+# the lab". `read live` reads as "we asked and this is the cluster's answer", so it sends the
+# operator to debug node networking or RBAC on a lab that is merely switched off.
+# Extract by NAME up to its closing brace at column 0 — never a line range, so a shifted file
+# cannot silently yield a fragment. An EMPTY extraction is a HARD FAILURE: a suite that passes over
+# an empty function is worse than no suite (the sibling test-creds-reach-ingress.sh records the run
+# where exactly that happened).
+_extract_fn() {
+  local _n="$1" _o
+  _o="$(awk -v f="${_n}() {" 'index($0,f)==1{p=1} p{print} p&&/^\}/{exit}' "${_CREDS_REPO}/scripts/creds.sh")"
+  [ -n "$_o" ] || { printf 'FATAL: could not extract %s() from creds.sh — renamed or reshaped.\n' "$_n" >&2
+                    printf '       Fix the extraction; do NOT let this suite pass over an empty function.\n' >&2
+                    exit 1; }
+  printf '%s' "$_o"
+}
+_hdr="$(_extract_fn _ssh_header_line)"
+# ⚠️ THE HARNESS MUST CARRY EVERY PARAMETER THE FUNCTION TAKES. `_ssh_header_line` grew a FIFTH
+# argument (answered-but-unreadable) and this wrapper was left at four, so the 6th case positional
+# silently landed on `never-asked` and a case written for `unreadable` tested something else. A
+# harness one argument behind its subject is a harness that tests a different function.
+_hdr_says() { bash -c 'eval "$1"; _ssh_header_line "$2" "$3" "$4" "$5" "$6"' _ "$_hdr" "${1:-0}" "${2:-1}" "${3:-}" "${4:-0}" "${5:-0}"; }
+_hdr_case() {  # <label> <answered> <rc> <state> <expected-substring> [never-asked] [unreadable]
+  local got; got="$(_hdr_says "$2" "$3" "$4" "${6:-0}" "${7:-0}")"
+  case "$got" in
+    *"$5"*) ok "ssh-header: $1" ;;
+    *)      bad "ssh-header: $1" "got: $(printf '%s' "$got" | tr -d '\n')" ;;
+  esac
+}
+# the rc=0 arm — we asked and the server answered
+_hdr_case "rc=0 -> read live"                       0 0   ""            "read live"
+# THE DEFECT'S OWN CASE: our budget expired, nothing came back. NOT a lab fact.
+_hdr_case "rc=124 (our timeout) -> NOT a lab fact"  0 124 "some state"  "NOTHING answered"
+_hdr_case "rc=137 (external kill) -> NOT a lab fact" 0 137 "some state" "NOTHING answered"
+# the token expired BEFORE dialling: nothing was asked, so neither claim applies
+_hdr_case "rc=119 (token expired, never dialled)"   0 119 "some state"  "NOT probed"
+# ⚠️ A REFUSAL IS AN ANSWER. The server replied; it said no. That IS a live read and a real RBAC
+# fact, so it must not be lumped with "nothing answered" — the naive fix for this defect would.
+# ⚠️ FORBIDDEN IS "ANSWERED BUT NOT READ", NOT "read live." — CORRECTED. This case used to pin
+# "read live." for it, which is what a round called out: the product's FORBIDDEN arm sets
+# `_ssh_unreadable=1` (its cell is `<not allowed to read addresses>`), so pinning the old text here
+# would have turned the suite RED the moment the product was fixed — a test defending the defect.
+# A refusal IS an answer (so `_ssh_answered=1` stays, and the estate is NOT reported as down); it is
+# simply not a READ, and the header must not say the addresses were read.
+_hdr_case "forbidden -> ANSWERED but not read" 1 403 "some state" "ANSWERED but the addresses were not readable" 0 1
+# never probed at all
+_hdr_case "never probed -> NOT probed"              0 1   ""            "NOT probed"
+# NOTHING WAS ASKED: the kube config named no reachable target, so "asked, and NOTHING answered"
+# would be a claim about the LAB made from a fault inside this box.
+_hdr_case "never-asked -> NOT probed, not a lab fact"  0 1 "some state" "kube config named no reachable target" 1
+# ...and the never-asked flag must NOT override a real answer.
+_hdr_case "answered beats never-asked"                 1 1 "some state" "read live" 1
+
+# ⚠️ STRUCTURAL: NO ARM MAY CLAIM AN ANSWER WHILE ITS CELL SAYS IT COULD NOT READ.
+# The header cases above drive `_ssh_header_line` with explicit args, so they cannot see the
+# PAIRING between the flag an arm sets and the CELL it sets beside it. A round measured exactly
+# that gap: the UNAUTHORIZED/STALE_CA/PLAINTEXT arms set `_ssh_answered=1` while reusing
+# "<could not read node addresses>", so the report printed "read live." directly above a cell
+# saying it could not be read — verbatim the defect the ssh-header block above exists to prevent,
+# re-created for 3 of 8 classes by the fix for the other five.
+_sshcase="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh" \
+             | awk '/classify_kube_failure "\$_ssh_verr"/{p=1} p{print} p&&/^             esac ;;$/{exit}')"
+[ -n "$_sshcase" ] || { printf 'FATAL: could not extract the _ssh_answered classifier case.\n' >&2; exit 1; }
+# ⚠️ ONE RECORD PER ARM, not per LINE. A round measured this: the defect written on ONE line is
+# caught, the IDENTICAL defect split across two lines (cell on one, flag on the next) is INVISIBLE —
+# and two-line arms are already this file's style. Join each arm into a single record at `;;` first.
+_bad_pair="$(printf '%s\n' "$_sshcase" | tr '\n' ' ' | sed 's/;;/;;\n/g' \
+  | grep -E '_ssh_answered=1' | grep -c 'could not read node addresses' || true)"
+if [ "${_bad_pair:-1}" -eq 0 ]; then
+  ok "ssh-header: no arm sets answered=1 beside a 'could not read' cell (header and cell agree)"
+else
+  bad "ssh-header: $_bad_pair arm(s) claim an ANSWER while their cell says it could not be read" \
+      "the header then prints 'read live.' above a cell that contradicts it"
+fi
+
+# ══ THE AGGREGATE, RENDERED END-TO-END THROUGH THE REAL creds.sh ══════════════════════════════════
+# ⚠️ THIS IS THE HALF THE FALSE COMMENT (corrected below) SUPPRESSED. Driving `_reach_class` proves
+# the classifier; it does NOT prove the counting loop, the band assembly, or — the one that matters
+# — the `_reach_nothing` -> PRECONDITION coupling. A round found the session's CRITICAL by rendering
+# through a fixture exactly like this one, and all three of its render-only findings lived here.
+#
+# THE FIXTURE IS THE POINT: a listener that ACCEPTS TCP AND CLOSES. `_ing_live` (a bare TCP connect)
+# passes, so the rows are not `silent` for the trivial reason; the first row's route curl then gets
+# 000, writes the `_route_dead` sentinel, and EVERY LATER ROW SHORT-CIRCUITS TO `LB up` WITHOUT
+# PROBING. That is the exact shape in which classing `LB up` as an ANSWER made a wholly-dead ingress
+# report "Something IS answering, so the estate is not off" and DELETED the precondition block.
+if command -v python3 >/dev/null 2>&1; then
+  _agg_probe() {   # -> the whole rendered report, against an accept-then-close listener
+    local t p lp out
+    trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # accept, close immediately, never speak HTTP -> TCP up, every request 000
+    python3 -c '
+import socket,sys
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(64)
+while True:
+    try: c,_=s.accept(); c.close()
+    except Exception: break
+' "$p" >/dev/null 2>&1 &
+    lp=$!
+    sleep 1
+    # every host RESOLVES TO THE INGRESS, so the DNS arms cannot short-circuit and the route probe
+    # is genuinely reached — without this the rows would be `stale DNS` and prove nothing here.
+    # ⚠️ SC2016 IS CORRECT AND DELIBERATE, exactly as in the sibling fixture above: `$2` is the
+    # STUB's positional, written LITERALLY into the file being generated — expanding it here would
+    # bake THIS shell's $2 into the stub. The disable scopes to the NEXT COMMAND, and the
+    # `{ … } > file` compound IS one command, so it must sit immediately above it.
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    # ⚠️ HARBOR POINTS AT THE SAME DEAD LISTENER, and that is not tidiness. My first version used
+    # `HARBOR_URL=10.0.0.1` (copied from the sibling fixture, where Harbor's verdict is irrelevant)
+    # and the row rendered `serving` — SOMETHING ON THIS BOX ANSWERS 10.0.0.1, so `_reach_ok` was 1
+    # and the "NOTHING answered" assertion failed for a reason that had nothing to do with the
+    # product. A fixture whose verdict depends on the developer's routing table is not a fixture.
+    # Aiming it at the accept-then-close listener makes every row deterministic.
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$p" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  # ── THE MIXED STATE: some rows serving, some 5xx — B731's own measured state ────────────────────
+  # ⚠️ THIS STATE HAD ZERO COVERAGE, and it is the one B731 was filed for: 10 serving + 2 `no
+  # backend` on the live lab, with `grep -cE 'build-apps|run the pipeline|still starting'` = 0 over
+  # the whole render. The remedy sentence EXISTED but was guarded on `_reach_ok == 0`, so ten serving
+  # rows suppressed the only line that explains a 5xx. A gating defect, not a missing feature.
+  _mixed_probe() {
+    local t p lp out
+    trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    local dp
+    dp="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # The first TWO vhost requests get 503 (route rendered, nothing healthy behind it); the rest 200.
+    # shellcheck disable=SC2016
+    python3 -c '
+import socket,sys
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(64); seen=0
+while True:
+    try:
+        c,_=s.accept(); c.settimeout(0.4)
+        try: req=c.recv(400)
+        except Exception: req=b""
+        if not req: c.close(); continue
+        if b"vks.local" in req:
+            seen+=1
+            if seen<=2:
+                c.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 3\r\n\r\nnope"); c.close(); continue
+        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); c.close()
+    except Exception: break
+' "$p" >/dev/null 2>&1 &
+    lp=$!
+    sleep 1
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$dp" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _mx_out="$(_mixed_probe)"
+  # CONTROL: the state really is MIXED — some serving AND some 5xx — or nothing below discriminates.
+  if [ "$(printf '%s\n' "$_mx_out" | grep -E '^  [A-Za-z]' | grep -c 'no backend')" -ge 1 ] \
+     && [ "$(printf '%s\n' "$_mx_out" | grep -E '^  [A-Za-z]' | grep -c 'serving')" -ge 1 ]; then
+    ok "mixed: the fixture produced BOTH serving and 'no backend' rows (the case is live)"
+  else
+    bad "mixed: the fixture is not mixed — it cannot discriminate" \
+        "fix the fixture, not the product"
+  fi
+  # THE VERDICT: the 5xx explanation must survive the presence of serving rows.
+  if [ "$(printf '%s' "$_mx_out" | grep -c 'answered but served nothing: the route IS rendered')" -ge 1 ]; then
+    ok "mixed: a 5xx is EXPLAINED even when other rows are serving (the gating defect is gone)"
+  else
+    bad "mixed: the 5xx rows carry no explanation because other rows are serving" \
+        "the remedy is guarded on _reach_ok == 0, so the common mixed case is silenced"
+  fi
+  # ...and it must say only what a 5xx PROVES — the arm is 5??, so a 500 from a LIVE app lands here.
+  case "$_mx_out" in
+    *'build-apps'*|*'run the pipeline'*)
+      bad "mixed: it prescribes building/running the pipeline for a 5xx" \
+          "the trigger cannot occur (install-all ends with build-apps) and it is false for a 500" ;;
+    *)  ok "mixed: it does NOT prescribe a build — the remedy hangs off what the reader observes" ;;
+  esac
+  # THE LEGEND: the term must be defined where it appears, and nowhere else.
+  if [ "$(printf '%s' "$_mx_out" | grep -c 'no backend = the route is rendered')" -ge 1 ]; then
+    ok "mixed: 'no backend' is DEFINED for the reader when a row uses it"
+  else
+    bad "mixed: 'no backend' appears in the table with no definition anywhere in the render" \
+        "4 of 8 producer values reached the operator with no reader-facing meaning"
+  fi
+
+  # The kubectl remedy carries a PRECONDITION, and this fixture is the state that needs it: the
+  # ingress answers from its own LB and does NOT need our kubeconfig, so a row can read `no backend`
+  # in a render whose Context block says the cluster is unreachable. Prescribing `kubectl` there is
+  # the "a remedy needs its precondition" defect this file already fixed for the cert block.
+  case "$_mx_out" in
+    *'cluster      : reachable'*)
+      bad "mixed: the fixture reached a cluster — the precondition case cannot be measured" \
+          "the fixture must have NO usable kubeconfig for this assertion to discriminate" ;;
+    *)
+      if printf '%s' "$_mx_out" | grep -q 'kubectl -n'; then
+        bad "mixed: it prescribes 'kubectl -n' in a render that says the cluster is NOT reachable" \
+            "the reader is sent to run a command this same report has shown cannot work"
+      else
+        ok "mixed: with the cluster unreachable, NO kubectl remedy is prescribed"
+      fi
+      if printf '%s' "$_mx_out" | grep -q 'cannot reach the cluster'; then
+        ok "mixed: and it SAYS why it cannot name the pods, instead of going silent"
+      else
+        bad "mixed: it neither prescribes nor explains — the 5xx rows get a dead end" \
+            "suppressing the remedy without saying why leaves the reader with nothing"
+      fi ;;
+  esac
+
+  # ── A 404 IS NOT A 5xx: the negative control for the remedy split ──────────────────────────────
+  # ⚠️ THIS EXISTS BECAUSE THE MERGED VERSION WAS MEASURABLY FALSE HERE. `_reach_half` is the
+  # `answered` CLASS — `no backend` PLUS `no route` PLUS the catch-all — so a remedy gated on it
+  # fired on a pure-404 state and told the operator to go and look at pods. MEASURED on the parent
+  # commit with this very fixture: "the route IS rendered ... kubectl -n <app> get pods", two lines
+  # under a legend saying "no route = the ingress does not know that hostname".
+  # ⚠️ IT ALSO STUBS kubectl SO THE CLUSTER READS REACHABLE. Without that, the kubectl line is
+  # suppressed by its own precondition and this case would pass for the WRONG REASON — it would be
+  # measuring the cluster gate, not the 404/5xx split.
+  _code_probe() {   # <status> <reason> [n=2] -> the whole render, the first n vhost hits get that status
+    local t p dp lp out
+    trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    dp="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # shellcheck disable=SC2016
+    python3 -c '
+import socket,sys
+code=sys.argv[2]; reason=sys.argv[3]; n=int(sys.argv[4])
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(64); seen=0
+while True:
+    try:
+        c,_=s.accept(); c.settimeout(0.4)
+        try: req=c.recv(400)
+        except Exception: req=b""
+        if not req: c.close(); continue
+        if b"vks.local" in req:
+            seen+=1
+            if seen<=n:
+                c.sendall(("HTTP/1.1 %s %s\r\nContent-Length: 3\r\n\r\nno!" % (code,reason)).encode()); c.close(); continue
+        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); c.close()
+    except Exception: break
+' "$p" "$1" "$2" "${3:-2}" >/dev/null 2>&1 &
+    lp=$!
+    sleep 1
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    # Only two behaviours matter: `version` must exit 0 (that is what sets `cluster : reachable`)
+    # and `config current-context` must name something. Everything else exits 0 with no output.
+    { printf '#!/bin/sh\n'
+      printf 'case "$*" in *"config current-context"*) echo stub-ctx ;; esac\n'
+      printf 'exit 0\n'; } > "$t/bin/kubectl"
+    chmod +x "$t/bin/kubectl"
+    : > "$t/kc"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$dp" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              KUBECONFIG="$t/kc" CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+
+  _404_out="$(_code_probe 404 'Not Found')"
+  # CONTROL 1: the fixture really produced 404 rows, or nothing below discriminates.
+  if [ "$(printf '%s\n' "$_404_out" | grep -E '^  [A-Za-z]' | grep -c 'no route')" -ge 1 ]; then
+    ok "404: the fixture produced 'no route' rows (the case is live)"
+  else
+    bad "404: the fixture produced no 'no route' row — it cannot discriminate" \
+        "fix the fixture, not the product"
+  fi
+  # CONTROL 2: the cluster gate is OPEN, so a suppressed kubectl line below means the 404/5xx split
+  # did it — not the precondition. Without this the negative control passes for the wrong reason.
+  case "$_404_out" in
+    *'cluster      : reachable'*)
+      ok "404: the cluster reads REACHABLE, so the kubectl precondition is not what is being measured" ;;
+    *)  bad "404: the stub did not make the cluster reachable" \
+            "the next assertion would pass because of the precondition, not the 404 split" ;;
+  esac
+  # THE NEGATIVE CONTROL: a 404 must NOT be explained as a rendered route with a sick backend.
+  if printf '%s' "$_404_out" | grep -q 'route IS rendered'; then
+    bad "404: a pure-404 state is explained as 'the route IS rendered'" \
+        "_reach_half is the answered CLASS, not the 5xx bucket — this is FALSE for a 404"
+  else
+    ok "404: the 5xx explanation is ABSENT (it is keyed on the CELL, not on the answered class)"
+  fi
+  if printf '%s' "$_404_out" | grep -q 'kubectl -n'; then
+    bad "404: it sends the reader to 'kubectl -n' for a hostname the ingress never learned" \
+        "there is no namespace to look in: the route does not exist"
+  else
+    ok "404: no pod-hunting remedy is prescribed for a 404"
+  fi
+  # ...and it must say what a 404 DOES mean, or suppressing the wrong sentence just loses the reader.
+  # ⚠️ MATCH THE COUNTED SENTENCE, NOT THE BARE PHRASE. The first version of this grepped
+  # 'the ingress does not know that hostname' and PASSED ON THE PARENT — that phrase is also in the
+  # `no route` LEGEND, so the assertion was reading the legend and calling it the remedy. This file
+  # already records the same trap one block up ("Match the ROWS, not the whole render").
+  if printf '%s' "$_404_out" | grep -q 'answered 404: the ingress does not know'; then
+    ok "404: it gets its OWN sentence, pointing at the ingress"
+  else
+    bad "404: the 404 rows carry no explanation at all" \
+        "splitting the remedy must not silently drop the case it split off"
+  fi
+
+  # NUMBER AGREEMENT: the count above is 2, so it can only ever exercise the plural. A report that
+  # says "2 ... that hostname" is the kind of line an operator reads as machine-generated noise.
+  _404_one="$(_code_probe 404 'Not Found' 1)"
+  if [ "$(printf '%s\n' "$_404_one" | grep -E '^  [A-Za-z]' | grep -c 'no route')" -eq 1 ]; then
+    ok "404(1): the fixture produced exactly ONE 'no route' row (the singular case is live)"
+  else
+    bad "404(1): the fixture did not produce exactly one 'no route' row" \
+        "fix the fixture, not the product"
+  fi
+  case "$_404_one" in
+    *'1 answered 404: the ingress does not know that hostname'*)
+      ok "404(1): a single 404 reads in the SINGULAR" ;;
+    *'those hostnames'*)
+      bad "404(1): one row is described as 'those hostnames'" \
+          "the noun is not agreed with the count" ;;
+    *)  bad "404(1): the 404 sentence did not render at all in the single-row case" \
+            "a count of 1 must still produce the explanation" ;;
+  esac
+
+  # ── THE NAMESPACE IS CARRIED, NOT DERIVED FROM THE SERVICE COLUMN ──────────────────────────────
+  # ⚠️ MEASURED FALSE on the two rows most likely to need it: the Service column reads `Gitea` and
+  # `Tekton` while the namespaces are `gitea` and `tekton-pipelines`, and all three infra namespaces
+  # are operator knobs (`.env.example`: "choose: any namespace you own"), so NO rule over the column
+  # can be right. The parent commit printed the literal `kubectl -n <app> get pods`.
+  _503_out="$(_code_probe 503 'Service Unavailable')"
+  if [ "$(printf '%s\n' "$_503_out" | grep -E '^  [A-Za-z]' | grep -c 'no backend')" -ge 1 ]; then
+    ok "503+ns: the fixture produced 'no backend' rows (the case is live)"
+  else
+    bad "503+ns: the fixture produced no 'no backend' row — it cannot discriminate" \
+        "fix the fixture, not the product"
+  fi
+  if printf '%s' "$_503_out" | grep -q 'kubectl -n tekton-pipelines get pods'; then
+    ok "503+ns: the REAL namespace is named (tekton-pipelines), not the Service column's 'Tekton'"
+  else
+    bad "503+ns: the remedy does not name the row's real namespace" \
+        "the Service column says Tekton; the namespace is tekton-pipelines — deriving it is FALSE"
+  fi
+  case "$_503_out" in
+    *'kubectl -n <app>'*|*'name in the Service column'*)
+      bad "503+ns: it still states a RULE over the Service column instead of naming the namespace" \
+          "that rule is measurably wrong for Gitea and Tekton, the two rows most likely to hit it" ;;
+    *)  ok "503+ns: no Service-column rule is stated — the value is carried, not inferred" ;;
+  esac
+
+  # ── POWERED OFF: TCP REFUSED, and this is where the STRONG claim belongs ───────────────────────
+  # ⚠️ MEASURABLY DISJOINT from the hung shape above, and that fact is what makes the confirmation
+  # affordable: `_ing_live=0` short-circuits every row to `silent` BEFORE any curl, so a powered-off
+  # lab writes ZERO strikes and never reaches the degraded path. MEASURED: powered off -> 9 rows
+  # silent, 0 strikes, 0.3s; hung LB -> 9 rows silent, 9 strikes, 7.6s.
+  _off_probe() {
+    local t out
+    trap 'rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    # bind, read the port, CLOSE it: nothing listens, so connections are REFUSED.
+    local p dp
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    dp="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$dp" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _off_out="$(_off_probe)"
+  if [ "$(printf '%s' "$_off_out" | grep -c 'Reachable = the address answered')" -ge 1 ]; then
+    ok "powered-off: the fixture rendered a real report (the case is live)"
+  else
+    bad "powered-off: the fixture rendered NO report — it cannot discriminate anything" \
+        "fix the fixture, not the product"
+  fi
+  case "$_off_out" in
+    *'NOTHING answered on this run'*)
+      ok "powered-off: a REFUSED port gets the strong claim (this is what it exists for)" ;;
+    *)  bad "powered-off: the strong claim was withheld from a genuinely refused port" \
+            "the confirmation must never reach this path — a refused lab writes ZERO strikes" ;;
+  esac
+  if [ "$(printf '%s' "$_off_out" | grep -c 'needs the lab')" -ge 1 ]; then
+    ok "powered-off: the precondition FIRES — every remedy needs an estate that answers"
+  else
+    bad "powered-off: the precondition is ABSENT on a genuinely refused port" \
+        "this is the regression five rounds were spent preventing"
+  fi
+  # ⚠️ `silent` IS THE WORD THE WHOLE TABLE READS IN THIS STATE, and it was the FIFTH producer value
+  # with no reader-facing definition — while the comment above the legend listed it among the ones
+  # that "were explained". It spans "nothing is listening" and "it took the connection and never
+  # finished a reply", which have different remedies, so the reader cannot infer it.
+  if [ "$(printf '%s\n' "$_off_out" | grep -E '^  [A-Za-z]' | grep -c 'silent')" -ge 1 ]; then
+    if [ "$(printf '%s' "$_off_out" | grep -c 'silent     = nothing answered')" -ge 1 ]; then
+      ok "powered-off: 'silent' is DEFINED for the reader when a row uses it"
+    else
+      bad "powered-off: every row reads 'silent' and the render defines it NOWHERE" \
+          "the legend comment claimed it was explained; it was the fifth undefined value"
+    fi
+  else
+    bad "powered-off: no row reads 'silent' — the legend assertion cannot discriminate" \
+        "fix the fixture, not the product"
+  fi
+  # ...and it must be CHEAP: no curl runs at all, so this path cannot pay the confirmation's cost.
+  if [ "$(printf '%s' "$_off_out" | grep -c 'probed on a SHORTENED')" -eq 0 ]; then
+    ok "powered-off: no row was degraded, so the confirmation never ran (0 strikes)"
+  else
+    bad "powered-off: rows were degraded on a REFUSED port" \
+        "degradation must be disjoint from powered-off, or the confirmation costs on the wrong path"
+  fi
+
+  # ── THE COLD-START CASE: the CRITICAL, in the direction that cannot be seen by classifying cells ──
+  # A round measured that a ONE-strike `_route_dead` cache makes a HEALTHY ingress report
+  # "0 of 3 — NOTHING answered ... Consistent with the lab being OFF", because one transient failure
+  # is generalised to every later row WITHOUT PROBING. This is the documented 5-60s LB-wiring window
+  # (`verify-ingress` carries a readiness poll for exactly it), so it is an ordinary state, not an
+  # exotic one. A dead ingress and a cold-start ingress emit IDENTICAL cells under a one-strike
+  # cache, so NO classification of the Reachable column can tell them apart — the fix had to be in
+  # the measurement (two strikes), and this case is what holds it there.
+  # Fail only the FIRST HTTP REQUEST, keyed on requests rather than connections: the TCP liveness
+  # probe opens a connection WITHOUT sending bytes, and how many such probes precede the first row
+  # is an implementation detail this case must not depend on.
+  _agg_probe_coldstart() {
+    local t p lp out
+    trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # ⚠️ A SECOND, DEAD PORT FOR HARBOR — and this is what makes the case DISCRIMINATE. With Harbor
+    # pointed at the SAME live listener, the "rows are still probed and read serving" assertion is
+    # satisfied by the HARBOR row and stays GREEN under the one-strike defect: measured, rc=0 with
+    # the bug reinstated. Only ingress rows may be able to produce `serving` here.
+    _dead_p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # ⚠️ SC2016 is CORRECT and deliberate: this is a PYTHON program in a single-quoted shell string —
+    # `sys.argv[1]` is python's, and expanding it here would bake the test harness own argv into it.
+    # shellcheck disable=SC2016
+    python3 -c '
+import socket,sys
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(64); failed=False
+while True:
+    try:
+        c,_=s.accept(); c.settimeout(0.4)
+        try: req=c.recv(400)
+        except Exception: req=b""
+        if not req: c.close(); continue          # a bare TCP liveness probe: not a request
+        # KEY ON THE HOST HEADER, never on a request INDEX. The banner runs its OWN ingress check
+        # first (measured: `Host: 127.0.0.1:<port>`, with no vhost name), so "fail the first
+        # request" fails the BANNER and leaves every row serving — the fixture then proves nothing
+        # and stays green against the defect. Failing the first *vhost* request is what makes the
+        # first ROW fail, and it cannot rot if the banner own probe count changes.
+        if (not failed) and b"vks.local" in req:
+            failed=True; c.close(); continue
+        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); c.close()
+    except Exception: break
+' "$p" >/dev/null 2>&1 &
+    lp=$!
+    sleep 1
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$_dead_p" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _cs_out="$(_agg_probe_coldstart)"
+
+  # ── THE STALE SENTINEL: a crashed run poisons the NEXT one ─────────────────────────────────────
+  # `_route_dead` is a PREDICTABLE path (`$TMPDIR/.creds-route-dead.$$`) and the EXIT trap does not
+  # run on SIGKILL, so a sentinel can outlive its run — and after PID reuse the next run inherits
+  # it. A round measured an EMPTY planted file turning "3 of 5 serving, 2 silent" into
+  # "0 of 2 — NOTHING answered ... Consistent with the lab being OFF" against an ingress serving 200.
+  # ⚠️ `exec` IS LOAD-BEARING: it preserves the PID, so the `$$` the wrapper used to name the file is
+  # the same `$$` creds.sh resolves. Without it the planted path cannot match and this case is
+  # vacuous — it would pass whether or not the product clears the sentinel.
+  _stale_probe() {
+    local t p lp out
+    trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    python3 -m http.server "$p" --bind 127.0.0.1 >/dev/null 2>&1 &
+    lp=$!
+    sleep 1
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$p" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              TMPDIR="$t" CREDS_NO_PROBE=0 CREDS_TOKEN=1 \
+              bash -c 'printf ".." > "$TMPDIR/.creds-route-dead.$$"; exec "$0"' \
+                   "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    # ⚠️ THE CONTROL MUST BE INDEPENDENT OF THE THING UNDER TEST. A first version read `serving`
+    # out of the PRODUCT's own table — but a planted sentinel suppresses exactly those rows, so the
+    # control went RED alongside the verdict and printed "fix the fixture, not the product" while
+    # the product was the problem. Ask the LISTENER directly instead; nothing creds.sh does can
+    # change this answer.
+    local _lcode
+    _lcode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:${p}/" 2>/dev/null || true)"
+    kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+    printf 'LISTENER=%s\n%s' "${_lcode:-000}" "$out"
+    rm -rf "$t"
+  }
+  _stale_raw="$(_stale_probe)"
+  _stale_code="$(printf '%s\n' "$_stale_raw" | sed -n '1s/^LISTENER=//p')"
+  _stale_out="$(printf '%s\n' "$_stale_raw" | tail -n +2)"
+  # CONTROL, measured against the LISTENER, not against the report.
+  case "${_stale_code:-000}" in
+    2??|3??) ok "stale-sentinel: the fixture listener really is serving (HTTP $_stale_code) — the case is live" ;;
+    *)       bad "stale-sentinel: the fixture listener answered $_stale_code — it cannot discriminate" \
+                 "the http.server did not come up; fix the fixture, not the product" ;;
+  esac
+  case "$_stale_out" in
+    *'lab being OFF'*)
+      bad "stale-sentinel: a planted sentinel from a dead run reports a SERVING lab as OFF" \
+          "creds.sh must clear \$_route_dead at start — the EXIT trap does not run on SIGKILL" ;;
+    *)  ok "stale-sentinel: a leftover sentinel does NOT poison the next run" ;;
+  esac
+  # CONTROL: the first request really did fail, or this case is testing a healthy listener.
+  # ⚠️ SCOPED TO THE INGRESS ROWS. A bare `grep -c 'silent'` over the WHOLE report matched three
+  # things that are not an ingress row: Harbor's cell (deliberately pointed at a dead port), ArgoCD's
+  # cell, and the SUMMARY LINE'S OWN PROSE ("3 silent."). Measured with the listener failing NOTHING,
+  # the control reported the case LIVE and all four assertions passed — so it could not tell "the fix
+  # works" from "the fixture never induced a failure".
+  if [ "$(printf '%s\n' "$_cs_out" | grep -E '^[[:space:]]*(Gitea|Tekton|headlamp)[[:space:]]' | grep -c 'silent')" -ge 1 ]; then
+    ok "coldstart: an INGRESS row really failed (the case is live)"
+  else
+    bad "coldstart: no INGRESS row reads 'silent' — the listener served everything" \
+        "the fixture is not producing a cold start; fix the fixture, not the product"
+  fi
+  # THE VERDICT: rows AFTER the transient failure must be probed, and must read serving.
+  if [ "$(printf '%s' "$_cs_out" | grep -c 'serving')" -ge 1 ]; then
+    ok "coldstart: rows after a transient first failure are still PROBED and read serving"
+  else
+    bad "coldstart: one transient failure suppressed every later row" \
+        "a single failed probe is standing in for all of them — the cache needs a second strike"
+  fi
+  case "$_cs_out" in
+    *'lab being OFF'*)
+      bad "coldstart: a HEALTHY ingress is reported as 'Consistent with the lab being OFF'" \
+          "one transient probe failure has been generalised to the whole estate" ;;
+    *)  ok "coldstart: a transient first failure does NOT declare the estate off" ;;
+  esac
+  if [ "$(printf '%s' "$_cs_out" | grep -c 'needs the lab')" -eq 0 ]; then
+    ok "coldstart: the powered-off precondition stays SILENT while the ingress is serving"
+  else
+    bad "coldstart: the powered-off precondition fired against a serving ingress" \
+        "every remedy is then withheld from an operator whose lab is fine"
+  fi
+
+  _agg_out="$(_agg_probe)"
+  # THE CONTROL FIRST: if the fixture did not actually render a report, every assertion below is
+  # vacuous — and a creds.sh that dies while sourcing prints ZERO lines, which is indistinguishable
+  # from "the block is gone" (this suite has been fooled that way before).
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'Reachable = the address answered')" -ge 1 ]; then
+    ok "aggregate-render: the fixture rendered a real report (the case is live)"
+  else
+    bad "aggregate-render: the fixture rendered NO report — it cannot discriminate anything" \
+        "fix the fixture, not the product: creds.sh probably died sourcing lib/os.sh"
+  fi
+  # ...and that the SHORT-CIRCUIT actually occurred, or this is not the state we came to test.
+  # ⚠️ THE OPPOSITE OF WHAT THIS USED TO ASSERT, and the inversion IS the fix. It required at least
+  # one row to read `LB up` — i.e. it DEMANDED that a row go UNPROBED, which is the defect itself:
+  # an un-asked row cannot contradict "NOTHING answered", so a recovering ingress read as a dead
+  # estate. Rows are now always probed (the BUDGET degrades instead), so NO row may read `LB up`
+  # here, and the denominator covers every probeable row rather than shrinking to the ones asked
+  # first. This case has now pinned the arithmetic of TWO successive defects (>=2 under the
+  # one-strike cache, >=1 under two-strike) — assert the property, never the skipping.
+  # ⚠️ SCOPED TO THE TABLE ROWS. A bare `grep -c 'LB up'` over the whole render also matches the
+  # LEGEND line that now DEFINES the term — so adding the definition reddened this case for a reason
+  # that had nothing to do with a row being skipped. A service row starts with two spaces and a name;
+  # the legend lines are indented four. Same class as the cold-start control below.
+  if [ "$(printf '%s\n' "$_agg_out" | grep -E '^  [A-Za-z]' | grep -c 'LB up')" -eq 0 ]; then
+    ok "aggregate-render: no row is SKIPPED — every ingress row was probed (none reads 'LB up')"
+  else
+    bad "aggregate-render: a row read 'LB up', i.e. it was never probed" \
+        "an un-asked row cannot contradict the verdict — that is how a serving lab reads as OFF"
+  fi
+  # ⚠️ THIS FIXTURE IS THE **HUNG** SHAPE (accepts TCP, never replies), NOT powered-off — and the
+  # two assertions that used to live here demanded the STRONG claim ("NOTHING answered ... lab being
+  # OFF") for it. That was pinning the old behaviour: a hung LB writes strikes, so its rows are
+  # measured on a SHORTENED budget, and a shortened-budget silence does not entitle the report to
+  # say the estate is off (a healthy backend merely slower than that budget produces it). The hung
+  # shape already has its OWN dedicated banner — "accepts TCP connections but completed no HTTP
+  # request" — so the strong claim is not the sole carrier here.
+  # The POWERED-OFF case is asserted separately below, against a REFUSED port, because that is the
+  # state the strong claim exists for and it is measurably disjoint from this one (0 strikes).
+  case "$_agg_out" in
+    *'probed on a SHORTENED'*)
+      ok "aggregate-render: a hung ingress does NOT get the strong claim — it names the shortened budget" ;;
+    *'NOTHING answered on this run'*)
+      bad "aggregate-render: a hung ingress is declared OFF on shortened-budget evidence" \
+          "a backend merely slower than the degraded budget produces the same silence" ;;
+    *)
+      bad "aggregate-render: neither sentence printed for a hung ingress" \
+          "got: $(printf '%s' "$_agg_out" | grep -m1 'reachable:' | tr -d '\n')" ;;
+  esac
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'needs the lab')" -eq 0 ]; then
+    ok "aggregate-render: the powered-off precondition is WITHHELD on shortened-budget evidence"
+  else
+    bad "aggregate-render: the precondition fired on shortened-budget evidence" \
+        "that is the false-OFF class: five refuted fixes moved a threshold instead of gating the claim"
+  fi
+  # ⚠️ AND THE HOIST: HARBOR_INSECURE=1 means NO row carries a cert marker, so the untrusted-cert
+  # block is absent. The precondition used to be NESTED INSIDE that block and therefore vanished in
+  # exactly this configuration, while the DNS advice and the `re-check:` register still printed.
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'untrusted cert')" -eq 0 ]; then
+    ok "aggregate-render: no cert block here (HARBOR_INSECURE=1) — so the precondition above is NOT nested in it"
+  else
+    bad "aggregate-render: a cert block rendered under HARBOR_INSECURE=1" \
+        "the hoist assertion above is then vacuous — it cannot tell nested from hoisted"
+  fi
+  # NEGATIVE: it must not claim the estate is alive off un-probed rows.
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'the estate is not off')" -eq 0 ]; then
+    ok "aggregate-render: it does NOT claim the estate is alive on the strength of un-probed rows"
+  else
+    bad "aggregate-render: 'the estate is not off' printed for an ingress that answered nothing" \
+        "a memoised 'we did not ask' is being read as an answer"
+  fi
+fi
+
+# ══ THE REACHABILITY AGGREGATE: ITS CLASSIFIER, WHICH THE SUITE COULD NOT REACH AT ALL ════════════
+# ⚠️ CORRECTED — THE SENTENCE THAT WAS HERE WAS MEASURED FALSE, AND IT WAS THE THING KEEPING THE
+# GAP OPEN. It claimed "EVERY RENDER SITE IN THIS FILE SETS CREDS_NO_PROBE=1, so the counting loop's
+# classification is STRUCTURALLY UNREACHABLE by a rendered assertion" — i.e. it told the next
+# session not to bother. A round measured it false three ways: `render()` never sets
+# CREDS_NO_PROBE at all; `render_with_env` defaults it to 0 AND starts a real listener with a
+# getent stub; and running that fixture printed a real aggregate line. Only ONE site hardcodes the
+# flag. So the rendered sentence, the `_reach_nothing` -> precondition coupling, the band assembly
+# and the follow-up ARE executed by this suite — and were asserted NOWHERE. Three of that round's
+# findings lived in that blind spot, and it found them by rendering through the fixture this
+# comment said did not exist.
+# Extracting `_reach_class` is still worth it (it drives the classifier without a listener), but it
+# is NOT the only way — see the rendered assertions below.
+_rc_fn="$(_extract_fn _reach_class)"
+_rc_says() { bash -c 'eval "$1"; _reach_class "$2"' _ "$_rc_fn" "${1:-}"; }
+_rc_case() {  # <cell> <expected bucket>
+  local got; got="$(_rc_says "$1")"
+  if [ "$got" = "$2" ]; then ok "reach-class: '$1' -> $2"
+  else bad "reach-class: '$1' -> $2" "got: $got"; fi
+}
+# THE POSITIVE CONTROL, and the defect's own case: a 503 means the route is RENDERED and a server
+# REPLIED. `_reach_ingress`'s own comment calls it THE NORMAL state after `make install-all`.
+# Classing it as a failure printed "0 of 11 — NOTHING answered" 28 lines under six such cells.
+_rc_case 'no backend' answered
+_rc_case 'no route'   answered
+# ⚠️ `skip`, NOT `answered` — REFUTED by a round and measured: `LB up` is emitted by the
+# `_route_dead` PERFORMANCE CACHE (and by the no-host arm), so those rows were never probed at all.
+# Classing it `answered` made a wholly-unresponsive ingress read as "something IS answering" and
+# SUPPRESSED the powered-off precondition block, while the dead-end remedies still printed.
+_rc_case 'LB up'      skip
+_rc_case 'HTTP 418'   answered
+_rc_case 'serving'    serving
+_rc_case 'silent'     silent
+# THE DNS PAIR ANSWERED — both arms are reachable ONLY AFTER `_ing_live` proved the LB responds, so
+# the SERVICE is up and THIS BOX cannot reach it by name. Calling that `silent` tells a first-time
+# operator their lab is down when the remedy is the /etc/hosts line this report already printed.
+_rc_case 'no DNS here' dns
+_rc_case 'stale DNS'   dns
+# NO PROBE WAS ISSUED -> OUT OF THE DENOMINATOR. Counting these made a fully healthy lab whose
+# names do not resolve read as a ~45% failure rate.
+_rc_case 'not probed' skip
+_rc_case 'not set'    skip
+_rc_case 'unresolved' skip
+_rc_case 'unknown'    skip
+_rc_case '-'          skip
+_rc_case ''           skip
+# ⚠️ AND EVERY STRING THE PRODUCERS CAN EMIT MUST BE ENUMERATED HERE. A value that reaches the
+# catch-all is still COUNTED (never silently dropped from the denominator), but it is a bug in the
+# enumeration, and this case is what makes a ninth producer string visible instead of quietly
+# reclassified. Derived from the producers, so a new `printf` in _reach_ingress/_reach_harbor/
+# _reach_argocd that nobody classified turns this red.
+# ⚠️ ASSERT THE ENUMERATION, NOT THE RETURN VALUE — the previous version of this case COULD NOT
+# FAIL. It fed each string to `_reach_class` and accepted any of the five buckets; the catch-all
+# returns `answered`, which is one of the five, so a NINTH producer string was quietly reclassified
+# and the case stayed green — the exact outcome its own comment claimed to prevent. (Measured:
+# "ZZZ-never-classified" -> answered -> accepted.) Its second claim was false too: the list was
+# hand-typed here, so a new `printf` in a producer never appeared in it.
+# Derive the strings FROM THE PRODUCERS and require each to appear as a LITERAL in `_reach_class`.
+_rc_body="$(_extract_fn _reach_class)"
+# ⚠️ THE CASE *PATTERNS* ONLY — not the whole body. Grepping the body is VACUOUS for any string that
+# is also an OUTPUT: `printf 'serving'` satisfies a search for `'serving'` without `serving` ever
+# appearing as an input pattern. Measured on the first run of this case: it flagged the four
+# input-only strings and silently passed the five that double as bucket names. Take the text left of
+# the first `)` on each arm, which is the pattern list and nothing else.
+_rc_pats="$(printf '%s\n' "$_rc_body" | grep -E "^[[:space:]]*'" | sed 's/).*//')"
+[ -n "$_rc_pats" ] || { printf 'FATAL: extracted ZERO case patterns from _reach_class.\n' >&2; exit 1; }
+_rc_prod="$(awk '/^_reach_ingress\(\) \{/,/^\}/' "${_CREDS_REPO}/scripts/creds.sh"
+            awk '/^_reach_harbor\(\) \{/,/^\}/'  "${_CREDS_REPO}/scripts/creds.sh"
+            awk '/^_reach_argocd\(\) \{/,/^\}/'  "${_CREDS_REPO}/scripts/creds.sh"
+            awk '/^harbor_reachable_state\(\) \{/,/^\}/' "${_CREDS_REPO}/scripts/lib/harbor.sh")"
+# every literal a producer can print, minus the format-string arm (`HTTP %s`, covered by the
+# catch-all and by its own _rc_case above)
+_rc_strings="$(printf '%s\n' "$_rc_prod" \
+  | grep -v '>>' | grep -v '> *"' \
+  | grep -oE "printf '[^']+'" | sed "s/^printf '//; s/'\$//" | grep -v '%' | sort -u)"
+# ⚠️ DROP REDIRECTED printfs FIRST. A producer function may `printf` to a FILE as well as to stdout,
+# and only stdout becomes the Reachable cell. Removing the `[a-zA-Z]` anchor (below) immediately
+# picked up the two-strikes sentinel's own `printf '.' >> "$_route_dead"` and reported `.` as an
+# unclassified producer string — a false RED from the very widening that fixed a false GREEN.
+# ⚠️ NO `[a-zA-Z]` ANCHOR. It silently dropped every producer string that does not begin with a
+# letter, and the FATAL guard fires only at ZERO strings — so an UNDER-extraction was
+# indistinguishable from a clean run. A round planted `printf '<teapot>'` in a producer: the
+# extracted set was byte-identical to the baseline and the unclassified string sailed through to the
+# catch-all. `<...>` cell markers are this file's house style — this arc added three of them.
+[ -n "$_rc_strings" ] || { printf 'FATAL: extracted ZERO producer strings — the awk ranges rotted.\n' >&2; exit 1; }
+_rc_missing=""; _rc_n=0
+while IFS= read -r _v; do
+  [ -n "$_v" ] || continue
+  _rc_n=$((_rc_n + 1))
+  printf '%s' "$_rc_pats" | grep -qF "'${_v}'" || _rc_missing="${_rc_missing} '${_v}'"
+done <<EOF
+$_rc_strings
+EOF
+if [ -z "$_rc_missing" ]; then
+  ok "reach-class: all $_rc_n producer string(s) are ENUMERATED in _reach_class (not just bucketed)"
+else
+  bad "reach-class: producer string(s) NOT enumerated in _reach_class:$_rc_missing" \
+      "they fall to the catch-all and are silently reported as 'answered'"
+fi
+# POSITIVE CONTROL for the extraction itself: a string the producers cannot emit must NOT be found
+# in the enumeration, or the grep above matches everything and the case is vacuous again.
+if printf '%s' "$_rc_pats" | grep -qF "'ZZZ-never-classified'"; then
+  bad "reach-class: the enumeration grep matches a string no producer emits" \
+      "the membership test is vacuous — it would pass for any input"
+else
+  ok "reach-class: the enumeration grep rejects a string no producer emits (control)"
+fi
+# ⚠️ AND THE DISCRIMINATION, which is the point: the timeout and the never-probed cases must not
+# produce the SAME sentence. Before the fix they produced the same WRONG one.
+if [ "$(_hdr_says 0 124 'x')" = "$(_hdr_says 0 1 '')" ]; then
+  bad "ssh-header: a timed-out probe and a never-probed run say the SAME thing" \
+      "they are different states and need different responses"
+else
+  ok "ssh-header: a timed-out probe and a never-probed run are DISTINGUISHABLE"
+fi
 
 # ⚠️ STRUCTURAL, and deliberately so: it is the ONE property no render can show. A `sudo` command
 # that rewrites /etc/hosts lines is wrong on more shapes than it is right on, and its absence is
