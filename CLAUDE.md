@@ -1056,140 +1056,99 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-11 — the fix for "the estate is off" DELETED the "estate is off" warning
+## ▶️ HANDOFF 2026-09-11 (afternoon) — SIX rounds, six refutations, and each of the last two killed my fix for the one before
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### 🔴 DISTRUST FIRST — NINE instruments lied today and not one of them errored
+### 🔴 DISTRUST FIRST — the instruments that lied, and TWO of them were things I wrote to check my own work
 
 | instrument | what it did |
 |---|---|
-| `grep -c '^ok'` on `test-creds-reach-ingress` | the suite INDENTS `ok` two spaces -> **0**, read as "the suite ran nothing" (it ran 27) |
-| `grep 'NORMAL state after'` | the phrase **spans a newline** -> 0 hits, read as "the comment does not exist" |
-| a python anchor on `elif [ "$_have_sink" = 1 ]; then` | matched **TWO** lines (one a prefix of a longer one) -> assert threw -> **three RED-proofs silently ran against an UNMUTATED tree** and read as "the gate is blind" |
-| `timeout 240 make verify-ingress` | its gitea poll alone budgets **300s** -> rc=124 = MY OWN cap, read as a verdict |
-| `timeout 120 make harbor-reachable` | its wait loop is **900s** -> read as "Harbor never came back" |
-| `git status` run mid-flight | a backgrounded chain was between its suite run and its commit -> "the commit did not land" reported as fact; it had |
-| `HARBOR_URL=10.0.0.1` in a NEW fixture | **something on this box ANSWERS 10.0.0.1** -> the row rendered `serving`, so an assertion failed for a reason unrelated to the product |
-| `harbor_reachable_state` at 2s | Harbor was genuinely silent at **20s** too — but only measuring all four budgets proved the 2s cap was not the cause |
-| a body-wide `grep` for `'serving'` in a new test | `printf 'serving'` **is in the body**, so the membership test passed vacuously for every string that doubles as a bucket name |
+| **a worktree adversary's `git show HEAD`** | MEASURED with `git worktree list`: both `isolation:"worktree"` agents were created from **`origin/main`, SIXTEEN commits behind my branch** — NOT from my HEAD, which is what `agents.md` says. A brief that says "review the top commit" then reviews a commit nobody is proposing. Corrected mid-run by sending explicit refs. **Run `git worktree list` immediately after every dispatch.** |
+| a new assertion greping `'the ingress does not know that hostname'` | that phrase is ALSO in the `no route` **legend**, so it **passed on the parent** — the assertion was reading the legend and calling it the remedy. The file records this exact trap one block up ("Match the ROWS, not the whole render"). Fixed to grep the COUNTED sentence (`answered 404: the ingress does not know`), which re-RED'd. |
+| `${6//[$_sep]/ }` in `add_row`, under `set -u` | dies **`6: unbound variable`** on the three call sites that legitimately pass five arguments (Harbor registry, Harbor web UI, ArgoCD) — i.e. it would have taken the whole report down. Caught by running it, not by reading it; `${6:-}` is the fix. |
+| `grep -c '^ok '` on `test-creds-show` | the suite prints `ok` at **column 0** here and **indented** in its sibling — the same grep is right in one file and returns **0** in the other. Anchor per file, or read the tail verdict. |
 
-### What shipped — `fix/creds-lab-down-state`, 7 commits, `make ci` GREEN (155 tests, 0 failed), NOT pushed
+Plus yesterday's nine, unchanged in kind: a phrase spanning a newline, a python anchor matching two
+lines, two `timeout` caps shorter than the target's own poll budget, a `git status` read mid-flight,
+and a body-wide grep satisfied by the function's own output literals.
 
-Validated `make creds` in THREE live states against the real lab (down → half-up → up), and the
-report is now true in each. **136 → 163 assertions**, every new one RED-proven by mutation, and the
-healthy render is **byte-identical** after all of it.
+### In flight — PR #1252, branch `fix/creds-lab-down-state`, 15 commits
 
-**THREE adversary rounds, all three REFUTED me; 29 findings, all implemented.** 136 -> 169
-assertions in `test-creds-show.sh`, 27 -> 30 in `test-creds-reach-ingress.sh`.
+**CI green** (`ci-pass: pass`, `static-check-fast: pass`) and **local `make static-check` GREEN**:
+rc=0, **155 suites, 0 failed, 604s**, and its own `tree-stability: OK — 557 file(s) unchanged for the
+whole run`, so that green is about the tree that is committed. `test-creds-show.sh` **136 → 190**
+(32s), `test-creds-reach-ingress.sh` 27 → 31.
 
-🔴 **I TOOK THREE POSITIONS ON ONE QUESTION, and the first two were wrong in OPPOSITE directions.**
-That swing IS the tell (`agents.md`) that the question was under-determined by the evidence:
+⚠️ **NOT MERGED.** The implementation round on the top commit had not reported when this was written.
+An idea-round clearance authorises IMPLEMENTING, never SHIPPING.
 
-| `LB up` classed as | consequence |
+### 🔴 THE ARC — six rounds, and rounds 5 and 6 each refuted the fix for the round before
+
+| # | what it killed |
 |---|---|
-| `answered` | a **DEAD** ingress reads as alive; the powered-off precondition VANISHES |
-| `skip` | a **HEALTHY** ingress reads as dead: *"Consistent with the lab being OFF"* |
+| 1–4 | the `LB up` classification, in both directions, then three threshold fixes (see git history — the mechanism no longer exists in the tree) |
+| 5 | the K=3 design shipped; the round then found the **B731 gate** was conjoined on `_reach_ok == 0`, so 10 serving + 2 `no backend` **suppressed the only sentence that explains a 5xx** |
+| 6 | **my fix for 5.** I relaxed the gate to `_reach_half > 0` believing that was the 5xx bucket. It is the **`answered` CLASS** — `no backend` (5xx) **PLUS `no route` (404) PLUS the catch-all**. So the diff turned a rarely-fired vague sentence into a frequently-fired specific one that is **FALSE for a 404** — and **the test I shipped in the same commit certified it** |
+| 7 | out at the time of writing |
 
-**NO CLASSIFICATION COULD BE RIGHT.** A dead ingress and a cold-start ingress emit **identical
-cells**, so the information was not there to classify. Every fix that tried to classify it away was
-refuted — **FIVE rounds, five refutations**, and the sequence is the lesson:
+**Round 6's second CRITICAL, and it is the more instructive one:** *"Its namespace is the name in the
+Service column"* is FALSE for the two rows most likely to hit it — the column reads `Gitea` and
+`Tekton` while the namespaces are `gitea` and `tekton-pipelines`, and all three infra namespaces are
+operator knobs, so **no rule over that column can be right**. The values were already in scope via
+`load_env` and referenced **zero** times.
 
-| attempt | refuted because |
-|---|---|
-| `LB up` = `answered` | a DEAD ingress read as alive; the powered-off precondition VANISHED |
-| `LB up` = `skip` | a HEALTHY ingress read as dead |
-| a `_reach_suppressed` guard | I declined it; the round later agreed (a dead ingress also has suppressed>0) |
-| TWO strikes before skipping | MOVED the boundary; my fixture failed exactly ONE request, "calibrated to the threshold it validates" |
-| degrade the budget, never skip | the false OFF returns at ANY backend slower than the degraded value — a CLIFF (7 of 9 -> 0), because a degraded failure writes ANOTHER strike |
-| a single-host confirmation probe | relocates the class to WHICH HOST you pick: 3 infra hung + 6 apps healthy -> confirm on `gitea` = false OFF, on `javawebapp` = withheld |
+**MEASURED on the parent with a 404 fixture:** it printed *"the route IS rendered"* and
+*"kubectl -n \<app\> get pods"* for a hostname the ingress never learned — two lines under a legend
+**the same diff added** saying *"no route = the ingress does not know that hostname"*.
 
-⚠️ **DO NOT PROPOSE A THRESHOLD. No fixed value is the lever** — any V makes every healthy backend
-slower than V read `silent`, and a cold JVM after a rollout is routinely >1s.
+### What the tip now does, and what was measured about it
 
-🔴 **THE FACT THAT RESOLVES IT, and it took five rounds to surface: A POWERED-OFF LAB WRITES ZERO
-STRIKES.** `_ing_live=0` (TCP refused) short-circuits every row to `silent` BEFORE any curl.
-Measured: powered off -> 9 rows silent, **0 strikes**; hung LB -> 9 rows silent, **9 strikes**,
-7616ms. So degradation is **DISJOINT** from powered-off. A confirmation therefore costs NOTHING on
-the powered-off path and CANNOT suppress the precondition — which is why gating the strong claim on
-EVIDENCE QUALITY works where five threshold tweaks did not.
-
-The endorsed shape: no row degraded -> claim as today; degraded AND all silent -> re-probe the
-degraded-silent rows at full budget, **stop at the first answer, cap K=3** (+6s -> 15.6s, under the
-18.1s bound, correct on both measured false-OFF states); all K fail -> print the weaker TRUE
-sentence naming the degradation, not the strong claim. **No threshold decides the claim's TRUTH;
-K only bounds what you spend before admitting you do not know.**
-
-⚠️ **STATUS: the K=3 design is ENDORSED and NOT YET IMPLEMENTED at the time of writing.** The tree
-carries the degrade-only version, which still has the CRITICAL above.
-
-The FIRST CRITICAL, kept as history — ⚠️ its mechanism (`LB up`, the short-circuit) NO LONGER
-EXISTS in the tree; read it as the origin of the arc, not as current behaviour:
-
-> `_route_dead` is a **PERFORMANCE CACHE** — the first ingress row whose route curl returns 000
-> writes a sentinel and every later row short-circuits to `LB up` **without probing**. Classing
-> `LB up` as `answered` gave that cache semantic weight. MEASURED against a listener that accepts
-> TCP and closes, with exactly ONE HTTP probe issued in the whole run:
-> `reachable: 0 of 11 serving, 8 answered but served nothing` + *"the estate is not off"*, and
-> `grep -c 'needs the lab'` = **0** — the powered-off precondition GONE, while
-> `make fetch-harbor-ca` and the `re-check:` register still printed. One optimisation, two
-> opposite verdicts. `LB up` is now `skip`; its producer's own comment already said "we did not
-> learn anything about this route", which is that bucket's definition.
-
-### 🔴 THREE TESTS PINNED THE ARITHMETIC OF A BUG — and the PRODUCT side was right every time
-
-A test written against a defect's behaviour goes RED when the defect is fixed, and the cheapest
-reading is "my fix broke a test". All three today were the test, not the fix:
-
-1. `>=2 rows read 'LB up'` — true only under the ONE-strike cache.
-2. `forbidden -> read live` — pinned the contradiction the fifth header arm exists to remove.
-3. `a LATER row short-circuits to LB up` (the SIBLING suite) — armed ONE failure and asserted the
-   next row must not probe. **`make ci` caught this one, a commit late**: I ran that suite green
-   EARLY, changed a shared function, and re-ran only the suite I was editing. A behavioural change
-   to `_reach_ingress` needs EVERY suite that drives it re-run.
-
-### 🔴 FIVE FALSE COMMENTS IN ONE DAY — all true when written, all falsified by a later change
-
-This is the un-gateable class (`hooks.md`), and it is now the most productive thing to hunt here:
-
-1. `creds.sh` — *"the NORMAL state after `make install-all`, which builds no app image (B529)"*.
-   `Makefile:1076` ends `install-all` with **`build-apps`**. Writing the obvious remedy from it
-   would have shipped advice whose stated trigger cannot occur.
-2. `test-creds-show.sh` — *"EVERY RENDER SITE SETS `CREDS_NO_PROBE=1` … STRUCTURALLY UNREACHABLE"*.
-   Measured false three ways. **It was the thing keeping the gap open** — it told the next session
-   not to bother, and a round then found three findings by rendering through the fixture it said
-   did not exist.
-3. `test-creds-show.sh` — *"SCOPED TO THE rc=124 ARM"*. Its awk ran to `fi`, **past the `elif`**, so
-   the SIBLING arm's withdrawal satisfied it. Falsified by a withdrawal I added the same morning.
-4. `creds.sh` — the catch-all's justification (*"every unenumerated string comes from a COMPLETED
-   HTTP exchange"*) was false for `LB up`, and that was the premise under the CRITICAL.
+- `_reach_5xx` / `_reach_404` are counted **on the CELL, not the class**, and 404 gets its own
+  sentence pointing at the **ingress**. Deliberately not summed back into `_reach_half`.
+- the namespace is carried as a **sixth `add_row` field** and printed per distinct namespace.
+  Verified independently of the round: all six `deploy/*/kustomization.yaml` namespaces equal their
+  registry name, and the three infra defaults match `49-psa-check.sh`'s triple exactly.
+- **the table is byte-unchanged**, measured not asserted: the whole no-probe render diffs
+  parent-vs-tip to a **single temp-path line**.
+- the kubectl remedy carries its **precondition** — this report prints `cluster : not reachable` in
+  renders where a row can still read `no backend`, because the ingress answers from its own LB and
+  does not need our kubeconfig.
+- `silent` was the **FIFTH** producer value with no reader-facing definition, while the legend's own
+  comment listed it among those "explained".
+- **8 new assertions RED-proven against the parent** in a worktree; controls pass on both sides.
 
 ### NOT done — next units, in order
 
-1. **B731** — `no backend` is the ONLY finding this report names **without a remedy** (measured:
-   `grep -cE 'build-apps|run the pipeline|still starting'` over a real render = **0**), while DNS,
-   certs and estate-down all carry one. ⚠️ Do NOT write "run the pipeline": comment 1 above is
-   false, AND the cause I measured was neither — both rows went to `serving` ~3 min later with
-   NOTHING done in between (pods still starting after a restart). A 503 is IDENTICAL whether pods
-   are starting, crash-looping, or were never built, and this printer does no cluster read for app
-   rows. **Idea-round before any operator-facing text (RULE ZERO-V).**
-2. **B730 residual** — the aggregate no longer splits them, but the TABLE still shows `silent` on
-   the first ingress row and `LB up` on the rest **for one identical state**, because
-   `_route_dead` is written by whichever row probes first. The producer is where they must agree.
-3. **B728** · **B721 follow-up** (the two call sites, not the resolver) · **B719** · untouched:
-   **B484**, **B498**, **B565**, **B523**.
-4. ⚠️ **A FOURTH ROUND IS OUT on the two-strikes change** and had not reported when this was
-   written. Its brief asks the question I could not settle myself: **is TWO the right number, or
-   just a number I picked?** Read its verdict before treating the cache as settled.
+1. **Round 7's findings** (the implementation round on this diff) — read them first.
+2. **B728** — `09-harbor-auth-check.sh:53` says *"Checked: AUTHENTICATION, and RBAC push permission
+   (silent above = you have it)"*, but `harbor_auth_report` returns **0** in at least four
+   materially different states, three of which probed **nothing**, and the **403 arm never calls
+   `harbor_push_report` at all**. An idea round on the verdict-publishing design was out at the time
+   of writing. ⚠️ Its `rc` must NOT change — the gate is documented to exit 0 on an unconfigured box.
+3. **B721 still-open** — the classifier extraction. ⚠️ **Order is load-bearing:** fix
+   `_harbor_ca_args` FIRST (https + no CA + not insecure ⇒ system trust) and RED-prove
+   `noca + 401` is non-zero in **both** entry points before switching any caller. Two live gates
+   (`24-lab-preflight.sh:207`, `09-harbor-auth-check.sh:43`) already use the REPORTER as a VERDICT,
+   which `lib/harbor.sh:233` forbids in writing.
+4. **D1 is NOT yet measured and must not be actioned on its filing.** It says the Lab-access legend
+   defines `<not set>` while cells use other markers. The counts in that filing are of occurrences
+   in the SOURCE, most of them in the **services** table, not the lab one. In the two renders I have,
+   the one other marker that appears (`<not probed>`) is explained by `_ssh_header_line` directly
+   above the table. Re-measure before touching it.
+5. **B719** · untouched: **B484**, **B498**, **B565**, **B523**, **B716** stages 2–3.
+
+⚠️ **`static-check-fast` — what runs on a push — contains neither `lint` nor `test-scripts`**, so a
+green PR check does NOT mean `static-check` passed (B574). Run it locally, on a tree you are not
+editing: it takes ~10 minutes and its tree-stability guard VOIDS the run if you edit mid-flight.
 
 ### Lab
 
-**UP and fully serving** — `12 of 12`, `verify-ingress` rc=0. Harbor's PodVMs took ~10 minutes to
-come back after the restart and **FLAPPED** on the way (serving → silent-at-20s → serving); a
-point-in-time "Harbor is serving" expired within a minute. `show-dns-records` confirmed the LB
-never moved (`.130`), so DNS was never the cause. The Supervisor token was renewed at 00:45Z
-(`VKS_AUTH_METHOD=vcf make vks-login`).
+**Not contacted this session.** Every measurement here is a fixture, a loopback listener and a stub
+`getent`/`kubectl`. The last live reading (this morning) was `12 of 12` serving with
+`verify-ingress` rc=0; Harbor's PodVMs **FLAPPED** for ~10 minutes after a restart, so a
+point-in-time "Harbor is serving" expires within a minute.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
