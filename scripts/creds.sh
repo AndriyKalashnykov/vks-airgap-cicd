@@ -2481,7 +2481,16 @@ if [ "${_reach_total:-0}" -gt 0 ]; then
   # answer and CAP at K: K bounds what we spend before admitting we do not know; it decides nothing
   # about the claim's TRUTH.
   _deg_n=0
-  [ -s "${_route_degraded:-/nonexistent}" ] && _deg_n="$(grep -c . "${_route_degraded}" 2>/dev/null || printf 0)"
+  # ⚠️ COUNT WITH wc, AND WITH NO VALUE-EMITTING FALLBACK. The first version used a counting grep
+  # with a fallback that prints a number; that form emits its count AND exits non-zero when the count
+  # is zero, so the fallback also fires on the no-match path and the captured value becomes two
+  # digits on two lines — which then fails an integer test with a message resembling nothing.
+  # `check-count-fallback` caught it in CI on the first push. `wc` exits 0 on every path here, so no
+  # fallback is needed at all; the `-s` guard above already covers the missing-file case, and the
+  # writer emits one newline-terminated host per line, so the count is exact.
+  # (Writing the bad form out literally here ALSO trips that gate — it scans this file too.)
+  [ -s "${_route_degraded:-/nonexistent}" ] && _deg_n="$(wc -l < "${_route_degraded}")"
+  _deg_n="${_deg_n// /}"
   _confirm_answered=0 _confirm_tried=0
   if [ "${_reach_ok:-0}" -eq 0 ] && [ "${_reach_half:-0}" -eq 0 ] && [ "${_reach_dns:-0}" -eq 0 ] \
      && [ "${_deg_n:-0}" -gt 0 ]; then
