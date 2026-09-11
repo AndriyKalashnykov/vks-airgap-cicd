@@ -1075,13 +1075,35 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 | `harbor_reachable_state` at 2s | Harbor was genuinely silent at **20s** too — but only measuring all four budgets proved the 2s cap was not the cause |
 | a body-wide `grep` for `'serving'` in a new test | `printf 'serving'` **is in the body**, so the membership test passed vacuously for every string that doubles as a bucket name |
 
-### What shipped — `fix/creds-lab-down-state`, 4 commits, `make ci` GREEN, NOT pushed
+### What shipped — `fix/creds-lab-down-state`, 7 commits, `make ci` GREEN (155 tests, 0 failed), NOT pushed
 
 Validated `make creds` in THREE live states against the real lab (down → half-up → up), and the
 report is now true in each. **136 → 163 assertions**, every new one RED-proven by mutation, and the
 healthy render is **byte-identical** after all of it.
 
-**Two adversary rounds REFUTED me; 19 findings, all implemented.** The CRITICAL:
+**THREE adversary rounds, all three REFUTED me; 29 findings, all implemented.** 136 -> 169
+assertions in `test-creds-show.sh`, 27 -> 30 in `test-creds-reach-ingress.sh`.
+
+🔴 **I TOOK THREE POSITIONS ON ONE QUESTION, and the first two were wrong in OPPOSITE directions.**
+That swing IS the tell (`agents.md`) that the question was under-determined by the evidence:
+
+| `LB up` classed as | consequence |
+|---|---|
+| `answered` | a **DEAD** ingress reads as alive; the powered-off precondition VANISHES |
+| `skip` | a **HEALTHY** ingress reads as dead: *"Consistent with the lab being OFF"* |
+
+**NO CLASSIFICATION COULD BE RIGHT.** A dead ingress and a cold-start ingress emit **identical
+cells** under the old cache, so the information was not there to classify. Both fixes were attempts
+to classify away a defect in the MEASUREMENT. The answer was a FOURTH thing: `_route_dead` now
+requires **TWO** independent failed probes before one row speaks for the rest. Measured both ways —
+cold-start now reads `2 of 5 serving`, genuinely-dead still fires the precondition, and the listener
+log proves the one-strike version never issued requests 3 and 4.
+
+⚠️ **I DECLINED THE ROUND'S OWN PRESCRIPTION** (a `_reach_suppressed` guard) and recorded why: it
+reintroduces the CRITICAL the SAME reviewer found one round earlier, because a dead ingress also
+produces `suppressed>0`. An adversary's FIX is a separate claim from its FINDING.
+
+The first CRITICAL, kept because it is the one that bites hardest:
 
 > `_route_dead` is a **PERFORMANCE CACHE** — the first ingress row whose route curl returns 000
 > writes a sentinel and every later row short-circuits to `LB up` **without probing**. Classing
@@ -1093,7 +1115,19 @@ healthy render is **byte-identical** after all of it.
 > opposite verdicts. `LB up` is now `skip`; its producer's own comment already said "we did not
 > learn anything about this route", which is that bucket's definition.
 
-### 🔴 FOUR FALSE COMMENTS IN ONE DAY — all true when written, all falsified by a later change
+### 🔴 THREE TESTS PINNED THE ARITHMETIC OF A BUG — and the PRODUCT side was right every time
+
+A test written against a defect's behaviour goes RED when the defect is fixed, and the cheapest
+reading is "my fix broke a test". All three today were the test, not the fix:
+
+1. `>=2 rows read 'LB up'` — true only under the ONE-strike cache.
+2. `forbidden -> read live` — pinned the contradiction the fifth header arm exists to remove.
+3. `a LATER row short-circuits to LB up` (the SIBLING suite) — armed ONE failure and asserted the
+   next row must not probe. **`make ci` caught this one, a commit late**: I ran that suite green
+   EARLY, changed a shared function, and re-ran only the suite I was editing. A behavioural change
+   to `_reach_ingress` needs EVERY suite that drives it re-run.
+
+### 🔴 FIVE FALSE COMMENTS IN ONE DAY — all true when written, all falsified by a later change
 
 This is the un-gateable class (`hooks.md`), and it is now the most productive thing to hunt here:
 
@@ -1123,6 +1157,9 @@ This is the un-gateable class (`hooks.md`), and it is now the most productive th
    `_route_dead` is written by whichever row probes first. The producer is where they must agree.
 3. **B728** · **B721 follow-up** (the two call sites, not the resolver) · **B719** · untouched:
    **B484**, **B498**, **B565**, **B523**.
+4. ⚠️ **A FOURTH ROUND IS OUT on the two-strikes change** and had not reported when this was
+   written. Its brief asks the question I could not settle myself: **is TWO the right number, or
+   just a number I picked?** Read its verdict before treating the cache as settled.
 
 ### Lab
 
