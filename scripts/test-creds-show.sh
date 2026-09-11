@@ -2548,6 +2548,168 @@ while True:
         "4 of 8 producer values reached the operator with no reader-facing meaning"
   fi
 
+  # The kubectl remedy carries a PRECONDITION, and this fixture is the state that needs it: the
+  # ingress answers from its own LB and does NOT need our kubeconfig, so a row can read `no backend`
+  # in a render whose Context block says the cluster is unreachable. Prescribing `kubectl` there is
+  # the "a remedy needs its precondition" defect this file already fixed for the cert block.
+  case "$_mx_out" in
+    *'cluster      : reachable'*)
+      bad "mixed: the fixture reached a cluster — the precondition case cannot be measured" \
+          "the fixture must have NO usable kubeconfig for this assertion to discriminate" ;;
+    *)
+      if printf '%s' "$_mx_out" | grep -q 'kubectl -n'; then
+        bad "mixed: it prescribes 'kubectl -n' in a render that says the cluster is NOT reachable" \
+            "the reader is sent to run a command this same report has shown cannot work"
+      else
+        ok "mixed: with the cluster unreachable, NO kubectl remedy is prescribed"
+      fi
+      if printf '%s' "$_mx_out" | grep -q 'cannot reach the cluster'; then
+        ok "mixed: and it SAYS why it cannot name the pods, instead of going silent"
+      else
+        bad "mixed: it neither prescribes nor explains — the 5xx rows get a dead end" \
+            "suppressing the remedy without saying why leaves the reader with nothing"
+      fi ;;
+  esac
+
+  # ── A 404 IS NOT A 5xx: the negative control for the remedy split ──────────────────────────────
+  # ⚠️ THIS EXISTS BECAUSE THE MERGED VERSION WAS MEASURABLY FALSE HERE. `_reach_half` is the
+  # `answered` CLASS — `no backend` PLUS `no route` PLUS the catch-all — so a remedy gated on it
+  # fired on a pure-404 state and told the operator to go and look at pods. MEASURED on the parent
+  # commit with this very fixture: "the route IS rendered ... kubectl -n <app> get pods", two lines
+  # under a legend saying "no route = the ingress does not know that hostname".
+  # ⚠️ IT ALSO STUBS kubectl SO THE CLUSTER READS REACHABLE. Without that, the kubectl line is
+  # suppressed by its own precondition and this case would pass for the WRONG REASON — it would be
+  # measuring the cluster gate, not the 404/5xx split.
+  _code_probe() {   # <status> <reason> [n=2] -> the whole render, the first n vhost hits get that status
+    local t p dp lp out
+    trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    dp="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # shellcheck disable=SC2016
+    python3 -c '
+import socket,sys
+code=sys.argv[2]; reason=sys.argv[3]; n=int(sys.argv[4])
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(64); seen=0
+while True:
+    try:
+        c,_=s.accept(); c.settimeout(0.4)
+        try: req=c.recv(400)
+        except Exception: req=b""
+        if not req: c.close(); continue
+        if b"vks.local" in req:
+            seen+=1
+            if seen<=n:
+                c.sendall(("HTTP/1.1 %s %s\r\nContent-Length: 3\r\n\r\nno!" % (code,reason)).encode()); c.close(); continue
+        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); c.close()
+    except Exception: break
+' "$p" "$1" "$2" "${3:-2}" >/dev/null 2>&1 &
+    lp=$!
+    sleep 1
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    # Only two behaviours matter: `version` must exit 0 (that is what sets `cluster : reachable`)
+    # and `config current-context` must name something. Everything else exits 0 with no output.
+    { printf '#!/bin/sh\n'
+      printf 'case "$*" in *"config current-context"*) echo stub-ctx ;; esac\n'
+      printf 'exit 0\n'; } > "$t/bin/kubectl"
+    chmod +x "$t/bin/kubectl"
+    : > "$t/kc"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$dp" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              KUBECONFIG="$t/kc" CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+
+  _404_out="$(_code_probe 404 'Not Found')"
+  # CONTROL 1: the fixture really produced 404 rows, or nothing below discriminates.
+  if [ "$(printf '%s\n' "$_404_out" | grep -E '^  [A-Za-z]' | grep -c 'no route')" -ge 1 ]; then
+    ok "404: the fixture produced 'no route' rows (the case is live)"
+  else
+    bad "404: the fixture produced no 'no route' row — it cannot discriminate" \
+        "fix the fixture, not the product"
+  fi
+  # CONTROL 2: the cluster gate is OPEN, so a suppressed kubectl line below means the 404/5xx split
+  # did it — not the precondition. Without this the negative control passes for the wrong reason.
+  case "$_404_out" in
+    *'cluster      : reachable'*)
+      ok "404: the cluster reads REACHABLE, so the kubectl precondition is not what is being measured" ;;
+    *)  bad "404: the stub did not make the cluster reachable" \
+            "the next assertion would pass because of the precondition, not the 404 split" ;;
+  esac
+  # THE NEGATIVE CONTROL: a 404 must NOT be explained as a rendered route with a sick backend.
+  if printf '%s' "$_404_out" | grep -q 'route IS rendered'; then
+    bad "404: a pure-404 state is explained as 'the route IS rendered'" \
+        "_reach_half is the answered CLASS, not the 5xx bucket — this is FALSE for a 404"
+  else
+    ok "404: the 5xx explanation is ABSENT (it is keyed on the CELL, not on the answered class)"
+  fi
+  if printf '%s' "$_404_out" | grep -q 'kubectl -n'; then
+    bad "404: it sends the reader to 'kubectl -n' for a hostname the ingress never learned" \
+        "there is no namespace to look in: the route does not exist"
+  else
+    ok "404: no pod-hunting remedy is prescribed for a 404"
+  fi
+  # ...and it must say what a 404 DOES mean, or suppressing the wrong sentence just loses the reader.
+  # ⚠️ MATCH THE COUNTED SENTENCE, NOT THE BARE PHRASE. The first version of this grepped
+  # 'the ingress does not know that hostname' and PASSED ON THE PARENT — that phrase is also in the
+  # `no route` LEGEND, so the assertion was reading the legend and calling it the remedy. This file
+  # already records the same trap one block up ("Match the ROWS, not the whole render").
+  if printf '%s' "$_404_out" | grep -q 'answered 404: the ingress does not know'; then
+    ok "404: it gets its OWN sentence, pointing at the ingress"
+  else
+    bad "404: the 404 rows carry no explanation at all" \
+        "splitting the remedy must not silently drop the case it split off"
+  fi
+
+  # NUMBER AGREEMENT: the count above is 2, so it can only ever exercise the plural. A report that
+  # says "2 ... that hostname" is the kind of line an operator reads as machine-generated noise.
+  _404_one="$(_code_probe 404 'Not Found' 1)"
+  if [ "$(printf '%s\n' "$_404_one" | grep -E '^  [A-Za-z]' | grep -c 'no route')" -eq 1 ]; then
+    ok "404(1): the fixture produced exactly ONE 'no route' row (the singular case is live)"
+  else
+    bad "404(1): the fixture did not produce exactly one 'no route' row" \
+        "fix the fixture, not the product"
+  fi
+  case "$_404_one" in
+    *'1 answered 404: the ingress does not know that hostname'*)
+      ok "404(1): a single 404 reads in the SINGULAR" ;;
+    *'those hostnames'*)
+      bad "404(1): one row is described as 'those hostnames'" \
+          "the noun is not agreed with the count" ;;
+    *)  bad "404(1): the 404 sentence did not render at all in the single-row case" \
+            "a count of 1 must still produce the explanation" ;;
+  esac
+
+  # ── THE NAMESPACE IS CARRIED, NOT DERIVED FROM THE SERVICE COLUMN ──────────────────────────────
+  # ⚠️ MEASURED FALSE on the two rows most likely to need it: the Service column reads `Gitea` and
+  # `Tekton` while the namespaces are `gitea` and `tekton-pipelines`, and all three infra namespaces
+  # are operator knobs (`.env.example`: "choose: any namespace you own"), so NO rule over the column
+  # can be right. The parent commit printed the literal `kubectl -n <app> get pods`.
+  _503_out="$(_code_probe 503 'Service Unavailable')"
+  if [ "$(printf '%s\n' "$_503_out" | grep -E '^  [A-Za-z]' | grep -c 'no backend')" -ge 1 ]; then
+    ok "503+ns: the fixture produced 'no backend' rows (the case is live)"
+  else
+    bad "503+ns: the fixture produced no 'no backend' row — it cannot discriminate" \
+        "fix the fixture, not the product"
+  fi
+  if printf '%s' "$_503_out" | grep -q 'kubectl -n tekton-pipelines get pods'; then
+    ok "503+ns: the REAL namespace is named (tekton-pipelines), not the Service column's 'Tekton'"
+  else
+    bad "503+ns: the remedy does not name the row's real namespace" \
+        "the Service column says Tekton; the namespace is tekton-pipelines — deriving it is FALSE"
+  fi
+  case "$_503_out" in
+    *'kubectl -n <app>'*|*'name in the Service column'*)
+      bad "503+ns: it still states a RULE over the Service column instead of naming the namespace" \
+          "that rule is measurably wrong for Gitea and Tekton, the two rows most likely to hit it" ;;
+    *)  ok "503+ns: no Service-column rule is stated — the value is carried, not inferred" ;;
+  esac
+
   # ── POWERED OFF: TCP REFUSED, and this is where the STRONG claim belongs ───────────────────────
   # ⚠️ MEASURABLY DISJOINT from the hung shape above, and that fact is what makes the confirmation
   # affordable: `_ing_live=0` short-circuits every row to `silent` BEFORE any curl, so a powered-off
@@ -2588,6 +2750,21 @@ while True:
   else
     bad "powered-off: the precondition is ABSENT on a genuinely refused port" \
         "this is the regression five rounds were spent preventing"
+  fi
+  # ⚠️ `silent` IS THE WORD THE WHOLE TABLE READS IN THIS STATE, and it was the FIFTH producer value
+  # with no reader-facing definition — while the comment above the legend listed it among the ones
+  # that "were explained". It spans "nothing is listening" and "it took the connection and never
+  # finished a reply", which have different remedies, so the reader cannot infer it.
+  if [ "$(printf '%s\n' "$_off_out" | grep -E '^  [A-Za-z]' | grep -c 'silent')" -ge 1 ]; then
+    if [ "$(printf '%s' "$_off_out" | grep -c 'silent     = nothing answered')" -ge 1 ]; then
+      ok "powered-off: 'silent' is DEFINED for the reader when a row uses it"
+    else
+      bad "powered-off: every row reads 'silent' and the render defines it NOWHERE" \
+          "the legend comment claimed it was explained; it was the fifth undefined value"
+    fi
+  else
+    bad "powered-off: no row reads 'silent' — the legend assertion cannot discriminate" \
+        "fix the fixture, not the product"
   fi
   # ...and it must be CHEAP: no curl runs at all, so this path cannot pay the confirmation's cost.
   if [ "$(printf '%s' "$_off_out" | grep -c 'probed on a SHORTENED')" -eq 0 ]; then

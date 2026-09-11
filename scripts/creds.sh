@@ -1505,13 +1505,25 @@ _reach_class() {   # <the Reachable cell> -> skip | serving | answered | dns | s
 # an INVISIBLE one (`ab cd` is plausible and copy-pasteable). It is the right trade for a
 # fixed-width table and the wrong one to leave unsaid (RULE ZERO-V). Filed: route such a value
 # through the existing `<full value below>` footnote, which already exists for over-long cells.
-add_row() { local _sep=$'\t\n'
-  rows="${rows}${1//[$_sep]/ }"$'\t'"${2//[$_sep]/ }"$'\t'"${3//[$_sep]/ }"$'\t'"${4//[$_sep]/ }"$'\t'"${5:--}"$'\n'; }
+# ⚠️ A SIXTH FIELD: the row's REAL namespace, and it is optional. The table renders c1..c5 only, so
+# adding it is byte-neutral there (`_rows_capped` is rebuilt from the first five and the capping
+# `read` already carries `_rest`). It exists because a round measured the alternative — deriving the
+# namespace from the SERVICE COLUMN — to be FALSE for the two rows most likely to need it: the
+# column says "Gitea" and "Tekton" while the namespaces are `gitea` and `tekton-pipelines`, and all
+# three infra namespaces are operator knobs (".env.example: choose: any namespace you own"), so no
+# rule over the column can be right. The correct values were already in scope via `load_env` and
+# referenced ZERO times.
+# ⚠️ `${6:-}`, NOT `${6//...}`. The script runs under `set -u`, and THREE call sites (Harbor
+# registry :1709, Harbor web UI :1956, ArgoCD :1971) legitimately pass five arguments — those rows
+# are not ingress rows and have no namespace to name. MEASURED before it shipped: the unguarded
+# form dies `6: unbound variable` and takes the whole report with it.
+add_row() { local _sep=$'\t\n' _ns="${6:-}"
+  rows="${rows}${1//[$_sep]/ }"$'\t'"${2//[$_sep]/ }"$'\t'"${3//[$_sep]/ }"$'\t'"${4//[$_sep]/ }"$'\t'"${5:--}"$'\t'"${_ns//[$_sep]/ }"$'\n'; }
 
 
 # Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry) -> ArgoCD (deploy) -> apps.
-add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"  "$(_reach_ingress "${GITEA_HOST:-}")"
-add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)" "$(_reach_ingress "${TEKTON_DASHBOARD_HOST:-}")"
+add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"  "$(_reach_ingress "${GITEA_HOST:-}")" "${GITEA_NAMESPACE:-gitea}"
+add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)" "$(_reach_ingress "${TEKTON_DASHBOARD_HOST:-}")" "${TEKTON_NAMESPACE:-tekton-pipelines}"
 
 # ---- headlamp -------------------------------------------------------------------------------
 # ⚠️ THE TOKEN IS MINTED HERE, AT REPORT TIME, AND STORED NOWHERE. `kubectl create token` issues a
@@ -1668,7 +1680,7 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
 else
   headlamp_tok="<not read — no KUBECONFIG>"
 fi
-add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress "${HEADLAMP_HOST:-}")"
+add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress "${HEADLAMP_HOST:-}")" "${HEADLAMP_NAMESPACE:-headlamp}"
 # ⚠️ KEYED ON A HEADLAMP FACT, NOT ON AN ARGOCD ONE. This note first shipped nested inside
 # `if [ "${_argo_initial_note:-0}" = 1 ]`, which is set only when ArgoCD's INITIAL admin secret is
 # still readable -- so the one sentence that breaks the "paste a stale token -> bounce -> paste
@@ -1995,7 +2007,7 @@ while read -r _a; do
   # This arms the moment one does -- app_build_args' go arm (an intentional empty printf) is the
   # precedent for a per-language accessor that legitimately prints nothing.
   [ -n "$_health" ] || die "app '$_a': app_health_path() returned nothing — refusing to print a credentials row with a blank health path."
-  add_row "$_a" "$_url" "-" "(no login; health at ${_health})" "$(_reach_ingress "$(app_host "$_a")")"
+  add_row "$_a" "$_url" "-" "(no login; health at ${_health})" "$(_reach_ingress "$(app_host "$_a")")" "$_a"
 done <<EOF
 ${_apps}
 EOF
@@ -2029,6 +2041,15 @@ _reach_total=0
 _reach_ok=0
 _reach_half=0
 _reach_dns=0
+# ⚠️ `_reach_half` IS NOT THE 5xx BUCKET, and reading it as one shipped a FALSE sentence. It is the
+# `answered` CLASS — `no backend` (5xx) PLUS `no route` (404) PLUS `_reach_class`'s catch-all
+# (`HTTP <n>`, `<teapot>`). So a remedy gated on `_reach_half > 0` fires on a 404 and tells the
+# operator to go look at pods, when a 404 means the ingress never learned the hostname and there is
+# nothing to look at. These two counters are keyed on the CELL, not the class, precisely so the two
+# remedies can be separated; they are deliberately NOT summed back into `_reach_half`.
+_reach_5xx=0
+_reach_404=0
+_backend_ns=""
 _dns_stale=0
 _dns_absent=0
 _dns_stale_hosts=""
@@ -2046,7 +2067,7 @@ _row_host() {
   case "$_u" in ''|'<'*|-) return 0 ;; esac
   printf '%s' "$_u"
 }
-while IFS=$'\t' read -r c1 c2 c3 c4 c5 _rest; do
+while IFS=$'\t' read -r c1 c2 c3 c4 c5 c6 _rest; do
   [ -n "$c1" ] || continue
   # ⚠️ AGGREGATE THE EVIDENCE. A round MEASURED that with the estate powered off this report made
   # at least SEVEN independent failed probes and never combined them: the top line read
@@ -2065,6 +2086,18 @@ while IFS=$'\t' read -r c1 c2 c3 c4 c5 _rest; do
     answered) _reach_total=$((_reach_total + 1)); _reach_half=$((_reach_half + 1)) ;;
     dns)      _reach_total=$((_reach_total + 1)); _reach_dns=$((_reach_dns + 1)) ;;
     silent)   _reach_total=$((_reach_total + 1)) ;;
+  esac
+  # ⚠️ THE NAMESPACE COMES FROM COLUMN 6, NOT FROM THE SERVICE COLUMN. A round MEASURED the
+  # alternative wrong on the two rows most likely to need it: the column reads `Gitea` and `Tekton`
+  # while the namespaces are `gitea` and `tekton-pipelines`, and all three infra namespaces are
+  # operator knobs. A rule over the service name cannot be right; the value is carried instead.
+  case "$c5" in
+    'no backend') _reach_5xx=$((_reach_5xx + 1))
+                  case " $_backend_ns " in
+                    *" ${c6:-} "*) : ;;
+                    *) [ -n "${c6:-}" ] && _backend_ns="${_backend_ns}${c6} " ;;
+                  esac ;;
+    'no route')   _reach_404=$((_reach_404 + 1)) ;;
   esac
   # COLUMN 5 IS THE ONLY PRODUCER. `_reach_ingress` (:1206) emits these two strings; nothing else
   # does. The old gate matched the WHOLE `rows` blob -- every column -- so a username or a URL
@@ -2453,8 +2486,12 @@ fi
 printf '\n  Reachable = the address answered — NOT that the credential works. Nothing here is auth-tested.\n'
 # ⚠️ THE CELLS THAT HAVE NO MEANING WITHOUT THIS LINE. A round counted them: of the EIGHT strings the
 # producers emit, FOUR reached the operator's table with NO reader-facing definition anywhere in the
-# render — `no backend`, `no route`, `HTTP <n>` and `LB up`. `serving` / `silent` / `no DNS here` /
-# `stale DNS` were explained; these were not. Defining a term you invented is not the same as
+# render — `no backend`, `no route`, `HTTP <n>` and `LB up`.
+# ⚠️ THE COUNT WAS FOUR AND IT IS FIVE. A later round found `silent` in this comment's own
+# "were explained" list while the render defined it NOWHERE: `no DNS here` and `stale DNS` do earn
+# their explanations (each has a dedicated advice block below), and `serving` is self-evident, but
+# `silent` is not — it spans "nothing is listening" and "it accepted the connection and never
+# finished a reply", which have different remedies. It is defined below like the other four. Defining a term you invented is not the same as
 # explaining a cause, and silence about an undefined word is not defensible the way silence about a
 # cause can be. This also covers `no route`, which — unlike a 5xx — does NOT clear itself.
 # ⚠️ ONLY THE CELLS THAT ACTUALLY APPEAR. Defining four terms on a lab where all twelve rows read
@@ -2475,6 +2512,10 @@ case "$_legend_rows" in *'LB up'*)
 esac
 case "$_legend_rows" in *'HTTP '*)
   printf '    HTTP <n>   = it replied with a status this report does not classify.\n' ;;
+esac
+case "$_legend_rows" in *'silent'*)
+  printf '    silent     = nothing answered — either nothing is listening on that address, or it took\n'
+  printf '                 the connection and never finished a reply inside this report'"'"'s budget.\n' ;;
 esac
 # ⚠️ HERE, NOT IN THE Context BLOCK: the rows do not exist when Context prints (`add_row` runs ~300
 # lines later), so the count cannot be computed up there. This sits with the legend that DEFINES the
@@ -2579,26 +2620,60 @@ if [ "${_reach_total:-0}" -gt 0 ]; then
     # suppressed the only sentence that explains a 5xx. And the conjunct never did the job its
     # comment claims: the stale-DNS state it cites has `_reach_half == 0`, so `_reach_half > 0`
     # ALONE already excluded it. It only ever suppressed the MIXED case — the common one.
-    if [ "${_reach_half:-0}" -gt 0 ]; then
-      if [ "${_reach_ok:-0}" -eq 0 ]; then
-        # All-down: "the estate is not off" is TRUE and load-bearing here.
-        printf '             Something IS answering, so the estate is not off — it is either still coming\n'
-        printf '             up or its backends are not running yet.\n'
-      else
-        # ⚠️ MIXED, AND IT MUST SAY ONLY WHAT A 5xx PROVES. The producer arm is `5??`, not `503`, so
-        # a 500 from a LIVE app lands here too — "the backend is not running" would be false for it,
-        # and so would "run the pipeline". What is true across 500/502/503/504 is: the route is
-        # rendered, something replied, it did not serve a page.
-        # ⚠️ AND THE REMEDY HANGS OFF AN OBSERVATION THE READER MAKES, not off a category. Both
-        # rounds refused an unconditional `make build-apps`: its stated trigger cannot occur
-        # (Makefile:1076 ends install-all with build-apps) and the cause measured on the live lab
-        # was neither — the pods were still starting and cleared themselves ~3 minutes later.
-        printf '             %s answered but served nothing: the route IS rendered and the app behind it\n' "$_reach_half"
-        printf '             did not serve a page. Its namespace is the name in the Service column:\n'
-        printf '                 kubectl -n <app> get pods\n'
-        printf '             no pods there at all -> nothing has been deployed yet; pods not Ready -> they\n'
-        printf '             are starting or failing, and the pod'"'"'s own status says which.\n'
-      fi
+    if [ "${_reach_half:-0}" -gt 0 ] && [ "${_reach_ok:-0}" -eq 0 ]; then
+      # All-down: "the estate is not off" is TRUE and load-bearing here. It is keyed on the CLASS
+      # (anything answered at all), because that is exactly what it claims — no HTTP status is
+      # needed to say "something replied".
+      printf '             Something IS answering, so the estate is not off — it is either still coming\n'
+      printf '             up or its backends are not running yet.\n'
+    fi
+    # ⚠️ 5xx AND 404 GET SEPARATE SENTENCES, because their remedies are in different places. A round
+    # MEASURED the merged version telling an operator to `kubectl get pods` on a 404 — a 404 means
+    # the ingress never learned the hostname, so there is no namespace to look in and no pod to
+    # find. Worse, the same diff's own legend said so two lines above: "no route = the ingress does
+    # not know that hostname". The sentence contradicted the legend printed beside it.
+    if [ "${_reach_5xx:-0}" -gt 0 ]; then
+      # ⚠️ SAY ONLY WHAT A 5xx PROVES. The producer arm is `5??`, not `503`, so a 500 from a LIVE
+      # app lands here too — "the backend is not running" would be false for it, and so would "run
+      # the pipeline". What is true across 500/502/503/504 is: the route is rendered, something
+      # replied, it did not serve a page.
+      # ⚠️ AND THE REMEDY HANGS OFF AN OBSERVATION THE READER MAKES, not off a category. Both
+      # rounds refused an unconditional `make build-apps`: its stated trigger cannot occur
+      # (Makefile:1076 ends install-all with build-apps) and the cause measured on the live lab
+      # was neither — the pods were still starting and cleared themselves ~3 minutes later.
+      # ⚠️ NUMBER-AGNOSTIC PROSE. The count is plural in every state this sentence fires in except
+      # one, and the singular reading ("the app behind it") was measured against a count of 2.
+      # Phrasing it per-row costs nothing and needs no plural branch.
+      printf '             %s answered but served nothing: the route IS rendered in each case, and\n' "$_reach_5xx"
+      printf '             whatever sits behind it did not serve a page.\n'
+      # ⚠️ THE kubectl LINE CARRIES ITS PRECONDITION. This same report prints `cluster : not
+      # reachable` on line 12 of a render where these rows can still be `no backend` (the ingress
+      # answers from its own LB; it does not need OUR kubeconfig). Prescribing a kubectl there is
+      # the "a remedy needs its precondition" defect this file already fixed for the cert block.
+      case "${_cluster:-}" in
+        reachable*)
+          if [ -n "${_backend_ns:-}" ]; then
+            for _bn in $_backend_ns; do
+              printf '                 kubectl -n %s get pods\n' "$_bn"
+            done
+          else
+            printf '                 kubectl -n <the namespace that serves it> get pods\n'
+          fi
+          printf '             no pods there at all -> nothing has been deployed yet; pods not Ready -> they\n'
+          printf '             are starting or failing, and the pod'"'"'s own status says which.\n' ;;
+        *)
+          printf '             This report cannot reach the cluster, so it cannot tell you which pods are\n'
+          printf '             behind it. Fix cluster access first (see the cluster line above).\n' ;;
+      esac
+    fi
+    if [ "${_reach_404:-0}" -gt 0 ]; then
+      # `if`, not `A && B`: this repo's own rules record that an `&&`-list whose test is FALSE
+      # returns non-zero and trips `set -e` wherever it is the tail of a list, a function or a
+      # `$( )`. It is not the tail here, and it is one line either way — so remove the class.
+      if [ "${_reach_404}" -gt 1 ]; then _404_noun='those hostnames'; else _404_noun='that hostname'; fi
+      printf '             %s answered 404: the ingress does not know %s. That is a\n' "$_reach_404" "$_404_noun"
+      printf '             rendering or attach fault in the INGRESS, not a missing pod — re-run the ingress\n'
+      printf '             install.\n'
     fi
     if [ "${_reach_dns:-0}" -gt 0 ]; then
       printf '             The unresolvable ones need the /etc/hosts line above, not a cluster change.\n'
