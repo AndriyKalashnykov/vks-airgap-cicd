@@ -2265,7 +2265,24 @@ _pwsrc="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh")"
 # ⚠️ SCOPED TO THE rc=124 ARM. My first version grepped the WHOLE file for `_pw_unset_argo=0` — which
 # is also how the variable is DECLARED, so deleting the withdrawal left the case GREEN. It could not
 # tell the fix from its own initialiser. Extract the arm and look inside it.
-_arm124="$(printf '%s' "$_pwsrc" | awk '/_argo_rc:-0.*=.*124/{p=1} p{print} p&&/^  fi$/{exit}')"
+# ⚠️ TERMINATE AT THE `elif`, NOT AT `fi` — the `elif` belongs to the SAME if/elif chain, so
+# stopping at `fi` swallows the sibling `_have_sink` arm AND ITS withdrawal. MEASURED: with the
+# rc=124 withdrawal deleted and only a trailing comment left in its place, this case stayed GREEN,
+# satisfied by the neighbour's line. The comment above said "SCOPED TO THE rc=124 ARM" and was TRUE
+# when written — the `_have_sink` withdrawal, added the same morning, falsified it silently. Found
+# by reading WHICH case went red in the RED-proof, not by reading the code.
+_arm124="$(printf '%s' "$_pwsrc" | awk '/_argo_rc:-0.*=.*124/{p=1} p{print} p&&(/^  elif /||/^  fi$/){exit}')"
+# ⚠️ THE TERMINATOR IS COUPLED TO A LITERAL 2-SPACE INDENT, so a future enclosing `if` makes awk run
+# to EOF and swallow the sibling arms again — byte-identical to the defect just fixed. Assert the
+# slice is SHORT: the arm is ~4 lines, and an over-run is >=11. This closes the CLASS, not only the
+# instance, and it fails LOUDLY instead of going quietly green.
+_arm124_n="$(printf '%s\n' "$_arm124" | grep -c '' || true)"
+if [ "${_arm124_n:-0}" -ge 1 ] && [ "${_arm124_n:-0}" -le 8 ]; then
+  ok "pw-note: the rc=124 slice is scoped ($_arm124_n lines) — the extraction did not over-run"
+else
+  bad "pw-note: the rc=124 extraction captured $_arm124_n lines — it over-ran its own arm" \
+      "the indent-coupled terminator stopped matching; the case below is now satisfied by a SIBLING arm"
+fi
 # ⚠️ LINE-ANCHORED, because `$_pwsrc` strips only FULL-LINE comments (`^[[:space:]]*#`). A substring
 # match is satisfied by a TRAILING comment: a round DELETED the withdrawal, left the token in a
 # `# ... _pw_unset_argo=0 ...` note on a code line, and the suite reported 136 ok / 0 FAIL over the
@@ -2286,12 +2303,18 @@ fi
 # gives 4 for 3 withdrawals, so a threshold of 3 would pass with only TWO. That is the very
 # "it could not tell the fix from its own initialiser" defect the case above records, re-committed
 # one line below it. Slice at the ARM (`_pw_unset_argo=1`), which sits after the declaration.
-_nwd="$(printf '%s\n' "$_pwsrc" | awk '/_pw_unset_argo=1/{p=1} p' \
-          | grep -cE '^[[:space:]]*_pw_unset_argo=0[[:space:]]*$' || true)"
-if [ "${_nwd:-0}" -ge 3 ]; then
-  ok "pw-note: every arm that replaces the ArgoCD cell withdraws the flag ($_nwd of 3)"
+_pwslice="$(printf '%s\n' "$_pwsrc" | awk '/_pw_unset_argo=1/{p=1} p{print} p&&/^fi$/{exit}')"
+_nwd="$(printf '%s\n' "$_pwslice" | grep -cE '^[[:space:]]*_pw_unset_argo=0[[:space:]]*$' || true)"
+# ⚠️ DERIVED, NOT THE CONSTANT 3. A `-ge 3` threshold counted WITHDRAWALS and never ARMS, so ADDING
+# a fourth replacing arm that forgets its withdrawal left the count at 3 and the case GREEN — it
+# could only catch a REMOVAL, which is half a gate, and the `3` was additionally hand-typed into
+# the pass message. Count the arms in the same slice; every arm but the plain `if` opener that
+# REPLACES the cell owes a withdrawal.
+_narm="$(printf '%s\n' "$_pwslice" | grep -cE '^[[:space:]]*(if|elif) ' || true)"
+if [ "${_nwd:-0}" -ge "${_narm:-99}" ]; then
+  ok "pw-note: every arm that replaces the ArgoCD cell withdraws the flag ($_nwd withdrawal(s), $_narm arm(s))"
 else
-  bad "pw-note: only $_nwd of 3 ArgoCD arms withdraw the overlay-note flag" \
+  bad "pw-note: $_nwd withdrawal(s) for $_narm replacing arm(s)" \
       "an arm that replaces the cell but keeps the flag makes the note contradict the cell beside it"
 fi
 # ...and the note must be DERIVED from the per-source flags, not from one shared flag armed early.
@@ -2354,12 +2377,38 @@ _hdr_case "never-asked -> NOT probed, not a lab fact"  0 1 "some state" "kube co
 # ...and the never-asked flag must NOT override a real answer.
 _hdr_case "answered beats never-asked"                 1 1 "some state" "read live" 1
 
+# ⚠️ STRUCTURAL: NO ARM MAY CLAIM AN ANSWER WHILE ITS CELL SAYS IT COULD NOT READ.
+# The header cases above drive `_ssh_header_line` with explicit args, so they cannot see the
+# PAIRING between the flag an arm sets and the CELL it sets beside it. A round measured exactly
+# that gap: the UNAUTHORIZED/STALE_CA/PLAINTEXT arms set `_ssh_answered=1` while reusing
+# "<could not read node addresses>", so the report printed "read live." directly above a cell
+# saying it could not be read — verbatim the defect the ssh-header block above exists to prevent,
+# re-created for 3 of 8 classes by the fix for the other five.
+_sshcase="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh" \
+             | awk '/classify_kube_failure "\$_ssh_verr"/{p=1} p{print} p&&/^             esac ;;$/{exit}')"
+[ -n "$_sshcase" ] || { printf 'FATAL: could not extract the _ssh_answered classifier case.\n' >&2; exit 1; }
+_bad_pair="$(printf '%s\n' "$_sshcase" \
+  | grep -E '_ssh_answered=1' | grep -c 'could not read node addresses' || true)"
+if [ "${_bad_pair:-1}" -eq 0 ]; then
+  ok "ssh-header: no arm sets answered=1 beside a 'could not read' cell (header and cell agree)"
+else
+  bad "ssh-header: $_bad_pair arm(s) claim an ANSWER while their cell says it could not be read" \
+      "the header then prints 'read live.' above a cell that contradicts it"
+fi
+
 # ══ THE REACHABILITY AGGREGATE: ITS CLASSIFIER, WHICH THE SUITE COULD NOT REACH AT ALL ════════════
-# ⚠️ EVERY RENDER SITE IN THIS FILE SETS CREDS_NO_PROBE=1, so `$c5` is `not probed` on every row and
-# the counting loop's classification is STRUCTURALLY UNREACHABLE by a rendered assertion. A round
-# changed SIX classifications and flipped the rendered sentence in THREE states while this suite
-# went 136 ok -> 136 ok (`gates.md`: green at the same count is blind to the change). Extracting
-# `_reach_class` is the only way the aggregate gets a demonstrated RED without a live lab.
+# ⚠️ CORRECTED — THE SENTENCE THAT WAS HERE WAS MEASURED FALSE, AND IT WAS THE THING KEEPING THE
+# GAP OPEN. It claimed "EVERY RENDER SITE IN THIS FILE SETS CREDS_NO_PROBE=1, so the counting loop's
+# classification is STRUCTURALLY UNREACHABLE by a rendered assertion" — i.e. it told the next
+# session not to bother. A round measured it false three ways: `render()` never sets
+# CREDS_NO_PROBE at all; `render_with_env` defaults it to 0 AND starts a real listener with a
+# getent stub; and running that fixture printed a real aggregate line. Only ONE site hardcodes the
+# flag. So the rendered sentence, the `_reach_nothing` -> precondition coupling, the band assembly
+# and the follow-up ARE executed by this suite — and were asserted NOWHERE. Three of that round's
+# findings lived in that blind spot, and it found them by rendering through the fixture this
+# comment said did not exist.
+# Extracting `_reach_class` is still worth it (it drives the classifier without a listener), but it
+# is NOT the only way — see the rendered assertions below.
 _rc_fn="$(_extract_fn _reach_class)"
 _rc_says() { bash -c 'eval "$1"; _reach_class "$2"' _ "$_rc_fn" "${1:-}"; }
 _rc_case() {  # <cell> <expected bucket>
@@ -2372,7 +2421,11 @@ _rc_case() {  # <cell> <expected bucket>
 # Classing it as a failure printed "0 of 11 — NOTHING answered" 28 lines under six such cells.
 _rc_case 'no backend' answered
 _rc_case 'no route'   answered
-_rc_case 'LB up'      answered
+# ⚠️ `skip`, NOT `answered` — REFUTED by a round and measured: `LB up` is emitted by the
+# `_route_dead` PERFORMANCE CACHE (and by the no-host arm), so those rows were never probed at all.
+# Classing it `answered` made a wholly-unresponsive ingress read as "something IS answering" and
+# SUPPRESSED the powered-off precondition block, while the dead-end remedies still printed.
+_rc_case 'LB up'      skip
 _rc_case 'HTTP 418'   answered
 _rc_case 'serving'    serving
 _rc_case 'silent'     silent
@@ -2394,19 +2447,51 @@ _rc_case ''           skip
 # enumeration, and this case is what makes a ninth producer string visible instead of quietly
 # reclassified. Derived from the producers, so a new `printf` in _reach_ingress/_reach_harbor/
 # _reach_argocd that nobody classified turns this red.
-_rc_missing=""
-for _v in 'not probed' '-' 'not set' unresolved unknown serving silent 'no DNS here' 'stale DNS' \
-          'no route' 'no backend' 'LB up'; do
-  case "$(_rc_says "$_v")" in
-    skip|serving|answered|dns|silent) : ;;
-    *) _rc_missing="${_rc_missing} '${_v}'" ;;
-  esac
-done
+# ⚠️ ASSERT THE ENUMERATION, NOT THE RETURN VALUE — the previous version of this case COULD NOT
+# FAIL. It fed each string to `_reach_class` and accepted any of the five buckets; the catch-all
+# returns `answered`, which is one of the five, so a NINTH producer string was quietly reclassified
+# and the case stayed green — the exact outcome its own comment claimed to prevent. (Measured:
+# "ZZZ-never-classified" -> answered -> accepted.) Its second claim was false too: the list was
+# hand-typed here, so a new `printf` in a producer never appeared in it.
+# Derive the strings FROM THE PRODUCERS and require each to appear as a LITERAL in `_reach_class`.
+_rc_body="$(_extract_fn _reach_class)"
+# ⚠️ THE CASE *PATTERNS* ONLY — not the whole body. Grepping the body is VACUOUS for any string that
+# is also an OUTPUT: `printf 'serving'` satisfies a search for `'serving'` without `serving` ever
+# appearing as an input pattern. Measured on the first run of this case: it flagged the four
+# input-only strings and silently passed the five that double as bucket names. Take the text left of
+# the first `)` on each arm, which is the pattern list and nothing else.
+_rc_pats="$(printf '%s\n' "$_rc_body" | grep -E "^[[:space:]]*'" | sed 's/).*//')"
+[ -n "$_rc_pats" ] || { printf 'FATAL: extracted ZERO case patterns from _reach_class.\n' >&2; exit 1; }
+_rc_prod="$(awk '/^_reach_ingress\(\) \{/,/^\}/' "${_CREDS_REPO}/scripts/creds.sh"
+            awk '/^_reach_harbor\(\) \{/,/^\}/'  "${_CREDS_REPO}/scripts/creds.sh"
+            awk '/^_reach_argocd\(\) \{/,/^\}/'  "${_CREDS_REPO}/scripts/creds.sh"
+            awk '/^harbor_reachable_state\(\) \{/,/^\}/' "${_CREDS_REPO}/scripts/lib/harbor.sh")"
+# every literal a producer can print, minus the format-string arm (`HTTP %s`, covered by the
+# catch-all and by its own _rc_case above)
+_rc_strings="$(printf '%s\n' "$_rc_prod" \
+  | grep -oE "printf '[a-zA-Z][^']*'" | sed "s/^printf '//; s/'$//" | grep -v '%' | sort -u)"
+[ -n "$_rc_strings" ] || { printf 'FATAL: extracted ZERO producer strings — the awk ranges rotted.\n' >&2; exit 1; }
+_rc_missing=""; _rc_n=0
+while IFS= read -r _v; do
+  [ -n "$_v" ] || continue
+  _rc_n=$((_rc_n + 1))
+  printf '%s' "$_rc_pats" | grep -qF "'${_v}'" || _rc_missing="${_rc_missing} '${_v}'"
+done <<EOF
+$_rc_strings
+EOF
 if [ -z "$_rc_missing" ]; then
-  ok "reach-class: every producer string classifies into a named bucket"
+  ok "reach-class: all $_rc_n producer string(s) are ENUMERATED in _reach_class (not just bucketed)"
 else
-  bad "reach-class: unclassified producer string(s):$_rc_missing" \
-      "an unenumerated cell falls to the catch-all and is reported as 'answered'"
+  bad "reach-class: producer string(s) NOT enumerated in _reach_class:$_rc_missing" \
+      "they fall to the catch-all and are silently reported as 'answered'"
+fi
+# POSITIVE CONTROL for the extraction itself: a string the producers cannot emit must NOT be found
+# in the enumeration, or the grep above matches everything and the case is vacuous again.
+if printf '%s' "$_rc_pats" | grep -qF "'ZZZ-never-classified'"; then
+  bad "reach-class: the enumeration grep matches a string no producer emits" \
+      "the membership test is vacuous — it would pass for any input"
+else
+  ok "reach-class: the enumeration grep rejects a string no producer emits (control)"
 fi
 # ⚠️ AND THE DISCRIMINATION, which is the point: the timeout and the never-probed cases must not
 # produce the SAME sentence. Before the fix they produced the same WRONG one.

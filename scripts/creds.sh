@@ -1301,9 +1301,19 @@ _reach_ingress() {
   # The status DISCRIMINATES three things a single verdict cannot, and each sends the reader
   # somewhere different — which is the whole reason not to collapse them:
   #   2xx/3xx -> serving      the route resolves to a healthy backend
-  #   503     -> no backend   the route is RENDERED, nothing healthy behind it. This is the NORMAL
-  #                           state after `make install-all`, which builds no app image (B529) —
-  #                           so it means "run the pipeline", not "the ingress is broken".
+  #   503     -> no backend   the route is RENDERED, nothing healthy behind it.
+  #                           ⚠️ DO NOT WRITE A REMEDY FROM THIS ARM WITHOUT READING B731. This
+  #                           comment used to say it was "the NORMAL state after `make install-all`,
+  #                           which builds no app image (B529) — so it means 'run the pipeline'".
+  #                           That was TRUE in the B529 era and a LATER CHANGE FALSIFIED IT:
+  #                           `Makefile:1076` now ends `install-all` with `build-apps` ("so the demo
+  #                           actually SERVES"), so the stated trigger cannot occur. MEASURED
+  #                           2026-09-11 on the live lab, the real cause was neither — two app rows
+  #                           read `no backend` and went to `serving` ~3 minutes later with NOTHING
+  #                           done in between: the pods were still starting after a restart. A 503
+  #                           is IDENTICAL whether the pods are starting, crash-looping, or were
+  #                           never built, and this printer does no cluster read for app rows, so
+  #                           the status ALONE cannot discriminate them.
   #   404     -> no route     the ingress does not know this host: a rendering/attach fault.
   #   000     -> silent       nothing answered at all (curl could not complete).
   #
@@ -1393,14 +1403,37 @@ _reach_argocd() {
 #
 # ⚠️ THE CATCH-ALL COUNTS, IT DOES NOT SKIP. A ninth producer value must not vanish from the
 # denominator — a `skip` default would hide it in exactly the direction that makes the aggregate
-# under-count. Every string a producer can emit that is not enumerated above comes from a COMPLETED
-# HTTP exchange (`_reach_ingress`'s `HTTP %s` arm), so `answered` is the honest default.
+# under-count. With `LB up` now enumerated, every REMAINING unenumerated string a producer can emit
+# (`no route`, `no backend`, `HTTP %s`) does come from a COMPLETED HTTP exchange, so `answered` is
+# the honest default. ⚠️ That sentence was FALSE while `LB up` fell through here — a round measured
+# it as the premise under the CRITICAL above — so if you add a producer value, ENUMERATE it rather
+# than leaning on this paragraph. `test-creds-show.sh` asserts the enumeration, not the return
+# value, precisely because the catch-all cannot fail.
 _reach_class() {   # <the Reachable cell> -> skip | serving | answered | dns | silent
   case "${1:-}" in
-    ''|'-'|'not probed'|'not set'|unresolved|unknown)  printf 'skip' ;;
-    serving)                                           printf 'serving' ;;
+    # Every pattern QUOTED, deliberately: test-creds-show.sh asserts that each producer string
+    # appears as a literal among these case PATTERNS, and a bare word cannot be told apart from
+    # prose by that check.
+    ''|'-'|'not probed'|'not set'|'unresolved'|'unknown')  printf 'skip' ;;
+    # ⚠️ `LB up` IS `skip`, AND PUTTING IT IN `answered` SUPPRESSED THE POWERED-OFF WARNING.
+    # It is emitted by a PERFORMANCE CACHE (`_route_dead`) and by the no-host-to-name arm; its own
+    # producer comment (~:1221) says "the TCP probe passed and we did not learn anything about this
+    # route", which is this bucket's definition. MEASURED by a round against a listener that accepts
+    # TCP and closes — ONE HTTP probe issued in the whole run, returning 000, the other 8 rows never
+    # probed at all:
+    #   as `answered`: "0 of 11 serving, 8 answered but served nothing, 3 silent" + "the estate is
+    #                  not off", and `grep -c 'needs the lab'` = 0 — THE PRECONDITION BLOCK GONE,
+    #                  while `make fetch-harbor-ca` and the `re-check:` register still printed.
+    #   as `skip`:     "0 of 3 — NOTHING answered ... Consistent with the lab being OFF" + the
+    #                  precondition FIRES.
+    # One optimisation, two opposite verdicts. A memoised "we didn't ask" must never read as an answer.
+    'LB up')                                           printf 'skip' ;;
+    'serving')                                         printf 'serving' ;;
     'no DNS here'|'stale DNS')                         printf 'dns' ;;
-    silent)                                            printf 'silent' ;;
+    'silent')                                          printf 'silent' ;;
+    # ENUMERATED rather than left to the catch-all — see the header: the catch-all cannot fail, so
+    # anything a producer actually emits must be named here to be covered by the enumeration test.
+    'no route'|'no backend')                           printf 'answered' ;;
     *)                                                 printf 'answered' ;;
   esac
 }
@@ -2395,11 +2428,27 @@ if [ "${_reach_total:-0}" -gt 0 ]; then
     #                                  the /etc/hosts line above, not anything in the cluster.
     printf '  reachable: %s of %s serving' "$_reach_ok" "$_reach_total"
     [ "${_reach_half:-0}" -gt 0 ] && printf ', %s answered but served nothing' "$_reach_half"
-    [ "${_reach_dns:-0}" -gt 0 ] && printf ', %s up but not resolvable from this box' "$_reach_dns"
-    printf ', %s silent.\n' "$(( _reach_total - _reach_ok - _reach_half - _reach_dns ))"
-    if [ "${_reach_ok:-0}" -eq 0 ]; then
+    # ⚠️ NOT "up". The `stale DNS` / `no DNS here` arms RETURN BEFORE the route curl, so these rows
+    # have ZERO HTTP evidence for their own host — `_ing_live` is a bare TCP connect, and this file
+    # already records that "Envoy with no routes ACCEPTS the TCP connection". A round measured one
+    # report saying "Whether the ingress serves them has NOT been checked" on line 35 and calling
+    # nine rows "up" on line 63.
+    [ "${_reach_dns:-0}" -gt 0 ] && printf ', %s not resolvable from this box (their service was NOT probed)' "$_reach_dns"
+    # Suppressed at zero like its two siblings — a healthy report carried a stray ", 0 silent."
+    _sil=$(( _reach_total - _reach_ok - _reach_half - _reach_dns ))
+    [ "$_sil" -gt 0 ] && printf ', %s silent' "$_sil"
+    printf '.\n'
+    # ⚠️ GATED ON THE BUCKET THAT JUSTIFIES IT, not merely on "nothing is serving". A round
+    # measured this sentence telling an operator to wait for backends in a state that was 9/11
+    # STALE DNS — whose remedy is the /etc/hosts line printed ~30 lines ABOVE and which the
+    # disjunction excluded. `_reach_class`'s own header says "the fix is the /etc/hosts line above,
+    # not anything in the cluster"; the sentence contradicted its own rationale.
+    if [ "${_reach_ok:-0}" -eq 0 ] && [ "${_reach_half:-0}" -gt 0 ]; then
       printf '             Something IS answering, so the estate is not off — it is either still coming\n'
       printf '             up or its backends are not running yet.\n'
+    fi
+    if [ "${_reach_dns:-0}" -gt 0 ]; then
+      printf '             The unresolvable ones need the /etc/hosts line above, not a cluster change.\n'
     fi
   fi
 fi
@@ -2790,6 +2839,7 @@ _ssh_ep="<not probed>"   # the ENDPOINT cell: an address, or a marker naming why
 # this file has had that exact trap once already.
 _ssh_answered=0
 _ssh_never_asked=0
+_ssh_unreadable=0
 if [ "$_no_probe_snapshot" = "1" ]; then
   _ssh_state="not probed (CREDS_NO_PROBE=1)"; _ssh_tok="<not probed>"
 elif [ -z "${VKS_NAMESPACE:-}" ]; then
@@ -2969,10 +3019,24 @@ else
                # genuine RBAC fact, so it must NOT be lumped with "nothing answered".
                FORBIDDEN)
                  _ssh_ep="<not allowed to read addresses>"; _ssh_answered=1 ;;
-               UNAUTHORIZED|STALE_CA|PLAINTEXT)
-                 _ssh_ep="<could not read node addresses>"; _ssh_answered=1 ;;
+               # ⚠️ THE CELL MUST MATCH THE HEADER. My first version reused
+               # `<could not read node addresses>` for these three while setting `_ssh_answered=1`,
+               # so the header said "read live." directly above a cell saying it could not be read —
+               # VERBATIM the defect this suite documents at test-creds-show.sh's ssh-header block,
+               # re-created for 3 of 8 classes by the fix for the other five. The classifier already
+               # told us WHY; say it, in a SHORT token (the Endpoint column's width is a max over all
+               # rows — all three are shorter than the 30-char string they replace).
+               UNAUTHORIZED) _ssh_ep="<auth rejected>";      _ssh_answered=1; _ssh_unreadable=1 ;;
+               STALE_CA)     _ssh_ep="<stale CA>";           _ssh_answered=1; _ssh_unreadable=1 ;;
+               PLAINTEXT)    _ssh_ep="<plaintext endpoint>"; _ssh_answered=1; _ssh_unreadable=1 ;;
                NO_KUBE_TARGET|KUBECONFIG_UNUSABLE)
                  _ssh_ep="<could not read node addresses>"; _ssh_answered=0; _ssh_never_asked=1 ;;
+               # ⚠️ NAMED, NOT LEFT TO `*)`. `check-classifier-consumers` failed this arm on its
+               # first run for exactly that: UNREACHABLE fell through, and the repo's rule is that
+               # every consumer enumerates all eight classes so a NEW class cannot be silently
+               # absorbed. `*)` here means the classifier's OWN catch-all, UNKNOWN, and nothing else.
+               UNREACHABLE)
+                 _ssh_ep="<could not read node addresses>"; _ssh_answered=0 ;;
                *)
                  _ssh_ep="<could not read node addresses>"; _ssh_answered=0 ;;
              esac ;;
@@ -3076,8 +3140,13 @@ printf '\n  Lab access. <not set> = this report lacks it, not the lab.\n'
 # probing surface is untested by construction — a round measured 127 ok BOTH BEFORE AND AFTER a
 # change to this very line. A pure classifier can be extracted and driven with the rc classes
 # without a cluster, which is the only way this gets a demonstrated RED.
-_ssh_header_line() {   # <answered> <rc> <state> <never-asked> -> the sentence
-  if [ "${1:-0}" = 1 ] || [ "${2:-1}" -eq 0 ]; then
+_ssh_header_line() {   # <answered> <rc> <state> <never-asked> <answered-but-unreadable> -> the sentence
+  if [ "${5:-0}" = 1 ]; then
+    # The server ANSWERED (so this is not a statement about the lab being down) and the addresses
+    # were still not readable. "read live." would be false; "NOTHING answered" would also be false.
+    printf '    guest node SSH: the server ANSWERED but the addresses were not readable — see the\n'
+    printf '                    note below.\n'
+  elif [ "${1:-0}" = 1 ] || [ "${2:-1}" -eq 0 ]; then
     printf '    guest node SSH: read live.\n'
   elif [ "${2:-1}" -eq 119 ]; then
     printf '    guest node SSH: NOT probed.\n'
@@ -3090,7 +3159,7 @@ _ssh_header_line() {   # <answered> <rc> <state> <never-asked> -> the sentence
     printf '    guest node SSH: NOT probed.\n'
   fi
 }
-_ssh_header_line "${_ssh_answered:-0}" "${_ssh_vrc:-1}" "${_ssh_ep_state:-}" "${_ssh_never_asked:-0}"
+_ssh_header_line "${_ssh_answered:-0}" "${_ssh_vrc:-1}" "${_ssh_ep_state:-}" "${_ssh_never_asked:-0}" "${_ssh_unreadable:-0}"
 printf '\n  %-*s  %-*s  %-*s  %s\n' "$_lw1" "Target" "$_lw2" "Endpoint" "$_lw3" "Username" "Password"
 printf '  %-*s  %-*s  %-*s  %s\n' \
   "$_lw1" "$(printf '%*s' "$_lw1" '' | tr ' ' '-')" \
