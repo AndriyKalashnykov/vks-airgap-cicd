@@ -65,6 +65,12 @@ trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" "${_h_err:-}" "${_
 # It is a FILE and not a variable ON PURPOSE: `_reach_ingress` is called inside $( ), a SUBSHELL,
 # so an assignment there is discarded — the function's own comment says so. A file crosses.
 _route_dead="${TMPDIR:-/tmp}/.creds-route-dead.$$"
+# ⚠️ CLEAR IT AT START. The path is PREDICTABLE and the EXIT trap does not run on SIGKILL or a
+# crash, so a stale sentinel from a previous run survives — and after PID reuse this run inherits
+# it. MEASURED by a round: an EMPTY zero-byte file planted there turned "reachable: 3 of 5 serving,
+# 2 silent" into "0 of 2 — NOTHING answered ... Consistent with the lab being OFF" against an
+# ingress serving HTTP 200. On a shared box that is also a denial-of-truth anyone can plant.
+rm -f "$_route_dead" 2>/dev/null || true
 
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
@@ -1221,7 +1227,22 @@ _reach_ingress() {
   # A previous row already proved the LB does not complete an HTTP request (see _route_dead above).
   # `LB up` is the SAME thing this function says when it has no host to name: the TCP probe passed
   # and we did not learn anything about this route. It is not a new meaning.
-  [ -e "${_route_dead:-/nonexistent}" ] && { printf 'LB up'; return; }
+  # ⚠️ TWO STRIKES, NOT ONE — AND THIS IS THE WHOLE CORRECTION. Letting ONE failed probe stand in
+  # for the other eight makes a TRANSIENT first failure indistinguishable from a dead estate, and
+  # the aggregate then generalises it. MEASURED by a round on a cold-start ingress (first request
+  # 000, every later one 200 — the 5-60s LB-wiring window this repo has a readiness poll for):
+  #   with the 1-strike cache: "0 of 3 — NOTHING answered ... Consistent with the lab being OFF"
+  #   with the cache disabled: "2 of 5 serving, 3 silent"          <- the true statement
+  # NO CLASSIFICATION OF THE CELLS CAN FIX THAT: a dead ingress and a cold-start ingress produce
+  # IDENTICAL cells under a 1-strike cache, so the information is not there to be classified.
+  # Counting `LB up` as `answered` made a dead ingress read alive; counting it as `skip` made a live
+  # one read dead. Both were attempts to classify away a defect in the MEASUREMENT.
+  # Two strikes costs one extra timeout on a genuinely dead ingress (4s at the 2s default, still far
+  # under the 18.1s the cache was introduced to prevent) and removes the class.
+  if [ -s "${_route_dead:-/nonexistent}" ]; then
+    _rd_n="$(wc -c < "${_route_dead}" 2>/dev/null || printf 0)"
+    [ "${_rd_n:-0}" -ge 2 ] && { printf 'LB up'; return; }
+  fi
   local _h="${1:-}"
   # ⚠️ RESOLVING IS NOT ENOUGH — IT MUST RESOLVE TO *THIS* INGRESS.
   # MEASURED 2026-09-06 on the live lab: /etc/hosts still carried a PREVIOUS lab's ingress
@@ -1344,7 +1365,8 @@ _reach_ingress() {
     # NUMERIC, so it would fall past every arm below into the catch-all and print `HTTP 000` — which
     # reads as a status a server returned. Nothing answered; that is `silent`, the same word the
     # LB-down arm above uses. Caught by test-creds-reach-ingress.sh, not by review.
-    ''|000|*[!0-9]*) : > "${_route_dead:-/dev/null}" 2>/dev/null || true; printf 'silent' ;;
+    # APPEND, never truncate: the byte count IS the strike count (see the two-strikes gate above).
+    ''|000|*[!0-9]*) printf '.' >> "${_route_dead:-/dev/null}" 2>/dev/null || true; printf 'silent' ;;
     2??|3??)     printf 'serving' ;;
     # 401/403 proves MORE than a 200 would about the thing this row is about: the route resolved
     # AND a live app answered AND it wants the credential printed beside it. Filing that under the
@@ -1385,7 +1407,8 @@ _reach_argocd() {
 # conflating them made the summary CONTRADICT the column beside it. MEASURED twice:
 #   * HALF-UP lab: 8 rows read `LB up` (the LoadBalancer took the TCP connection and served no
 #     route) under a summary that said "1 of 12 answered". The LB plainly answered.
-#   * post-`install-all`, which builds no app image (B529): six app rows read `no backend` — a 503,
+#   * post-`install-all` (⚠️ NOT because it "builds no app image" — that clause is RETRACTED, see
+#     _reach_ingress's 503 arm: Makefile:1076 ends install-all with `build-apps`): six app rows read `no backend` — a 503,
 #     i.e. the route is RENDERED and a server REPLIED — under "0 of 11 — NOTHING answered", printed
 #     28 lines beneath the six cells that say otherwise. `_reach_ingress`'s own comment calls that
 #     state THE NORMAL ONE after an install.
@@ -1404,8 +1427,8 @@ _reach_argocd() {
 # ⚠️ THE CATCH-ALL COUNTS, IT DOES NOT SKIP. A ninth producer value must not vanish from the
 # denominator — a `skip` default would hide it in exactly the direction that makes the aggregate
 # under-count. With `LB up` now enumerated, every REMAINING unenumerated string a producer can emit
-# (`no route`, `no backend`, `HTTP %s`) does come from a COMPLETED HTTP exchange, so `answered` is
-# the honest default. ⚠️ That sentence was FALSE while `LB up` fell through here — a round measured
+# (`HTTP %s` — `no route` and `no backend` are enumerated below) does come from a COMPLETED HTTP
+# exchange, so `answered` is the honest default. ⚠️ That sentence was FALSE while `LB up` fell through here — a round measured
 # it as the premise under the CRITICAL above — so if you add a producer value, ENUMERATE it rather
 # than leaning on this paragraph. `test-creds-show.sh` asserts the enumeration, not the return
 # value, precisely because the catch-all cannot fail.
@@ -3017,8 +3040,13 @@ else
         *)   case "$(classify_kube_failure "$_ssh_verr" 2>/dev/null || true)" in
                # A REFUSAL IS AN ANSWER. The server replied; it said no. That IS a live read and a
                # genuine RBAC fact, so it must NOT be lumped with "nothing answered".
+               # ⚠️ `_ssh_unreadable` HERE TOO. A round found this arm was 1 of 4 left out: it set
+               # `_ssh_answered=1` and took the "read live." branch, beside a cell reading
+               # `<not allowed to read addresses>` — the exact contradiction the fifth arm was added
+               # to remove, surviving in the one class that had it BEFORE the fix. A refusal IS an
+               # answer; it is not a READ.
                FORBIDDEN)
-                 _ssh_ep="<not allowed to read addresses>"; _ssh_answered=1 ;;
+                 _ssh_ep="<not allowed to read addresses>"; _ssh_answered=1; _ssh_unreadable=1 ;;
                # ⚠️ THE CELL MUST MATCH THE HEADER. My first version reused
                # `<could not read node addresses>` for these three while setting `_ssh_answered=1`,
                # so the header said "read live." directly above a cell saying it could not be read —
@@ -3136,7 +3164,8 @@ printf '\n  Lab access. <not set> = this report lacks it, not the lab.\n'
 # `KUBECONFIG_UNUSABLE` both mean kubectl never reached the endpoint — one fell back to
 # localhost:8080, the other could not read its own config — so "asked, and NOTHING answered" is a
 # claim about the LAB made from a fault entirely inside this box.
-# A FUNCTION so it can be TESTED. The suite sets CREDS_NO_PROBE=1 in every case, so the entire
+# A FUNCTION so it can be TESTED. ⚠️ CORRECTED — the suite is NOT blind: `render()` never sets CREDS_NO_PROBE,
+# `render_with_env` and `_agg_probe` default it to 0 against real listeners. The claim that the
 # probing surface is untested by construction — a round measured 127 ok BOTH BEFORE AND AFTER a
 # change to this very line. A pure classifier can be extracted and driven with the rc classes
 # without a cluster, which is the only way this gets a demonstrated RED.

@@ -137,6 +137,14 @@ trap restore EXIT
 # Per-case overrides (`KUBECONFIG="$_kc" render ...`) still win, which is how the one case that
 # genuinely wants a kubeconfig keeps working.
 export KUBECONFIG="/nonexistent/test-creds-show-sandbox.kubeconfig"
+# ⚠️ UNSET THE HARBOR/ARGOCD SELECTORS TOO. `load_env` SNAPSHOT-PROTECTS them (lib/os.sh), which
+# means an EXPORTED value deliberately OUTRANKS the throwaway `.env` every fixture here writes. A
+# round measured the suite going RED — two FAILs blaming the INGRESS — merely because HARBOR_URL was
+# exported in the caller's environment, which is the shape of any operator who sourced `.env` or any
+# jump-box container run with `-e HARBOR_URL=...`. The KUBECONFIG sandbox above had the right idea
+# and did not cover the selectors that decide the Harbor and ArgoCD rows.
+unset HARBOR_URL HARBOR_PASSWORD HARBOR_INSECURE HARBOR_CA_FILE \
+      ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_CA_FILE INGRESS_CONTROLLER INGRESS_LB_IP
 export ARGOCD_KUBECONFIG="$KUBECONFIG"
 
 render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; SKIP_DOTENV=1 CREDS_TOKEN=1 ./scripts/creds.sh 2>/dev/null; }
@@ -2310,7 +2318,12 @@ _nwd="$(printf '%s\n' "$_pwslice" | grep -cE '^[[:space:]]*_pw_unset_argo=0[[:sp
 # could only catch a REMOVAL, which is half a gate, and the `3` was additionally hand-typed into
 # the pass message. Count the arms in the same slice; every arm but the plain `if` opener that
 # REPLACES the cell owes a withdrawal.
-_narm="$(printf '%s\n' "$_pwslice" | grep -cE '^[[:space:]]*(if|elif) ' || true)"
+# ⚠️ ARMS THAT REPLACE THE CELL, not every `if`/`elif` in the slice. A round measured a FALSE RED:
+# inserting one NESTED conditional that replaces no cell took narm 2 -> 3 with no defect present,
+# and the cheapest way to silence a false RED is to weaken the gate. Require the `argo_pw=` write,
+# which is what actually owes a withdrawal.
+_narm="$(printf '%s\n' "$_pwslice" \
+          | awk '/^[[:space:]]*(if|elif) /{a=1} a&&/argo_pw=/{c++; a=0} END{print c+0}')"
 if [ "${_nwd:-0}" -ge "${_narm:-99}" ]; then
   ok "pw-note: every arm that replaces the ArgoCD cell withdraws the flag ($_nwd withdrawal(s), $_narm arm(s))"
 else
@@ -2327,7 +2340,9 @@ case "$_pwsrc" in
 esac
 
 # ══ THE "guest node SSH" HEADER: "read live" IS A CLAIM ═══════════════════════════════════════════
-# ⚠️ THIS ENTIRE SUITE IS BLIND TO THE PROBING SURFACE. Every case sets CREDS_NO_PROBE=1, so a round
+# ⚠️ CORRECTED — ONE site hardcodes CREDS_NO_PROBE=1; `render()` never sets it and `render_with_env`
+# and `_agg_probe` default it to 0 against real listeners. The old text here said the whole suite was
+# blind to the probing surface, which is measurably false and is what kept the gap open. A round
 # MEASURED 127 ok BOTH BEFORE AND AFTER a change to the very line below — the `gates.md` "green at
 # the same count" tell. These cases extract the classifier and drive it directly, which is the only
 # way this gets a demonstrated RED without a live cluster.
@@ -2351,9 +2366,13 @@ _extract_fn() {
   printf '%s' "$_o"
 }
 _hdr="$(_extract_fn _ssh_header_line)"
-_hdr_says() { bash -c 'eval "$1"; _ssh_header_line "$2" "$3" "$4" "$5"' _ "$_hdr" "${1:-0}" "${2:-1}" "${3:-}" "${4:-0}"; }
-_hdr_case() {  # <label> <answered> <rc> <state> <expected-substring> [never-asked]
-  local got; got="$(_hdr_says "$2" "$3" "$4" "${6:-0}")"
+# ⚠️ THE HARNESS MUST CARRY EVERY PARAMETER THE FUNCTION TAKES. `_ssh_header_line` grew a FIFTH
+# argument (answered-but-unreadable) and this wrapper was left at four, so the 6th case positional
+# silently landed on `never-asked` and a case written for `unreadable` tested something else. A
+# harness one argument behind its subject is a harness that tests a different function.
+_hdr_says() { bash -c 'eval "$1"; _ssh_header_line "$2" "$3" "$4" "$5" "$6"' _ "$_hdr" "${1:-0}" "${2:-1}" "${3:-}" "${4:-0}" "${5:-0}"; }
+_hdr_case() {  # <label> <answered> <rc> <state> <expected-substring> [never-asked] [unreadable]
+  local got; got="$(_hdr_says "$2" "$3" "$4" "${6:-0}" "${7:-0}")"
   case "$got" in
     *"$5"*) ok "ssh-header: $1" ;;
     *)      bad "ssh-header: $1" "got: $(printf '%s' "$got" | tr -d '\n')" ;;
@@ -2368,7 +2387,13 @@ _hdr_case "rc=137 (external kill) -> NOT a lab fact" 0 137 "some state" "NOTHING
 _hdr_case "rc=119 (token expired, never dialled)"   0 119 "some state"  "NOT probed"
 # ⚠️ A REFUSAL IS AN ANSWER. The server replied; it said no. That IS a live read and a real RBAC
 # fact, so it must not be lumped with "nothing answered" — the naive fix for this defect would.
-_hdr_case "forbidden -> read live (a refusal IS an answer)" 1 403 "some state" "read live"
+# ⚠️ FORBIDDEN IS "ANSWERED BUT NOT READ", NOT "read live." — CORRECTED. This case used to pin
+# "read live." for it, which is what a round called out: the product's FORBIDDEN arm sets
+# `_ssh_unreadable=1` (its cell is `<not allowed to read addresses>`), so pinning the old text here
+# would have turned the suite RED the moment the product was fixed — a test defending the defect.
+# A refusal IS an answer (so `_ssh_answered=1` stays, and the estate is NOT reported as down); it is
+# simply not a READ, and the header must not say the addresses were read.
+_hdr_case "forbidden -> ANSWERED but not read" 1 403 "some state" "ANSWERED but the addresses were not readable" 0 1
 # never probed at all
 _hdr_case "never probed -> NOT probed"              0 1   ""            "NOT probed"
 # NOTHING WAS ASKED: the kube config named no reachable target, so "asked, and NOTHING answered"
@@ -2387,7 +2412,10 @@ _hdr_case "answered beats never-asked"                 1 1 "some state" "read li
 _sshcase="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh" \
              | awk '/classify_kube_failure "\$_ssh_verr"/{p=1} p{print} p&&/^             esac ;;$/{exit}')"
 [ -n "$_sshcase" ] || { printf 'FATAL: could not extract the _ssh_answered classifier case.\n' >&2; exit 1; }
-_bad_pair="$(printf '%s\n' "$_sshcase" \
+# ⚠️ ONE RECORD PER ARM, not per LINE. A round measured this: the defect written on ONE line is
+# caught, the IDENTICAL defect split across two lines (cell on one, flag on the next) is INVISIBLE —
+# and two-line arms are already this file's style. Join each arm into a single record at `;;` first.
+_bad_pair="$(printf '%s\n' "$_sshcase" | tr '\n' ' ' | sed 's/;;/;;\n/g' \
   | grep -E '_ssh_answered=1' | grep -c 'could not read node addresses' || true)"
 if [ "${_bad_pair:-1}" -eq 0 ]; then
   ok "ssh-header: no arm sets answered=1 beside a 'could not read' cell (header and cell agree)"
@@ -2446,6 +2474,141 @@ while True:
     printf '%s' "$out"
     rm -rf "$t"
   }
+  # ── THE COLD-START CASE: the CRITICAL, in the direction that cannot be seen by classifying cells ──
+  # A round measured that a ONE-strike `_route_dead` cache makes a HEALTHY ingress report
+  # "0 of 3 — NOTHING answered ... Consistent with the lab being OFF", because one transient failure
+  # is generalised to every later row WITHOUT PROBING. This is the documented 5-60s LB-wiring window
+  # (`verify-ingress` carries a readiness poll for exactly it), so it is an ordinary state, not an
+  # exotic one. A dead ingress and a cold-start ingress emit IDENTICAL cells under a one-strike
+  # cache, so NO classification of the Reachable column can tell them apart — the fix had to be in
+  # the measurement (two strikes), and this case is what holds it there.
+  # Fail only the FIRST HTTP REQUEST, keyed on requests rather than connections: the TCP liveness
+  # probe opens a connection WITHOUT sending bytes, and how many such probes precede the first row
+  # is an implementation detail this case must not depend on.
+  _agg_probe_coldstart() {
+    local t p lp out
+    trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # ⚠️ A SECOND, DEAD PORT FOR HARBOR — and this is what makes the case DISCRIMINATE. With Harbor
+    # pointed at the SAME live listener, the "rows are still probed and read serving" assertion is
+    # satisfied by the HARBOR row and stays GREEN under the one-strike defect: measured, rc=0 with
+    # the bug reinstated. Only ingress rows may be able to produce `serving` here.
+    _dead_p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # ⚠️ SC2016 is CORRECT and deliberate: this is a PYTHON program in a single-quoted shell string —
+    # `sys.argv[1]` is python's, and expanding it here would bake the test harness own argv into it.
+    # shellcheck disable=SC2016
+    python3 -c '
+import socket,sys
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(64); failed=False
+while True:
+    try:
+        c,_=s.accept(); c.settimeout(0.4)
+        try: req=c.recv(400)
+        except Exception: req=b""
+        if not req: c.close(); continue          # a bare TCP liveness probe: not a request
+        # KEY ON THE HOST HEADER, never on a request INDEX. The banner runs its OWN ingress check
+        # first (measured: `Host: 127.0.0.1:<port>`, with no vhost name), so "fail the first
+        # request" fails the BANNER and leaves every row serving — the fixture then proves nothing
+        # and stays green against the defect. Failing the first *vhost* request is what makes the
+        # first ROW fail, and it cannot rot if the banner own probe count changes.
+        if (not failed) and b"vks.local" in req:
+            failed=True; c.close(); continue
+        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); c.close()
+    except Exception: break
+' "$p" >/dev/null 2>&1 &
+    lp=$!
+    sleep 1
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$_dead_p" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _cs_out="$(_agg_probe_coldstart)"
+
+  # ── THE STALE SENTINEL: a crashed run poisons the NEXT one ─────────────────────────────────────
+  # `_route_dead` is a PREDICTABLE path (`$TMPDIR/.creds-route-dead.$$`) and the EXIT trap does not
+  # run on SIGKILL, so a sentinel can outlive its run — and after PID reuse the next run inherits
+  # it. A round measured an EMPTY planted file turning "3 of 5 serving, 2 silent" into
+  # "0 of 2 — NOTHING answered ... Consistent with the lab being OFF" against an ingress serving 200.
+  # ⚠️ `exec` IS LOAD-BEARING: it preserves the PID, so the `$$` the wrapper used to name the file is
+  # the same `$$` creds.sh resolves. Without it the planted path cannot match and this case is
+  # vacuous — it would pass whether or not the product clears the sentinel.
+  _stale_probe() {
+    local t p lp out
+    trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    python3 -m http.server "$p" --bind 127.0.0.1 >/dev/null 2>&1 &
+    lp=$!
+    sleep 1
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$p" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              TMPDIR="$t" CREDS_NO_PROBE=0 CREDS_TOKEN=1 \
+              bash -c 'printf ".." > "$TMPDIR/.creds-route-dead.$$"; exec "$0"' \
+                   "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    # ⚠️ THE CONTROL MUST BE INDEPENDENT OF THE THING UNDER TEST. A first version read `serving`
+    # out of the PRODUCT's own table — but a planted sentinel suppresses exactly those rows, so the
+    # control went RED alongside the verdict and printed "fix the fixture, not the product" while
+    # the product was the problem. Ask the LISTENER directly instead; nothing creds.sh does can
+    # change this answer.
+    local _lcode
+    _lcode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:${p}/" 2>/dev/null || true)"
+    kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+    printf 'LISTENER=%s\n%s' "${_lcode:-000}" "$out"
+    rm -rf "$t"
+  }
+  _stale_raw="$(_stale_probe)"
+  _stale_code="$(printf '%s\n' "$_stale_raw" | sed -n '1s/^LISTENER=//p')"
+  _stale_out="$(printf '%s\n' "$_stale_raw" | tail -n +2)"
+  # CONTROL, measured against the LISTENER, not against the report.
+  case "${_stale_code:-000}" in
+    2??|3??) ok "stale-sentinel: the fixture listener really is serving (HTTP $_stale_code) — the case is live" ;;
+    *)       bad "stale-sentinel: the fixture listener answered $_stale_code — it cannot discriminate" \
+                 "the http.server did not come up; fix the fixture, not the product" ;;
+  esac
+  case "$_stale_out" in
+    *'lab being OFF'*)
+      bad "stale-sentinel: a planted sentinel from a dead run reports a SERVING lab as OFF" \
+          "creds.sh must clear \$_route_dead at start — the EXIT trap does not run on SIGKILL" ;;
+    *)  ok "stale-sentinel: a leftover sentinel does NOT poison the next run" ;;
+  esac
+  # CONTROL: the first request really did fail, or this case is testing a healthy listener.
+  if [ "$(printf '%s' "$_cs_out" | grep -c 'silent')" -ge 1 ]; then
+    ok "coldstart: the first request really failed (at least one row reads 'silent') — the case is live"
+  else
+    bad "coldstart: no row reads 'silent' — the listener served everything" \
+        "the fixture is not producing a cold start; fix the fixture, not the product"
+  fi
+  # THE VERDICT: rows AFTER the transient failure must be probed, and must read serving.
+  if [ "$(printf '%s' "$_cs_out" | grep -c 'serving')" -ge 1 ]; then
+    ok "coldstart: rows after a transient first failure are still PROBED and read serving"
+  else
+    bad "coldstart: one transient failure suppressed every later row" \
+        "a single failed probe is standing in for all of them — the cache needs a second strike"
+  fi
+  case "$_cs_out" in
+    *'lab being OFF'*)
+      bad "coldstart: a HEALTHY ingress is reported as 'Consistent with the lab being OFF'" \
+          "one transient probe failure has been generalised to the whole estate" ;;
+    *)  ok "coldstart: a transient first failure does NOT declare the estate off" ;;
+  esac
+  if [ "$(printf '%s' "$_cs_out" | grep -c 'needs the lab')" -eq 0 ]; then
+    ok "coldstart: the powered-off precondition stays SILENT while the ingress is serving"
+  else
+    bad "coldstart: the powered-off precondition fired against a serving ingress" \
+        "every remedy is then withheld from an operator whose lab is fine"
+  fi
+
   _agg_out="$(_agg_probe)"
   # THE CONTROL FIRST: if the fixture did not actually render a report, every assertion below is
   # vacuous — and a creds.sh that dies while sourcing prints ZERO lines, which is indistinguishable
@@ -2457,8 +2620,12 @@ while True:
         "fix the fixture, not the product: creds.sh probably died sourcing lib/os.sh"
   fi
   # ...and that the SHORT-CIRCUIT actually occurred, or this is not the state we came to test.
-  if [ "$(printf '%s' "$_agg_out" | grep -c 'LB up')" -ge 2 ]; then
-    ok "aggregate-render: the _route_dead short-circuit fired (>=2 rows read 'LB up')"
+  # ⚠️ >=1, NOT >=2, AND THE REASON IS THE TWO-STRIKES CACHE. The sentinel now arms only after TWO
+  # independent failed probes, so with THREE ingress rows exactly ONE is suppressed (rows 1-2 probe
+  # and read `silent`, row 3 short-circuits). A `>=2` threshold was correct under the one-strike
+  # cache and went RED the moment that defect was fixed — a test pinned to the arithmetic of a bug.
+  if [ "$(printf '%s' "$_agg_out" | grep -c 'LB up')" -ge 1 ]; then
+    ok "aggregate-render: the _route_dead short-circuit fired (>=1 row read 'LB up')"
   else
     bad "aggregate-render: no 'LB up' rows — the accept-then-close listener did not produce the cache" \
         "without the short-circuit this case cannot see the CRITICAL it exists for"
@@ -2569,7 +2736,17 @@ _rc_prod="$(awk '/^_reach_ingress\(\) \{/,/^\}/' "${_CREDS_REPO}/scripts/creds.s
 # every literal a producer can print, minus the format-string arm (`HTTP %s`, covered by the
 # catch-all and by its own _rc_case above)
 _rc_strings="$(printf '%s\n' "$_rc_prod" \
-  | grep -oE "printf '[a-zA-Z][^']*'" | sed "s/^printf '//; s/'$//" | grep -v '%' | sort -u)"
+  | grep -v '>>' | grep -v '> *"' \
+  | grep -oE "printf '[^']+'" | sed "s/^printf '//; s/'\$//" | grep -v '%' | sort -u)"
+# ⚠️ DROP REDIRECTED printfs FIRST. A producer function may `printf` to a FILE as well as to stdout,
+# and only stdout becomes the Reachable cell. Removing the `[a-zA-Z]` anchor (below) immediately
+# picked up the two-strikes sentinel's own `printf '.' >> "$_route_dead"` and reported `.` as an
+# unclassified producer string — a false RED from the very widening that fixed a false GREEN.
+# ⚠️ NO `[a-zA-Z]` ANCHOR. It silently dropped every producer string that does not begin with a
+# letter, and the FATAL guard fires only at ZERO strings — so an UNDER-extraction was
+# indistinguishable from a clean run. A round planted `printf '<teapot>'` in a producer: the
+# extracted set was byte-identical to the baseline and the unclassified string sailed through to the
+# catch-all. `<...>` cell markers are this file's house style — this arc added three of them.
 [ -n "$_rc_strings" ] || { printf 'FATAL: extracted ZERO producer strings — the awk ranges rotted.\n' >&2; exit 1; }
 _rc_missing=""; _rc_n=0
 while IFS= read -r _v; do
