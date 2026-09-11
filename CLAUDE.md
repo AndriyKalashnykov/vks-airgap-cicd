@@ -1056,113 +1056,81 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-10 (evening) — every fix I shipped today had a defect a round found, including a fix FOR a round's finding
+## ▶️ HANDOFF 2026-09-11 — the fix for "the estate is off" DELETED the "estate is off" warning
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### 🔴 DISTRUST FIRST — NINE of my instruments lied today, three of them INSIDE new tests
-
-None errored. Each returned a confident wrong answer, and every one was caught by a RED-proof or a
-round, never by reading the code:
+### 🔴 DISTRUST FIRST — NINE instruments lied today and not one of them errored
 
 | instrument | what it did |
 |---|---|
-| `GITEA_ADMIN_USER=stale DNS` unquoted in a `.env` | `load_env`'s `set -a` ran `DNS` as a command -> report rendered **NOTHING**, 0 lines in BOTH arms, which reads as "the fix works" |
-| a `creds.sh` copy run from OUTSIDE `scripts/` | dies sourcing `lib/os.sh` -> again 0 lines, again indistinguishable from success |
-| `grep 'sudo sed'` in a structural gate | matched **the fix's own comment**, which quotes the removed command on purpose |
-| that gate written `sed … \| grep -qE …` under `pipefail` | `grep -q` exits early, `sed` takes SIGPIPE -> **false CLEAN over a present defect**. MEASURED on the identical file: pipe form NO MATCH, herestring MATCH |
-| a legend check greping `MINTED fresh` | the arm renders `minted each run` -> passed GREEN over a reverted FALSE legend |
-| a width check measuring EVERY line | RED on a 108-char `curl` that must not wrap — that is the REASON for the shape, not the defect |
-| `grep -m1 -oE 're-check: make [a-z0-9-]*'` | **truncated** `harbor-auth-checkX` to a name that DOES exist -> existence check passed |
-| `printf '%s'` with `\t` in the ARGUMENT | printf interprets escapes in the FORMAT only -> the fixture carried a literal backslash-t |
-| `$'…\t…'` passed UNQUOTED | word-split on IFS, **which contains the tab** -> arrived as two words |
+| `grep -c '^ok'` on `test-creds-reach-ingress` | the suite INDENTS `ok` two spaces -> **0**, read as "the suite ran nothing" (it ran 27) |
+| `grep 'NORMAL state after'` | the phrase **spans a newline** -> 0 hits, read as "the comment does not exist" |
+| a python anchor on `elif [ "$_have_sink" = 1 ]; then` | matched **TWO** lines (one a prefix of a longer one) -> assert threw -> **three RED-proofs silently ran against an UNMUTATED tree** and read as "the gate is blind" |
+| `timeout 240 make verify-ingress` | its gitea poll alone budgets **300s** -> rc=124 = MY OWN cap, read as a verdict |
+| `timeout 120 make harbor-reachable` | its wait loop is **900s** -> read as "Harbor never came back" |
+| `git status` run mid-flight | a backgrounded chain was between its suite run and its commit -> "the commit did not land" reported as fact; it had |
+| `HARBOR_URL=10.0.0.1` in a NEW fixture | **something on this box ANSWERS 10.0.0.1** -> the row rendered `serving`, so an assertion failed for a reason unrelated to the product |
+| `harbor_reachable_state` at 2s | Harbor was genuinely silent at **20s** too — but only measuring all four budgets proved the 2s cap was not the cause |
+| a body-wide `grep` for `'serving'` in a new test | `printf 'serving'` **is in the body**, so the membership test passed vacuously for every string that doubles as a bucket name |
 
-**And two `static-check` runs were VOIDED by the repo's own tree-stability guard**, both because I
-edited while it read the tree — the second minutes after I described the first. Fix in-flight edits
-in a `git worktree`, not in place.
+### What shipped — `fix/creds-lab-down-state`, 4 commits, `make ci` GREEN, NOT pushed
 
-### What merged / is open
+Validated `make creds` in THREE live states against the real lab (down → half-up → up), and the
+report is now true in each. **136 → 163 assertions**, every new one RED-proven by mutation, and the
+healthy render is **byte-identical** after all of it.
 
-- **#1248 MERGED** — `make creds`' legend was FALSE for 3 of 5 credential rows (headlamp minted at
-  report time, Harbor web-UI read from a Supervisor secret, ArgoCD read by live kubectl), and it
-  contradicted the same render 1,100 lines earlier. Also: the `re-check:` register named the one
-  target that cannot answer its own caveat, the cert block had a 126-char label, and the password
-  note read every column.
-- **#1250 MERGED** (supersedes **#1249**, CLOSED). #1249's diff carried a regression it introduced
-  and an assertion that CERTIFIED it. Holding it for a round was worth it: a SIXTH round then found
-  the worst defect of the day in my fix FOR that regression — see below.
-- Filed: **B727** (uninstall-all deletes the localhost line; corrected twice — damage 6x what I
-  first wrote, the `${APP_DOMAIN}` derivation gap, B528's gate blind to that site, class = **4**
-  sites), **B728** (`harbor-auth-check` says "silent above = you have it" when it probed nothing),
-  **B716 stage 2** (all 12 survivors documented; stage 3's own signal would flag ZERO).
+**Two adversary rounds REFUTED me; 19 findings, all implemented.** The CRITICAL:
 
-### 🔴 THE PATTERN, and it is the reason to keep running rounds
+> `_route_dead` is a **PERFORMANCE CACHE** — the first ingress row whose route curl returns 000
+> writes a sentinel and every later row short-circuits to `LB up` **without probing**. Classing
+> `LB up` as `answered` gave that cache semantic weight. MEASURED against a listener that accepts
+> TCP and closes, with exactly ONE HTTP probe issued in the whole run:
+> `reachable: 0 of 11 serving, 8 answered but served nothing` + *"the estate is not off"*, and
+> `grep -c 'needs the lab'` = **0** — the powered-off precondition GONE, while
+> `make fetch-harbor-ca` and the `re-check:` register still printed. One optimisation, two
+> opposite verdicts. `LB up` is now `skip`; its producer's own comment already said "we did not
+> learn anything about this route", which is that bucket's definition.
 
-**SIX rounds, six refutations, every one landing on my own work** — and the last two each found that
-a FIX of mine had introduced a NEW defect. The sixth is the one to remember:
+### 🔴 FOUR FALSE COMMENTS IN ONE DAY — all true when written, all falsified by a later change
 
-> `_reach_ingress` accepted a match ANYWHERE in the resolved address set, so with a stale entry
-> FIRST and the ingress second the row printed **`serving`**. That state was previously
-> UNREACHABLE — the old `sed -i` REPLACE could not produce it. **The remove-then-add remedy I had
-> just shipped CAN.** So re-running the report would have CONFIRMED the broken state as fixed, and
-> the advice's own warning had no instrument behind it. I built the trap and the thing that hides it
-> in one change. Fixed to compare the FIRST SAME-FAMILY address (same-family is what preserves the
-> 2026-09-08 false-stale fix); RED-proven with the `::1`-first case as its control.
+This is the un-gateable class (`hooks.md`), and it is now the most productive thing to hunt here:
 
-And it CHAINED with a second HIGH: the printed `grep -nE` was case-SENSITIVE while glibc is not, so
-`10.9.9.9 Tekton.VKS.Local` fired `stale DNS` while the operator's own grep found NOTHING — sending
-them to skip the removal, do the add, and land in the state above.
-
-The five before it:
-
-1. the design round refuted my framing of the operator's question — the legend was FALSE, not merely
-   cautious — and corrected my cost figure (28 ms prices ONE curl; the function that answers the
-   push question is THREE);
-2. an idea round refuted my proposed restructure as **redundant** (three heredoc-fed loops over
-   `rows` already exist and are not subshells), then found two HIGHs I had not asked about;
-3. the impl round on #1248 found **my new legend had no assertion on its own content** — deleting
-   the entire claim left the suite at the same count, 0 FAIL. The identical hole that commit fixed
-   three screens away;
-4. the B727 round measured the damage at **6x** my filing and found the fix I sketched does not work;
-5. the impl round on #1249 found my co-occurrence fix made the two arms **CONTRADICT** each other —
-   and that my new assertion *"BOTH arms printed"* is **GREEN on the refuted tree**.
-
-⚠️ **An idea-round clearance authorises IMPLEMENTING, never SHIPPING.** #1249 had an idea round and
-no implementation round; that is exactly how it reached a PR with a regression in it.
+1. `creds.sh` — *"the NORMAL state after `make install-all`, which builds no app image (B529)"*.
+   `Makefile:1076` ends `install-all` with **`build-apps`**. Writing the obvious remedy from it
+   would have shipped advice whose stated trigger cannot occur.
+2. `test-creds-show.sh` — *"EVERY RENDER SITE SETS `CREDS_NO_PROBE=1` … STRUCTURALLY UNREACHABLE"*.
+   Measured false three ways. **It was the thing keeping the gap open** — it told the next session
+   not to bother, and a round then found three findings by rendering through the fixture it said
+   did not exist.
+3. `test-creds-show.sh` — *"SCOPED TO THE rc=124 ARM"*. Its awk ran to `fi`, **past the `elif`**, so
+   the SIBLING arm's withdrawal satisfied it. Falsified by a withdrawal I added the same morning.
+4. `creds.sh` — the catch-all's justification (*"every unenumerated string comes from a COMPLETED
+   HTTP exchange"*) was false for `LB up`, and that was the premise under the CRITICAL.
 
 ### NOT done — next units, in order
 
-1. **B729** — three findings the sixth round measured and I did NOT fold in:
-   (a) `_row_host` recovers the hostname from the URL, so it names the WRONG host whenever a URL var
-   diverges from its HOST var — measured with `GITEA_URL`, a documented `.env.example:317` knob that
-   `e2e-cross-cluster.sh:171` actually sets. Fix: pass the host as a 6th `add_row` arg on the four
-   ingress rows and read it as `c6` (the `read` already has `_rest`; `_rows_capped` already drops the
-   sixth field, so the table is byte-unchanged). NOT the refuted restructure.
-   (b) the `no DNS here` arm still does not USE the DNS-independent discriminator that exists two
-   blocks below (the route probe dials the LB by IP with a Host header).
-   (c) the separator strip rewrites a PRINTED PASSWORD — `ab<TAB>cd` renders as `ab cd`, plausible
-   and wrong, where main leaked the tail visibly. Route it through the `<full value below>` footnote
-   that already exists.
-2. **B727** — the fix needs the removal names DERIVED from `ingress_infra_hosts()` + `app_host()`
-   (which also brings the site under B528's gate). ⚠️ Do NOT prescribe a command: a correct one took
-   a round FOUR iterations, two silently wrong, and lands at 381 chars of GNU sed — Photon is
-   toybox. NEVER `awk`: `sudo awk … > /etc/hosts` truncates UNCONDITIONALLY (measured, rc=0, 0 bytes).
+1. **B731** — `no backend` is the ONLY finding this report names **without a remedy** (measured:
+   `grep -cE 'build-apps|run the pipeline|still starting'` over a real render = **0**), while DNS,
+   certs and estate-down all carry one. ⚠️ Do NOT write "run the pipeline": comment 1 above is
+   false, AND the cause I measured was neither — both rows went to `serving` ~3 min later with
+   NOTHING done in between (pods still starting after a restart). A 503 is IDENTICAL whether pods
+   are starting, crash-looping, or were never built, and this printer does no cluster read for app
+   rows. **Idea-round before any operator-facing text (RULE ZERO-V).**
+2. **B730 residual** — the aggregate no longer splits them, but the TABLE still shows `silent` on
+   the first ingress row and `LB up` on the rest **for one identical state**, because
+   `_route_dead` is written by whichever row probes first. The producer is where they must agree.
 3. **B728** · **B721 follow-up** (the two call sites, not the resolver) · **B719** · untouched:
    **B484**, **B498**, **B565**, **B523**.
-4. **NO behavioural test exists for the TAB-in-a-cell defect.** Three harnesses gave three different
-   answers for the same tree; a structural assertion ships instead, with the gap and what would
-   settle it written into `test-creds-show.sh`. Do not "fix" this by adding a case you cannot
-   RED-prove.
-
-⚠️ **`static-check-fast` — what runs on a push to `main` — contains neither `lint` nor
-`test-scripts`.** So none of today's 127 assertions are exercised routinely (B574). A green PR check
-here does NOT mean `static-check` passed; run it locally, on a tree you are not editing.
 
 ### Lab
 
-Untouched today — every measurement in this session was a fixture, a loopback listener and a stub
-`getent`. No cluster was contacted.
+**UP and fully serving** — `12 of 12`, `verify-ingress` rc=0. Harbor's PodVMs took ~10 minutes to
+come back after the restart and **FLAPPED** on the way (serving → silent-at-20s → serving); a
+point-in-time "Harbor is serving" expired within a minute. `show-dns-records` confirmed the LB
+never moved (`.130`), so DNS was never the cause. The Supervisor token was renewed at 00:45Z
+(`VKS_AUTH_METHOD=vcf make vks-login`).
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
