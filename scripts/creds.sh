@@ -491,7 +491,17 @@ tr_free_join() { local _l _o=""; while IFS= read -r _l || [ -n "${_l:-}" ]; do [
 # ⚠️ DECLARED HERE, ABOVE THE FIRST ARM THAT SETS IT. Putting it beside the NOTE (~400 lines
 # below) would run the init AFTER the arms and wipe it -- the trap this file already records
 # measuring once: "markers=2, note=0".
-_pw_note_needed=0
+# ⚠️ ONE FLAG PER SOURCE, not one shared flag — because a cell set here can be CORRECTED further
+# down and the note must follow it. MEASURED on a POWERED-OFF lab: `argocd-password.sh` hit our own
+# 3s cap (rc=124), the `else` arm below armed the shared flag, and ~26 lines later the rc=124 arm
+# REPLACED the cell with "<not read — MY OWN 3s cap expired, not the token>" — correcting the cell
+# and leaving the note armed. The report then printed "those passwords are not published in the
+# state overlay", which its OWN adjacent cell refutes: the cause was our timeout, not the overlay.
+# A note that attributes a cause the cell contradicts is the RULE ZERO-V failure, and I introduced
+# it earlier the same day by adding the rc=124 arm downstream of the arming.
+_pw_unset_harbor=0
+_pw_unset_gitea=0
+_pw_unset_argo=0
 _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per flow
   # ⚠️ "check the state overlay" IS THE FOURTH FALSE CLAIM, and the most dangerous of them: under a
   # REFUSAL the password WAS published -- for another cluster -- so this sent the operator to read a
@@ -516,14 +526,14 @@ harbor_user="${HARBOR_USERNAME:-admin}"
 # The `:-` form cannot be kept: it would feed the PLACEHOLDER through _mask and hide the one thing a
 # reader needs when nothing is installed. Branch instead — mask a real value, print the explanation.
 if [ -n "${HARBOR_PASSWORD:-}" ]; then harbor_pw="$(_mask "$HARBOR_PASSWORD")"
-else harbor_pw="$(_unset_pw HARBOR_PASSWORD)"; _pw_note_needed=1; fi
+else harbor_pw="$(_unset_pw HARBOR_PASSWORD)"; _pw_unset_harbor=1; fi
 # NOT a `gitea_admin` fallback: it disagreed with .env.example's GITEA_ADMIN_USER=admin, so this
 # printer could name an account the pipeline never used. It is also dead code — load_env sources
 # .env.example unconditionally (SKIP_DOTENV skips only .env), so the value is always set. If it
 # somehow is not, SAY SO rather than inventing a name. This is a printer; it must still exit 0.
 gitea_user="${GITEA_ADMIN_USER:-<unset — see GITEA_ADMIN_USER in .env.example>}"
 if [ -n "${GITEA_ADMIN_PASSWORD:-}" ]; then gitea_pw="$(_mask "$GITEA_ADMIN_PASSWORD")"
-else gitea_pw="$(_unset_pw GITEA_ADMIN_PASSWORD)"; _pw_note_needed=1; fi
+else gitea_pw="$(_unset_pw GITEA_ADMIN_PASSWORD)"; _pw_unset_gitea=1; fi
 # ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
 # `--wait 0` is an ARGUMENT, not an env var: this is a PRINTER and must never block. argocd-password
 # defaults to a 900s wait for the still-reconciling case, and an env-var opt-out would be defeated by
@@ -611,7 +621,7 @@ else
   # SAME CLASS AS THE TWO ABOVE, third row: "<VKS-provided — get it from your lab>" is only true on a real
   # lab. On a KinD box ArgoCD's password is GENERATED at install like the others, so telling the operator
   # to go and get it from a lab they do not have is a third invented chore. Answer per flow.
-  argo_pw="$(_unset_pw ARGOCD_ADMIN_PASSWORD)"; _pw_note_needed=1
+  argo_pw="$(_unset_pw ARGOCD_ADMIN_PASSWORD)"; _pw_unset_argo=1
   # NOT "get it from your lab" — that sentence sent an operator to fetch something that was TWELVE
   # SECONDS away (measured, walk row 1: this printed at 19:42:25Z, the ArgoCD operator created
   # argocd-initial-admin-secret at 19:42:37Z). This printer passes --wait 0 by design, so "absent
@@ -639,6 +649,9 @@ else
   # "the recorded ingress did not answer either".
   if [ "${_argo_rc:-0}" = 124 ]; then
     argo_pw="<not read — MY OWN ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s cap expired, not the token; run: make argocd-password (uncapped)>"
+    # This cell now names OUR cap as the cause, so ArgoCD must stop contributing to a note that
+    # blames the overlay. Withdraw it here, beside the correction, rather than in the note.
+    _pw_unset_argo=0
   elif [ "$_have_sink" = 1 ]; then
     # ⚠️ REUSE :116's PROBE, do not re-run it. Byte-identical inputs, but each call reads the clock
     # independently (lib/os.sh's `date -u +%s`), so a token expiring BETWEEN the two reads yielded
@@ -1880,6 +1893,8 @@ _rows_capped=""
 # ~12 add_row call sites is needed; a proposed one was refuted as redundant.
 # ⚠️ `_rest` IS LOAD-BEARING. Without it a future SIXTH column lands inside c5, and the scoping
 # this whole change exists for silently widens again.
+_reach_total=0
+_reach_ok=0
 _dns_stale=0
 _dns_absent=0
 _dns_stale_hosts=""
@@ -1899,6 +1914,16 @@ _row_host() {
 }
 while IFS=$'\t' read -r c1 c2 c3 c4 c5 _rest; do
   [ -n "$c1" ] || continue
+  # ⚠️ AGGREGATE THE EVIDENCE. A round MEASURED that with the estate powered off this report made
+  # at least SEVEN independent failed probes and never combined them: the top line read
+  # `cluster: UNDETERMINED` and the reader was left to compute the verdict from twelve cells. The
+  # report holds enough evidence to say one true sentence; not saying it is the defect.
+  # Only rows actually PROBED count -- `not probed` and `-` are not failures to answer.
+  case "$c5" in
+    'not probed'|'-'|'') : ;;
+    *) _reach_total=$((_reach_total + 1))
+       case "$c5" in serving) _reach_ok=$((_reach_ok + 1)) ;; esac ;;
+  esac
   # COLUMN 5 IS THE ONLY PRODUCER. `_reach_ingress` (:1206) emits these two strings; nothing else
   # does. The old gate matched the WHOLE `rows` blob -- every column -- so a username or a URL
   # containing the phrase fired a ROOT `sed` on /etc/hosts. MEASURED by an idea-round with the
@@ -2178,6 +2203,11 @@ fi
 #     98-uninstall-all.sh:332     `sudo sed -i /d`     -> deletes whole lines, OPEN, filed as B727
 # ⚠️ THIS COUNT HAS BEEN WRONG TWICE: it said 2 when it was 4, then 4 when it was 5. Each correction
 # came from a round grepping the tree, not from me re-reading. Grep before quoting it again.
+# Derived at the point of use, AFTER every arm and every correction has run.
+_pw_note_needed=0
+if [ "${_pw_unset_harbor:-0}" = 1 ] || [ "${_pw_unset_gitea:-0}" = 1 ] || [ "${_pw_unset_argo:-0}" = 1 ]; then
+  _pw_note_needed=1
+fi
 if [ "${_pw_note_needed:-0}" = 1 ]; then
   if [ "${_sink_refused:-0}" = 1 ]; then
     printf '\n  note: those passwords are held by an overlay this report REFUSED — it belongs to a\n'
@@ -2279,6 +2309,24 @@ fi
 # Only a real push discriminates a Harbor robot (CLAUDE.md, "THREE HARBOR AUTH CHECKS THAT DO NOT
 # DISCRIMINATE"); `make env-validate` cannot judge one at all (B715).
 printf '\n  Reachable = the address answered — NOT that the credential works. Nothing here is auth-tested.\n'
+# ⚠️ HERE, NOT IN THE Context BLOCK: the rows do not exist when Context prints (`add_row` runs ~300
+# lines later), so the count cannot be computed up there. This sits with the legend that DEFINES the
+# column, which is where the reader is already being told what it means.
+# ⚠️ AND IT SAYS ONLY WHAT WAS OBSERVED. "nothing answered" is supported only because EVERY probed
+# row failed, and those rows span the guest ingress AND the Supervisor services (Harbor, ArgoCD),
+# which have their own LoadBalancers. This file records a previous version of exactly this sentence
+# being FALSE because it generalised from a single guest-ingress probe.
+if [ "${_reach_total:-0}" -gt 0 ]; then
+  if [ "${_reach_ok:-0}" -eq 0 ]; then
+    printf '  reachable: 0 of %s — NOTHING answered on this run, on either the guest ingress or the\n' "$_reach_total"
+    printf '             Supervisor services. Consistent with the lab being OFF; this report cannot\n'
+    printf '             tell "off" from "still booting" or "not reachable from here".\n'
+  elif [ "${_reach_ok}" -lt "${_reach_total}" ]; then
+    printf '  reachable: %s of %s answered.\n' "$_reach_ok" "$_reach_total"
+  else
+    printf '  reachable: %s of %s — everything probed answered.\n' "$_reach_ok" "$_reach_total"
+  fi
+fi
 
 # ⚠️ THE CERT NOTE KEYS ON "DID ANY ROW CARRY A MARKER", NOT ON ArgoCD.
 # And it is now PER TARGET, because one sentence cannot be right for both. MEASURED on the lab:
@@ -2287,6 +2335,22 @@ printf '\n  Reachable = the address answered — NOT that the credential works. 
 # The old blanket line said "curl/CLI -> --insecure" for both, i.e. it told the operator to turn
 # verification OFF for the one endpoint we can verify.
 if [ "${_tls_note_needed:-0}" = 1 ]; then
+  # ⚠️ A REMEDY NEEDS ITS PRECONDITION, AT THE POINT OF PRESCRIPTION. A round MEASURED five
+  # actionable commands in one powered-off render — `make fetch-harbor-ca`, `make fetch-argocd-ca`,
+  # two `curl`s, and `make argocd-password (uncapped)` — every one of which needs the estate this
+  # same report had just shown answering nothing. The `Check the lab is up FIRST` caveat existed
+  # once, ~30 lines above, scoped to the ingress. `argocd-password (uncapped)` is the worst: its
+  # ladder is 2x10s, so the reader waits ~20s to be told nothing.
+  # ⚠️ AND IT MUST NOT INVENT A CHORE (RULE ZERO-B): a tenant cannot start someone else's lab, so
+  # the honest second clause is a DEPENDENCY, not an instruction.
+  if [ "${_reach_total:-0}" -gt 0 ] && [ "${_reach_ok:-0}" -eq 0 ]; then
+    # "in this report", not "below": the `re-check:` register in the Context block is ABOVE this
+    # line and is equally a dead end when nothing answers.
+    printf '\n  ⚠️  every command in this report — including the re-check above — needs the lab\n'
+    printf '      ANSWERING, and nothing did on this run.\n'
+    printf '      If the estate is off, start it. If you do not control it, there is no self-service\n'
+    printf '      path — ask whoever runs it.\n'
+  fi
   printf '\n  untrusted cert — what to do, per target:\n'
   printf '    browser: click through on the marked rows above.\n'
   # ⚠️ BUILT FROM THE SOURCE, NEVER FROM `harbor_url` -- that variable CONTAINS the marker, so
@@ -2640,6 +2704,10 @@ _ssh_pick() {
 
 _ssh_pw=""; _lab_err=""; _ssh_sec=""; _ssh_state="not probed"; _ssh_tok="<not probed>"
 _ssh_ep="<not probed>"   # the ENDPOINT cell: an address, or a marker naming why there is none
+# Did the SERVER answer? Set only where that is known; the header keys on it rather than on the
+# cell's text. Declared here, above every arm that arms it, so an init cannot wipe it afterwards --
+# this file has had that exact trap once already.
+_ssh_answered=0
 if [ "$_no_probe_snapshot" = "1" ]; then
   _ssh_state="not probed (CREDS_NO_PROBE=1)"; _ssh_tok="<not probed>"
 elif [ -z "${VKS_NAMESPACE:-}" ]; then
@@ -2800,8 +2868,13 @@ else
       _ssh_ep_state="$_kube_state"
       case "${_ssh_vrc}" in
         119) _ssh_ep="<not read>" ;;
-        *)   if grep -qi 'forbidden' "$_ssh_verr" 2>/dev/null; then _ssh_ep="<not allowed to read addresses>"
-             else                                                   _ssh_ep="<could not read node addresses>"; fi ;;
+        *)   if grep -qi 'forbidden' "$_ssh_verr" 2>/dev/null; then
+               # ⚠️ A REFUSAL IS AN ANSWER. The server replied; it said no. That IS a live read and
+               # a genuine RBAC fact, so it must NOT be lumped with "nothing answered".
+               _ssh_ep="<not allowed to read addresses>"; _ssh_answered=1
+             else
+               _ssh_ep="<could not read node addresses>"; _ssh_answered=0
+             fi ;;
       esac
     elif [ -z "$_ssh_addr" ]; then
       _ssh_ep="<no node address yet>"
@@ -2879,11 +2952,36 @@ printf '\n  Lab access. <not set> = this report lacks it, not the lab.\n'
 # `_sup_timeout` returned 119 WITHOUT DIALLING. Paired with `<could not read node addresses>` it told
 # the operator the live cluster HAD been asked and had no readable addresses (a lab/RBAC fact) when
 # nothing had been asked at all. Say which of the two happened.
-case "${_ssh_ep:-}" in
-  '<not probed>'|'') printf '    guest node SSH: NOT probed.\n' ;;
-  '<not read>')      printf '    guest node SSH: NOT probed.\n' ;;
-  *)                 printf '    guest node SSH: read live.\n' ;;
-esac
+# ⚠️ KEYED ON THE RETURN CODE, NOT ON THE RENDERED CELL — and that is the fix, not a fourth
+# pattern. MEASURED by a round with the estate powered off: `_ssh_ep` takes EIGHT values, this case
+# enumerated THREE, and the timeout path (rc=124 -> `<could not read node addresses>`) fell to the
+# catch-all and printed `read live.` So one report said, eighteen lines apart, that the live cluster
+# HAD been read, that it could NOT be read, and that the failure "says NOTHING about the lab". An
+# operator reads `read live` as "we asked and this is the cluster's answer" and goes hunting node
+# networking or RBAC on an estate that is merely switched off.
+#
+# `_ssh_vrc` is the point of truth (line ~2914 already tests it the same way); a display string is
+# not. Four real classes, derived, so a NINTH `_ssh_ep` value cannot silently re-open this:
+#   answered      -> we asked and the server replied (including a REFUSAL: that is an RBAC fact)
+#   119           -> the token expired BEFORE dialling, so nothing was asked
+#   classified    -> we asked and nothing came back; the sentence under the table says what
+#   otherwise     -> never probed
+# A FUNCTION so it can be TESTED. The suite sets CREDS_NO_PROBE=1 in every case, so the entire
+# probing surface is untested by construction — a round measured 127 ok BOTH BEFORE AND AFTER a
+# change to this very line. A pure classifier can be extracted and driven with the four rc classes
+# without a cluster, which is the only way this gets a demonstrated RED.
+_ssh_header_line() {   # <answered> <rc> <state> -> the sentence
+  if [ "${1:-0}" = 1 ] || [ "${2:-1}" -eq 0 ]; then
+    printf '    guest node SSH: read live.\n'
+  elif [ "${2:-1}" -eq 119 ]; then
+    printf '    guest node SSH: NOT probed.\n'
+  elif [ -n "${3:-}" ]; then
+    printf '    guest node SSH: asked, and NOTHING answered. That is not a lab fact — see the note below.\n'
+  else
+    printf '    guest node SSH: NOT probed.\n'
+  fi
+}
+_ssh_header_line "${_ssh_answered:-0}" "${_ssh_vrc:-1}" "${_ssh_ep_state:-}"
 printf '\n  %-*s  %-*s  %-*s  %s\n' "$_lw1" "Target" "$_lw2" "Endpoint" "$_lw3" "Username" "Password"
 printf '  %-*s  %-*s  %-*s  %s\n' \
   "$_lw1" "$(printf '%*s' "$_lw1" '' | tr ' ' '-')" \
@@ -2961,13 +3059,10 @@ if [ -z "${VCENTER_HOST:-}" ] && [ -z "${VCENTER_USERNAME:-}" ] && [ -z "${VCENT
     printf '     not set them yet.\n'
 fi
 
-printf '\n  ⚠️ vCenter SSO locks out PERMANENTLY after 3 failed attempts. This report never\n'
 # ⚠️ SCOPED TO vCENTER, because unscoped it is FALSE: this report makes authenticated Kubernetes
 # API calls and MINTS a credential (`kubectl create token` for the headlamp row). The consequence
 # was always sound -- it never binds to vCenter SSO -- but "never authenticates" reads as "makes no
 # authenticated calls at all".
-printf '     authenticates TO vCENTER, so nothing here spends one. If a value is rejected: STOP,\n'
-printf '     ask the lab owner.\n'
 # ⚠️ NOT DERIVED, and it no longer pretends to be (impl round, MED). The previous version looped over
 # a HARDCODED 7-element literal counting its own elements — MEASURED: injecting an 8th row still
 # printed 7. It tracked neither the rows, nor .env.example, nor the scenario docs, and reading as
@@ -2999,9 +3094,19 @@ if [ -n "${_ssh_ep_state:-}" ]; then
     *) if [ "${_ep_cause}" = "${_pw_cause}" ]; then
          printf '  Guest-node ADDRESSES not read either — same cause as the line above.\n'
        else
-         printf '  Guest-node ADDRESSES not read: %s\n' "$_ssh_ep_state"
+         # ⚠️ NO "not read:" PREFIX. `_kube_classify` is handed the label "the node addresses" and
+         # builds a sentence AROUND it, so the prefix produced "not read: the node addresses — the
+         # Supervisor is unreachable from here". The state IS the sentence; print it.
+         # Sentence-case the fragment: `_kube_classify` builds the sentence AROUND the label it is
+         # given ("the node addresses — ..."), so it starts lowercase. Capitalising is honest string
+         # work; STRIPPING the label back out would be surgery on a message another function owns.
+         printf '  %s%s\n' "$(printf '%s' "${_ssh_ep_state%"${_ssh_ep_state#?}"}" | tr '[:lower:]' '[:upper:]')" "${_ssh_ep_state#?}"
        fi ;;
   esac
 fi
 
 echo
+
+printf '\n  ⚠️ vCenter SSO locks out PERMANENTLY after 3 failed attempts. This report never\n'
+printf '     authenticates TO vCENTER, so nothing here spends one. If a value is rejected: STOP,\n'
+printf '     ask the lab owner.\n'

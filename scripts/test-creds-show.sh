@@ -2250,6 +2250,92 @@ case "$_ar" in
       the Service column, and a BLANK Reachable cell" ;;
 esac
 
+# ══ THE PASSWORD NOTE MUST FOLLOW ITS CELL ═══════════════════════════════════════════════════════
+# MEASURED on a POWERED-OFF lab: `argocd-password.sh` hit our own 3s cap (rc=124); the `else` arm
+# armed the shared note flag, and ~26 lines later the rc=124 arm REPLACED the cell with
+# "<not read — MY OWN 3s cap expired, not the token>". The cell was corrected; the note was not. The
+# report then printed "those passwords are not published in the state overlay" — which its OWN
+# adjacent cell refutes. I introduced that earlier the same day by adding the rc=124 arm downstream
+# of the arming, and the suite did not move (134 ok before and after the fix).
+#
+# STRUCTURAL, and deliberately: reaching the rc=124 path needs a real timing-out child, which this
+# offline suite cannot produce. What it CAN pin is that the correction WITHDRAWS its contribution,
+# which is the property that was missing.
+_pwsrc="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh")"
+# ⚠️ SCOPED TO THE rc=124 ARM. My first version grepped the WHOLE file for `_pw_unset_argo=0` — which
+# is also how the variable is DECLARED, so deleting the withdrawal left the case GREEN. It could not
+# tell the fix from its own initialiser. Extract the arm and look inside it.
+_arm124="$(printf '%s' "$_pwsrc" | awk '/_argo_rc:-0.*=.*124/{p=1} p{print} p&&/^  fi$/{exit}')"
+case "$_arm124" in
+  *'_pw_unset_argo=0'*)
+    ok "pw-note: the rc=124 correction withdraws ArgoCD's contribution to the note" ;;
+  *)
+    bad "pw-note: a cell corrected downstream still arms the overlay note" \
+        "the note then blames the overlay for a value the cell says OUR OWN cap prevented reading" ;;
+esac
+# ...and the note must be DERIVED from the per-source flags, not from one shared flag armed early.
+case "$_pwsrc" in
+  *'_pw_unset_harbor'*'_pw_unset_gitea'*'_pw_unset_argo'*)
+    ok "pw-note: one flag per source, so a correction to one cell cannot leave the note armed" ;;
+  *)
+    bad "pw-note: a single shared flag arms the note" \
+        "a downstream correction to any one cell then cannot withdraw it" ;;
+esac
+
+# ══ THE "guest node SSH" HEADER: "read live" IS A CLAIM ═══════════════════════════════════════════
+# ⚠️ THIS ENTIRE SUITE IS BLIND TO THE PROBING SURFACE. Every case sets CREDS_NO_PROBE=1, so a round
+# MEASURED 127 ok BOTH BEFORE AND AFTER a change to the very line below — the `gates.md` "green at
+# the same count" tell. These cases extract the classifier and drive it directly, which is the only
+# way this gets a demonstrated RED without a live cluster.
+#
+# THE DEFECT: `_ssh_ep` takes EIGHT values and the header used to `case` on THREE of them, so the
+# TIMEOUT path (rc=124 -> `<could not read node addresses>`) fell to the catch-all and printed
+# `read live.` — measured on a powered-off estate, one report claiming eighteen lines apart that the
+# live cluster HAD been read, that it could NOT be read, and that the failure "says NOTHING about
+# the lab". `read live` reads as "we asked and this is the cluster's answer", so it sends the
+# operator to debug node networking or RBAC on a lab that is merely switched off.
+# Extract by NAME up to its closing brace at column 0 — never a line range, so a shifted file
+# cannot silently yield a fragment. An EMPTY extraction is a HARD FAILURE: a suite that passes over
+# an empty function is worse than no suite (the sibling test-creds-reach-ingress.sh records the run
+# where exactly that happened).
+_extract_fn() {
+  local _n="$1" _o
+  _o="$(awk -v f="${_n}() {" 'index($0,f)==1{p=1} p{print} p&&/^\}/{exit}' "${_CREDS_REPO}/scripts/creds.sh")"
+  [ -n "$_o" ] || { printf 'FATAL: could not extract %s() from creds.sh — renamed or reshaped.\n' "$_n" >&2
+                    printf '       Fix the extraction; do NOT let this suite pass over an empty function.\n' >&2
+                    exit 1; }
+  printf '%s' "$_o"
+}
+_hdr="$(_extract_fn _ssh_header_line)"
+_hdr_says() { bash -c 'eval "$1"; _ssh_header_line "$2" "$3" "$4"' _ "$_hdr" "${1:-0}" "${2:-1}" "${3:-}"; }
+_hdr_case() {  # <label> <answered> <rc> <state> <expected-substring>
+  local got; got="$(_hdr_says "$2" "$3" "$4")"
+  case "$got" in
+    *"$5"*) ok "ssh-header: $1" ;;
+    *)      bad "ssh-header: $1" "got: $(printf '%s' "$got" | tr -d '\n')" ;;
+  esac
+}
+# the rc=0 arm — we asked and the server answered
+_hdr_case "rc=0 -> read live"                       0 0   ""            "read live"
+# THE DEFECT'S OWN CASE: our budget expired, nothing came back. NOT a lab fact.
+_hdr_case "rc=124 (our timeout) -> NOT a lab fact"  0 124 "some state"  "NOTHING answered"
+_hdr_case "rc=137 (external kill) -> NOT a lab fact" 0 137 "some state" "NOTHING answered"
+# the token expired BEFORE dialling: nothing was asked, so neither claim applies
+_hdr_case "rc=119 (token expired, never dialled)"   0 119 "some state"  "NOT probed"
+# ⚠️ A REFUSAL IS AN ANSWER. The server replied; it said no. That IS a live read and a real RBAC
+# fact, so it must not be lumped with "nothing answered" — the naive fix for this defect would.
+_hdr_case "forbidden -> read live (a refusal IS an answer)" 1 403 "some state" "read live"
+# never probed at all
+_hdr_case "never probed -> NOT probed"              0 1   ""            "NOT probed"
+# ⚠️ AND THE DISCRIMINATION, which is the point: the timeout and the never-probed cases must not
+# produce the SAME sentence. Before the fix they produced the same WRONG one.
+if [ "$(_hdr_says 0 124 'x')" = "$(_hdr_says 0 1 '')" ]; then
+  bad "ssh-header: a timed-out probe and a never-probed run say the SAME thing" \
+      "they are different states and need different responses"
+else
+  ok "ssh-header: a timed-out probe and a never-probed run are DISTINGUISHABLE"
+fi
+
 # ⚠️ STRUCTURAL, and deliberately so: it is the ONE property no render can show. A `sudo` command
 # that rewrites /etc/hosts lines is wrong on more shapes than it is right on, and its absence is
 # invisible to any output assertion that does not know it used to be there.
