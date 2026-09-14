@@ -2794,7 +2794,8 @@ while True:
     bad "lab-off: the verdict is not above Context (verdict line '${_l_top:-none}', Context '${_l_ctx:-none}')" \
         "a reader stops at the first advice they can act on; the verdict must precede it"
   fi
-  for _want in 'silent: the ingress 127.0.0.1' 'Check this machine can reach the lab network' 'Re-run: make creds'; do
+  for _want in 'silent: the ingress 127.0.0.1 (a stored address' 'Check this machine can reach the lab network' 'Re-run: make creds' \
+               'no usable kubeconfig to ask the cluster'; do
     case "$_off_out" in
       *"$_want"*) ok "lab-off: the headline carries '$_want'" ;;
       *)          bad "lab-off: the headline is missing '$_want'" "name the silent endpoint, the reach check, and the re-run" ;;
@@ -2821,6 +2822,137 @@ while True:
     *)             bad "lab-off: an UNSET ArgoCD row ends '${_argo_row##*  }', not 'not set'" \
                        "the guard must match the '<not' prefix, not the whole '<not set>' string" ;;
   esac
+
+
+  # ── THE CLUSTER LEG, three ways (implementation round, 2026-09-14, ran-it) ─────────────────────
+  # rc=1 used to read as "could not reach the cluster API" for a cluster that was never ASKED, and for
+  # one that ANSWERED and rejected the token — the ordinary state right after `lab-start`.
+  _lab_fixture() {   # <kubectl-stub-body> <.env body> <getent-body> <extra env assignments…>
+    local t out stub="$1" envb="$2" gb="$3"; shift 3
+    trap 'rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    printf '%s' "$gb" > "$t/bin/getent"; printf '%s' "$stub" > "$t/bin/kubectl"
+    chmod +x "$t/bin/getent" "$t/bin/kubectl"; : > "$t/kc"
+    printf '%s' "$envb" > "$t/.env"
+    local a args=()
+    for a in "$@"; do args+=("${a//@T@/$t}"); done   # `@T@` = this fixture's own directory
+    out="$( cd "$t" && env "${args[@]}" PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _closed_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
+  # shellcheck disable=SC2016
+  _getent_no_test='#!/bin/sh
+case "$2" in *.test) exit 2 ;; esac
+printf "127.0.0.1 %s\n" "$2"
+'
+  _ip="$(_closed_port)"
+
+  # (1) ASKED, NO ANSWER: a kubectl that outlives the budget. One refused ingress + an unresolved Harbor
+  #     is only one probe, so the cluster's silence is what earns the headline here.
+  _na_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "Unable to connect to the server: dial tcp 192.0.2.1:6443: connect: connection refused" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+HARBOR_URL=harbor.lab.test
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  if [ "$(printf '%s' "$_na_out" | grep -c 'cluster      : not answering')" -ge 1 ]; then
+    ok "cluster-noanswer: the fixture's cluster refused the connection (the case is live)"
+    if [ "$(printf '%s\n' "$_na_out" | grep -c '^lab-off: 1$')" -eq 1 ]; then
+      ok "cluster-noanswer: an asked-and-silent cluster earns the headline on one silent endpoint"
+    else
+      bad "cluster-noanswer: no headline although the cluster was asked and did not answer" "a no-answer cluster is evidence"
+    fi
+    case "$_na_out" in
+      *'the cluster API did not answer either'*) ok "cluster-noanswer: the headline says the cluster did not answer (agrees with Context)" ;;
+      *) bad "cluster-noanswer: the headline's cluster clause does not say it did not answer" "the headline must agree with the Context line" ;;
+    esac
+  else
+    bad "cluster-noanswer: the fixture's cluster is not 'not answering' — the case is vacuous" "fix the fixture, not the product"
+  fi
+
+  # (1b) ASKED, TIMED OUT, ONE PROBE: a timeout is not definitive (Context says so), so one refused
+  #      ingress + a timeout must keep the ingress paragraph and NOT produce the headline.
+  _to_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+sleep 5; exit 0
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc CREDS_KUBE_TIMEOUT_SECONDS=1 CREDS_K8S_TIMEOUT=1)"
+  if [ "$(printf '%s' "$_to_out" | grep -c 'cluster      : UNDETERMINED')" -ge 1 ]; then
+    ok "cluster-timeout+1: the fixture's cluster timed out (the case is live)"
+    if [ "$(printf '%s\n' "$_to_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+      ok "cluster-timeout+1: a timeout plus ONE silent endpoint is not the lab-off signature"
+    else
+      bad "cluster-timeout+1: a timeout plus one refused ingress produced the headline" "a timeout is not definitive; require two probed-silent endpoints"
+    fi
+  else
+    bad "cluster-timeout+1: the fixture's cluster did not time out — the case is vacuous" "fix the fixture, not the product"
+  fi
+
+  # (2) ASKED, ANSWERED WITH A REJECTION: the API is UP. Never the lab-off headline.
+  _ua_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "error: You must be logged in to the server (Unauthorized)" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+HARBOR_URL=127.0.0.1:$(_closed_port)
+HARBOR_PASSWORD=x
+HARBOR_INSECURE=1
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  if [ "$(printf '%s' "$_ua_out" | grep -c 'REJECTED this kubeconfig')" -ge 1 ]; then
+    ok "cluster-rejected: the cluster line says it answered and rejected the credential"
+    if [ "$(printf '%s\n' "$_ua_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+      ok "cluster-rejected: a cluster that ANSWERED is never the lab-off signature"
+    else
+      bad "cluster-rejected: the lab-off headline fired over a cluster that answered with Unauthorized" "a rejection proves the API is up"
+    fi
+  else
+    bad "cluster-rejected: the cluster line does not report the rejection" "classify the probe's stderr; rc=1 is not 'unreachable'"
+  fi
+
+  # (3a) CE1 (implementation round, ran-it): ONE refused ingress, NOTHING else configured, no
+  #      kubeconfig. The only evidence is a single TCP connect to a stored address.
+  _ce1_out="$(_lab_fixture '#!/bin/sh
+exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" -u KUBECONFIG)"
+  if [ "$(printf '%s\n' "$_ce1_out" | grep -E '^  Gitea ' | grep -c 'silent')" -ge 1 ]; then
+    ok "CE1: the refused ingress reads silent (the case is live)"
+    if [ "$(printf '%s\n' "$_ce1_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+      ok "CE1: one refused ingress with nothing else probed is not the lab-off signature"
+    else
+      bad "CE1: one refused ingress alone produced the lab-off headline" "require a no-answer cluster or two probed-silent endpoints"
+    fi
+    case "$_ce1_out" in
+      *'is NOT ANSWERING on port'*) ok "CE1: the ingress's own NOT ANSWERING paragraph still prints (nothing suppressed it)" ;;
+      *) bad "CE1: the ingress NOT ANSWERING paragraph was suppressed on one probe" "only the signature may suppress it" ;;
+    esac
+  else
+    bad "CE1: the ingress did not read silent — the case is vacuous" "fix the fixture, not the product"
+  fi
+
+  # (3) NEVER ASKED, ONE PROBE: the mirror of denominator-1 — refused ingress, unresolved Harbor,
+  #     unset ArgoCD, no kubeconfig at all.
+  _m1_out="$(_lab_fixture '#!/bin/sh
+exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+HARBOR_URL=harbor.lab.test
+" "$_getent_no_test" -u KUBECONFIG)"
+  if [ "$(printf '%s\n' "$_m1_out" | grep -E '^  Harbor \(registry\)' | grep -c 'unresolved')" -ge 1 ]; then
+    ok "mirror-denominator-1: Harbor is unresolved and nothing asked the cluster (the case is live)"
+    if [ "$(printf '%s\n' "$_m1_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+      ok "mirror-denominator-1: ONE refused stored address is not promoted to the lab-off headline"
+    else
+      bad "mirror-denominator-1: one refused stored address produced the lab-off headline" "require a no-answer cluster or two probed-silent endpoints"
+    fi
+  else
+    bad "mirror-denominator-1: Harbor is not unresolved — the case is vacuous" "fix the fixture, not the product"
+  fi
 
   # A REACHABLE cluster with every recorded service address silent is NOT a powered-off lab — it is
   # stale addresses from an earlier install. "The lab looks OFF — start it" would be false (ran-it).
@@ -2855,8 +2987,12 @@ while True:
       *) ok "cluster-up+silent: never says the lab looks OFF" ;;
     esac
     case "$_up_out" in
-      *'so the lab is up'*) ok "cluster-up+silent: says the lab is up and the addresses are probably stale" ;;
-      *) bad "cluster-up+silent: does not say the lab is up" "0 answered + cluster reachable = stale addresses; say so" ;;
+      *'at least partly up'*) ok "cluster-up+silent: says the lab is at least partly up, without guessing why" ;;
+      *) bad "cluster-up+silent: does not say the lab is at least partly up" "0 answered + cluster answered = partly up; say so" ;;
+    esac
+    case "$_up_out" in
+      *'probably from an earlier install'*) bad "cluster-up+silent: still GUESSES the addresses are stale" "right after lab-start they are current and still starting" ;;
+      *) ok "cluster-up+silent: does not guess stale over still-starting" ;;
     esac
   else
     bad "cluster-up+silent: the fixture's cluster did not read reachable — the case is vacuous" "fix the fixture, not the product"

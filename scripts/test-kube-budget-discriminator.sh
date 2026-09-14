@@ -62,7 +62,7 @@ _out="$(_render 4)"     # kubectl outlives the 1s budget -> a REAL rc=124
 #    "undetermined — a state overlay exists but was REFUSED" (B517), so a loose case-insensitive
 #    match reports success from a line about something else entirely. Measured: the positive
 #    control below FAILED for exactly that reason before this was tightened.
-if grep -q 'budget expired before it answered' <<< "$_out"; then
+if grep -q 'no answer within this report' <<< "$_out"; then
   ok "an expired budget is reported as UNDETERMINED, not as a fact about the cluster"
 elif grep -qi 'not reachable' <<< "$_out"; then
   bad "the banner says 'not reachable' after OUR OWN timeout expired. The server said nothing at
@@ -113,7 +113,7 @@ fi
 # 3. THE POSITIVE CONTROL. Without it, cases 1-2 pass identically on a report that never ran a
 #    probe at all -- and two of the three assertions above are 'absence' assertions.
 _fast="$(_render 0)"
-if grep -q 'budget expired before it answered' <<< "$_fast"; then
+if grep -q 'no answer within this report' <<< "$_fast"; then
   bad "a kubectl that answers INSTANTLY still reported UNDETERMINED -- the 124 arm is being taken
       unconditionally, so cases 1-2 prove nothing about a timeout."
 elif grep -qE "reachable — context|reachable - context" <<< "$_fast"; then
