@@ -834,17 +834,20 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
           # this report recommends — turned a timeout into "definitive" and one refused ingress fired
           # the headline again; and `no such host` is a DNS failure HERE, where nothing was dialled.
           # Only a refused connection or no route is a definitive no-answer.
-          case "$(cat "$_reach_err" 2>/dev/null || true)" in
-            *"no such host"*)
-              _cluster="not asked — its address does not resolve on this machine (nothing was dialled)"
-              _cluster_state=notasked; _cluster_notasked_why=dns ;;
-            *"context deadline exceeded"*|*"Client.Timeout exceeded"*|*"i/o timeout"*|*"TLS handshake timeout"*)
-              _cluster="UNDETERMINED: kubectl's own request timed out (that alone does not mean it is down)"
-              _cluster_state=timeout ;;
-            *)
-              _cluster="not answering — the connection was refused or had no route"
-              _cluster_state=noanswer ;;
-          esac ;;
+          # if/elif, NOT a nested `case`: check-classifier-consumers reads this consumer up to the FIRST
+          # `esac`, so an inner one hid every class below it from the gate (measured: it FAILED here).
+          _reach_txt="$(cat "$_reach_err" 2>/dev/null || true)"
+          if [[ "$_reach_txt" == *"no such host"* ]]; then
+            _cluster="not asked — its address does not resolve on this machine (nothing was dialled)"
+            _cluster_state=notasked; _cluster_notasked_why=dns
+          elif [[ "$_reach_txt" == *"context deadline exceeded"* || "$_reach_txt" == *"Client.Timeout exceeded"* \
+               || "$_reach_txt" == *"i/o timeout"* || "$_reach_txt" == *"TLS handshake timeout"* ]]; then
+            _cluster="UNDETERMINED: kubectl's own request timed out (that alone does not mean it is down)"
+            _cluster_state=timeout
+          else
+            _cluster="not answering — the connection was refused or had no route"
+            _cluster_state=noanswer
+          fi ;;
         UNAUTHORIZED)
           _cluster="answering, but it REJECTED this kubeconfig's credential"; _cluster_state=answered ;;
         FORBIDDEN)
