@@ -2774,6 +2774,121 @@ while True:
         "degradation must be disjoint from powered-off, or the confirmation costs on the wrong path"
   fi
 
+  # ── THE LAB-OFF HEADLINE (2026-09-14) ─────────────────────────────────────────────────────────
+  # The report used to OPEN with "renew the token" and a nine-line ingress paragraph, and only ~40
+  # lines down say nothing had answered — the end user who read it top-down never learned the lab
+  # was down. It now opens with ONE block, gated on the powered-off SIGNATURE (`lab-off:`), NOT on
+  # the row verdict: two adversary rounds refuted that key — it fires on a denominator of ONE, and
+  # it holds over a REACHABLE cluster whose recorded service addresses are merely stale.
+  if [ "$(printf '%s\n' "$_off_out" | grep -c '^lab-off: 1$')" -eq 1 ]; then
+    ok "lab-off: the powered-off fixture carries the signature (the headline case is live)"
+  else
+    bad "lab-off: the powered-off fixture does NOT carry the signature — every headline assertion below is vacuous" \
+        "fix the fixture or the signature, not the assertion"
+  fi
+  _l_top="$(printf '%s\n' "$_off_out" | grep -n 'NOTHING answered on this run' | head -1 | cut -d: -f1)"
+  _l_ctx="$(printf '%s\n' "$_off_out" | grep -n '^  Context$' | head -1 | cut -d: -f1)"
+  if [ -n "$_l_top" ] && [ -n "$_l_ctx" ] && [ "$_l_top" -lt "$_l_ctx" ]; then
+    ok "lab-off: 'NOTHING answered' is the FIRST thing the report says (line $_l_top, Context at $_l_ctx)"
+  else
+    bad "lab-off: the verdict is not above Context (verdict line '${_l_top:-none}', Context '${_l_ctx:-none}')" \
+        "a reader stops at the first advice they can act on; the verdict must precede it"
+  fi
+  for _want in 'silent: the ingress 127.0.0.1' 'Check this machine can reach the lab network' 'Re-run: make creds'; do
+    case "$_off_out" in
+      *"$_want"*) ok "lab-off: the headline carries '$_want'" ;;
+      *)          bad "lab-off: the headline is missing '$_want'" "name the silent endpoint, the reach check, and the re-run" ;;
+    esac
+  done
+  # Each of these names a command or a fix that needs a lab that ANSWERS. Printed under a verdict of
+  # "nothing answered" they contradict it, and every one of them was in the render the owner read.
+  # (NOT 'Harbor admin password NOT read': RED-proven VACUOUS here — HEAD passes it too, because this
+  #  fixture never reaches that footnote. An assertion that cannot fail is not listed.)
+  for _gone in 'is NOT ANSWERING on port' 're-check: make'; do
+    case "$_off_out" in
+      *"$_gone"*) bad "lab-off: '$_gone' still prints under 'nothing answered'" "suppress it on the powered-off signature" ;;
+      *)          ok "lab-off: '$_gone' is withheld while nothing answers" ;;
+    esac
+  done
+  # An UNSET ArgoCD was probed as a host literally named `<not` (`${argocd_url%% *}` of "<not set>"),
+  # so its row read `silent`/`unresolved` — a claim about an address that does not exist.
+  # Anchor on the END of the row (the Reachable column), not on whitespace fields: a Password cell
+  # holds spaces, so field-splitting read HEAD's row as 'silent note>' and passed by accident.
+  _argo_row="$(printf '%s\n' "$_off_out" | grep -E '^  ArgoCD ' | head -1)"
+  case "$_argo_row" in
+    *'  not set')  ok "lab-off: an UNSET ArgoCD reads 'not set', not a probe verdict about '<not'" ;;
+    '')            bad "lab-off: no ArgoCD row rendered — the assertion is vacuous" "fix the fixture" ;;
+    *)             bad "lab-off: an UNSET ArgoCD row ends '${_argo_row##*  }', not 'not set'" \
+                       "the guard must match the '<not' prefix, not the whole '<not set>' string" ;;
+  esac
+
+  # A REACHABLE cluster with every recorded service address silent is NOT a powered-off lab — it is
+  # stale addresses from an earlier install. "The lab looks OFF — start it" would be false (ran-it).
+  _off_probe_cluster_up() {
+    local t out p dp
+    trap 'rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    dp="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    printf '#!/bin/sh\ncase "$*" in\n  *current-context*) echo stub-ctx ;;\n  *version*) exit 0 ;;\nesac\nexit 0\n' > "$t/bin/kubectl"
+    chmod +x "$t/bin/getent" "$t/bin/kubectl"
+    : > "$t/kc"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$dp" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" KUBECONFIG="$t/kc" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _up_out="$(_off_probe_cluster_up)"
+  if [ "$(printf '%s' "$_up_out" | grep -c "cluster      : reachable")" -ge 1 ]; then
+    ok "cluster-up+silent: the fixture's cluster reads reachable (the case is live)"
+    if [ "$(printf '%s\n' "$_up_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+      ok "cluster-up+silent: NOT the powered-off signature"
+    else
+      bad "cluster-up+silent: carries the powered-off signature over a cluster that answered" "the signature must require an unreachable cluster"
+    fi
+    case "$_up_out" in
+      *'The lab is still starting, is OFF'*|*'Consistent with the lab being OFF'*)
+        bad "cluster-up+silent: tells the reader the lab looks OFF while its cluster answered" "stale addresses are not a powered-off lab" ;;
+      *) ok "cluster-up+silent: never says the lab looks OFF" ;;
+    esac
+    case "$_up_out" in
+      *'so the lab is up'*) ok "cluster-up+silent: says the lab is up and the addresses are probably stale" ;;
+      *) bad "cluster-up+silent: does not say the lab is up" "0 answered + cluster reachable = stale addresses; say so" ;;
+    esac
+  else
+    bad "cluster-up+silent: the fixture's cluster did not read reachable — the case is vacuous" "fix the fixture, not the product"
+  fi
+
+  # INGRESS UNSET + one refused ArgoCD port: a denominator of ONE. The row verdict reads "0 of 1", but
+  # that is not evidence the lab is off, and it must never promote itself to the headline.
+  _off_probe_denom1() {
+    local t out ap
+    trap 'rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    ap="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    printf 'ARGOCD_SERVER=127.0.0.1:%s\n' "$ap" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _d1_out="$(_off_probe_denom1)"
+  if [ "$(printf '%s\n' "$_d1_out" | grep -E '^  ArgoCD ' | grep -c 'silent')" -ge 1 ]; then
+    ok "denominator-1: the fixture's ArgoCD row reads silent (the case is live)"
+    case "$_d1_out" in
+      *'The lab is still starting, is OFF'*) bad "denominator-1: ONE refused port promoted to the lab-off headline" "the signature requires the ingress to have been probed" ;;
+      *) ok "denominator-1: one refused port does NOT produce the lab-off headline" ;;
+    esac
+  else
+    bad "denominator-1: the fixture's ArgoCD row is not silent — the case is vacuous" "fix the fixture, not the product"
+  fi
+
   # ── THE COLD-START CASE: the CRITICAL, in the direction that cannot be seen by classifying cells ──
   # A round measured that a ONE-strike `_route_dead` cache makes a HEALTHY ingress report
   # "0 of 3 — NOTHING answered ... Consistent with the lab being OFF", because one transient failure

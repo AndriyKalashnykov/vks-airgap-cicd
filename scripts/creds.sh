@@ -658,7 +658,7 @@ else
   # only a HANGING one exceeds the cap -- and lab-down is exactly when the banner also says
   # "the recorded ingress did not answer either".
   if [ "${_argo_rc:-0}" = 124 ]; then
-    argo_pw="<not read — MY OWN ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s cap expired, not the token; run: make argocd-password (uncapped)>"
+    argo_pw="<not read — no answer within this report's ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s limit; make argocd-password waits longer>"
     # This cell now names OUR cap as the cause, so ArgoCD must stop contributing to a note that
     # blames the overlay. Withdraw it here, beside the correction, rather than in the note.
     _pw_unset_argo=0
@@ -811,7 +811,7 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
     >/dev/null 2>&1 </dev/null && _reach_rc=0 || _reach_rc=$?
   case "$_reach_rc" in
     0)       _cluster="reachable — context '$(kubectl config current-context </dev/null 2>/dev/null || echo '?')'" ;;
-    124|137) _cluster="UNDETERMINED — my own ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s budget expired before it answered (rc=${_reach_rc}); this is not a statement about the cluster" ;;
+    124|137) _cluster="UNDETERMINED: no answer within this report's ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s limit (that alone does not mean it is down)" ;;
   esac
 fi
 
@@ -890,7 +890,127 @@ elif [ "$_have_sink"    = 1 ]; then _overlay_state=SOURCED
 else                               _overlay_state=NONE
 fi
 [ "${CREDS_TOKEN:-0}" = "1" ] && printf 'state-overlay: %s\n' "$_overlay_state"
-if [ "${_SUP_DEAD:-0}" = 1 ]; then
+
+_probe_tcp() {                    # <host> <port> -> 0 if something answers, non-zero otherwise
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null
+}
+_reach_harbor() {
+  [ "${_no_probe_snapshot:-${CREDS_NO_PROBE:-0}}" = 1 ] && { printf 'not probed'; return; }
+  [ -n "${HARBOR_URL:-}" ] || { printf 'not set'; return; }
+  HARBOR_PROBE_TIMEOUT_SECONDS="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" harbor_reachable_state 2>/dev/null || printf 'unknown'
+}
+_reach_argocd() {
+  [ "${_no_probe_snapshot:-${CREDS_NO_PROBE:-0}}" = 1 ] && { printf 'not probed'; return; }
+  # ⚠️ PROBE THE ADDRESS THE ROW ACTUALLY SHOWS, not just ARGOCD_SERVER. MEASURED 2026-09-05: with
+  # ARGOCD_SERVER unset but the address DISCOVERED from the cluster, the row printed
+  # "https://192.168.101.131 (discovered from the cluster)" while this column said "not set" --
+  # the table contradicting itself in adjacent cells, which is worse than either answer alone.
+  # $argocd_url is the rendered cell and may carry a trailing "(discovered ...)" note, so strip it.
+  local _h="${ARGOCD_SERVER:-}"
+  [ -n "$_h" ] || _h="${argocd_url%% *}"
+  case "$_h" in ''|'<not'*) printf 'not set'; return ;; esac   # "<not set>" cut at its first space is "<not"
+  _h="${_h#https://}"; _h="${_h#http://}"; _h="${_h%%/*}"
+  local _port="${_h##*:}"; case "$_h" in *:*) : ;; *) _port=443 ;; esac
+  _h="${_h%%:*}"
+  # BOUNDED for the same measured reason as lib/harbor.sh's pair: neither timeout variable
+  # reaches getent, and a stale resolver turns this into a 20s hang with no output.
+  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "$_h" >/dev/null 2>&1 || case "$_h" in
+    *[!0-9.]*) printf 'unresolved'; return ;;      # a NAME that does not resolve
+  esac
+  _probe_tcp "$_h" "$_port" && printf 'serving' || printf 'silent'
+}
+_reach_class() {   # <the Reachable cell> -> skip | serving | answered | dns | silent
+  case "${1:-}" in
+    # Every pattern QUOTED, deliberately: test-creds-show.sh asserts that each producer string
+    # appears as a literal among these case PATTERNS, and a bare word cannot be told apart from
+    # prose by that check.
+    ''|'-'|'not probed'|'not set'|'unresolved'|'unknown')  printf 'skip' ;;
+    # ⚠️ `LB up` IS `skip`, AND PUTTING IT IN `answered` SUPPRESSED THE POWERED-OFF WARNING.
+    # It is emitted by a PERFORMANCE CACHE (`_route_dead`) and by the no-host-to-name arm; its own
+    # producer comment (~:1221) says "the TCP probe passed and we did not learn anything about this
+    # route", which is this bucket's definition. MEASURED by a round against a listener that accepts
+    # TCP and closes — ONE HTTP probe issued in the whole run, returning 000, the other 8 rows never
+    # probed at all:
+    #   as `answered`: "0 of 11 serving, 8 answered but served nothing, 3 silent" + "the estate is
+    #                  not off", and `grep -c 'needs the lab'` = 0 — THE PRECONDITION BLOCK GONE,
+    #                  while `make fetch-harbor-ca` and the `re-check:` register still printed.
+    #   as `skip`:     "0 of 3 — NOTHING answered ... Consistent with the lab being OFF" + the
+    #                  precondition FIRES.
+    # One optimisation, two opposite verdicts. A memoised "we didn't ask" must never read as an answer.
+    'LB up')                                           printf 'skip' ;;
+    'serving')                                         printf 'serving' ;;
+    'no DNS here'|'stale DNS')                         printf 'dns' ;;
+    'silent')                                          printf 'silent' ;;
+    # ENUMERATED rather than left to the catch-all — see the header: the catch-all cannot fail, so
+    # anything a producer actually emits must be named here to be covered by the enumeration test.
+    'no route'|'no backend')                           printf 'answered' ;;
+    *)                                                 printf 'answered' ;;
+  esac
+}
+
+# ── _pre_off — THE POWERED-OFF SIGNATURE, known before anything is printed ──────────────────────
+# WHY: the report used to open with "renew the token" and a nine-line ingress paragraph, and only
+# ~40 lines later say that nothing had answered. An end user never learned the lab was down.
+# ⚠️ A SIGNATURE, NOT `_reach_nothing`. Two adversary rounds (2026-09-14) refuted keying this on the
+# row verdict: (a) it fires on a denominator of ONE — ingress unset + one refused ArgoCD port — and
+# would then suppress every remedy on the weakest evidence; (b) it holds over a REACHABLE cluster
+# whose recorded service addresses are merely stale, where "the lab looks OFF" is false (ran-it).
+# And deferring the header until the rows were probed put ~10s of silence before the first line in
+# a hung-LB state. So: the ingress TCP check (already run, and every ingress row short-circuits to
+# `silent` on it without a curl), Harbor and ArgoCD — probed ONCE here and reused in their rows —
+# and the cluster line. `_reach_nothing` below is asserted to agree.
+_reach_harbor_cell="$(_reach_harbor)"
+_reach_argocd_cell="$(_reach_argocd)"
+_cluster_up=0
+case "${_cluster:-}" in reachable*) _cluster_up=1 ;; esac
+_pre_off=0
+case "$(_reach_class "$_reach_harbor_cell"):$(_reach_class "$_reach_argocd_cell")" in
+  skip:skip|skip:silent|silent:skip|silent:silent)
+    if [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" = 0 ] && [ "$_cluster_up" = 0 ]; then
+      _pre_off=1
+    fi ;;
+esac
+[ "${CREDS_TOKEN:-0}" = "1" ] && printf 'lab-off: %s\n' "$_pre_off"
+if [ "$_pre_off" = 1 ]; then
+  # Cells explaining WHY a value was not read are noise when nothing answered. Key on the FAILURE
+  # CODE, never on the cell text: a revealed secret can look like anything.
+  if [ "${_argo_rc:-0}" = 124 ]; then argo_pw='<not read — nothing answered>'; fi
+  # "(untrusted cert)" points at advice that is withheld in this state, so it would cite nothing.
+  harbor_url="${harbor_url% (untrusted cert)}"
+  argocd_url="${argocd_url/ (untrusted cert)/}"
+  printf '\n  %s\u26a0\ufe0f  NOTHING answered on this run, and this report could not reach the cluster API either.%s\n' \
+    "${_BOLD}${_RED}" "${_RST}"
+  _sil="the ingress ${INGRESS_LB_IP:-?} (Gitea, Tekton, headlamp and the apps go through it)"
+  _unres=""
+  _ah="${ARGOCD_SERVER:-}"; [ -n "$_ah" ] || _ah="${argocd_url%% *}"
+  _ah="${_ah#https://}"; _ah="${_ah#http://}"; _ah="${_ah%%/*}"
+  case "$_reach_harbor_cell" in
+    silent)     _sil="${_sil}, Harbor ${HARBOR_URL:-}" ;;
+    unresolved) _unres="${HARBOR_URL:-}" ;;
+  esac
+  case "$_reach_argocd_cell" in
+    silent)     _sil="${_sil}, ArgoCD ${_ah}" ;;
+    unresolved) _unres="${_unres}${_unres:+, }${_ah}" ;;
+  esac
+  printf '      silent: %s\n' "$_sil"
+  if [ -n "$_unres" ]; then printf '      does not resolve on this machine: %s\n' "$_unres"; fi
+  printf '      The lab is still starting, is OFF, or this machine cannot reach it. Do this, in order:\n'
+  printf '        1. Check this machine can reach the lab network (VPN, route). If the lab was just\n'
+  printf '           started, wait and re-run make creds: its services come up after the cluster.\n'
+  printf '        2. Otherwise the lab is off: if you run it, start it; if not, ask whoever runs it.\n'
+  _step=3
+  if [ "${_SUP_DEAD:-0}" = 1 ]; then
+    _rh="$(_renew_how)"
+    printf '        %s. Once it answers, renew the Supervisor token (it expired %s):\n' "$_step" "${_SUP_DEAD_AT:-?}"
+    printf '             %s\n' "${_rh#renew: }"
+    printf '           Three failed logins lock the vCenter account PERMANENTLY — do not retry blind.\n'
+    _step=4
+  fi
+  printf '        %s. Re-run: make creds\n' "$_step"
+  printf '      Every command in this report needs the lab answering.\n'
+fi
+if [ "${_SUP_DEAD:-0}" = 1 ] && [ "$_pre_off" != 1 ]; then
   # F5: the old headline said "every <not read> below needs it" and MEASURED to ZERO referents in
   # a reachable state, while nine unrelated `<not read — …>` variants compete for the reader's eye.
   # State the fact, do not send them hunting for a marker.
@@ -1017,7 +1137,9 @@ case "$_prov" in
                 # reassurance in the one surface a tenant has.
                 # `env-validate` is the honest fallback -- it is BROAD (format + KUBECONFIG +
                 # reachability), so it still has something to check when Harbor does not.
-                if [ -n "${HARBOR_URL:-}" ]; then
+                if [ "${_pre_off:-0}" = 1 ]; then
+                  :   # nothing answered, so a re-check cannot run either — see the top block
+                elif [ -n "${HARBOR_URL:-}" ]; then
                   printf '                   re-check: make harbor-auth-check\n'
                 else
                   printf '                   re-check: make env-validate\n'
@@ -1040,7 +1162,9 @@ case "$_prov" in
                 # `env-validate` deliberately -- its finding is that the whole overlay belongs to
                 # another cluster, where the broad format+KUBECONFIG+reachability check is the
                 # right one and push RBAC is not the question.
-                if [ -n "${HARBOR_URL:-}" ]; then
+                if [ "${_pre_off:-0}" = 1 ]; then
+                  printf '                   token (minted each run).\n'
+                elif [ -n "${HARBOR_URL:-}" ]; then
                   printf '                   token (minted each run).  re-check: make harbor-auth-check\n'
                 else
                   printf '                   token (minted each run).  re-check: make env-validate\n'
@@ -1115,7 +1239,9 @@ if [ -n "$_ing" ] && [ "$_ing_live" = 1 ] && [ "$_no_probe_snapshot" != "1" ] &&
   # Only "curl could not complete the request at all" counts, which is the RST signature.
   case "$_ing_code" in ''|000|*[!0-9]*) _ing_http_dead=1 ;; esac
 fi
-if [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
+if [ "${_pre_off:-0}" = 1 ]; then
+  :   # the top block names the silent ingress; no /etc/hosts line for an address that is silent
+elif [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
   echo
   echo "  ⚠️  the recorded ingress ${INGRESS_LB_IP} is NOT ANSWERING on port ${INGRESS_PROBE_PORT:-80}."
   # ⚠️ THE CLAIM IS WHAT WAS OBSERVED, NOT A DIAGNOSIS — the same rule the elif branch below already
@@ -1185,10 +1311,7 @@ rows=""
 # ⚠️ NEVER call `make harbor-reachable` here: its 900 s is a WAIT LOOP in the target
 # (04-harbor-reachable.sh:45). The target's job is to wait; this printer's job is to report.
 # CREDS_NO_PROBE=1 (already snapshotted at :52) skips every probe -- the CI lever.
-_probe_tcp() {                    # <host> <port> -> 0 if something answers, non-zero otherwise
-  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
-  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null
-}
+# _probe_tcp() is defined above the banner: the powered-off verdict needs it before the first print.
 # ingress-backed rows (Gitea, Tekton, and EVERY app) resolve from the SINGLE _ing_live probe that
 # this script already took -- zero extra cost, and the expensive case cannot occur (F12).
 #
@@ -1404,31 +1527,8 @@ _reach_ingress() {
     *)           printf 'HTTP %s' "$_code" ;;
   esac
 }
-_reach_harbor() {
-  [ "${_no_probe_snapshot:-${CREDS_NO_PROBE:-0}}" = 1 ] && { printf 'not probed'; return; }
-  [ -n "${HARBOR_URL:-}" ] || { printf 'not set'; return; }
-  HARBOR_PROBE_TIMEOUT_SECONDS="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" harbor_reachable_state 2>/dev/null || printf 'unknown'
-}
-_reach_argocd() {
-  [ "${_no_probe_snapshot:-${CREDS_NO_PROBE:-0}}" = 1 ] && { printf 'not probed'; return; }
-  # ⚠️ PROBE THE ADDRESS THE ROW ACTUALLY SHOWS, not just ARGOCD_SERVER. MEASURED 2026-09-05: with
-  # ARGOCD_SERVER unset but the address DISCOVERED from the cluster, the row printed
-  # "https://192.168.101.131 (discovered from the cluster)" while this column said "not set" --
-  # the table contradicting itself in adjacent cells, which is worse than either answer alone.
-  # $argocd_url is the rendered cell and may carry a trailing "(discovered ...)" note, so strip it.
-  local _h="${ARGOCD_SERVER:-}"
-  [ -n "$_h" ] || _h="${argocd_url%% *}"
-  case "$_h" in ''|'<not set>') printf 'not set'; return ;; esac
-  _h="${_h#https://}"; _h="${_h#http://}"; _h="${_h%%/*}"
-  local _port="${_h##*:}"; case "$_h" in *:*) : ;; *) _port=443 ;; esac
-  _h="${_h%%:*}"
-  # BOUNDED for the same measured reason as lib/harbor.sh's pair: neither timeout variable
-  # reaches getent, and a stale resolver turns this into a 20s hang with no output.
-  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "$_h" >/dev/null 2>&1 || case "$_h" in
-    *[!0-9.]*) printf 'unresolved'; return ;;      # a NAME that does not resolve
-  esac
-  _probe_tcp "$_h" "$_port" && printf 'serving' || printf 'silent'
-}
+# _reach_harbor() is defined above the banner: the powered-off verdict needs it before the first print.
+# _reach_argocd() is defined above the banner: the powered-off verdict needs it before the first print.
 # ── _reach_class: THE AGGREGATE'S CLASSIFIER, kept BESIDE the producers that emit these strings ──
 # ⚠️ FOUR OUTCOMES, NOT TWO — because "answered" and "serving" are different questions, and
 # conflating them made the summary CONTRADICT the column beside it. MEASURED twice:
@@ -1458,34 +1558,7 @@ _reach_argocd() {
 # it as the premise under the CRITICAL above — so if you add a producer value, ENUMERATE it rather
 # than leaning on this paragraph. `test-creds-show.sh` asserts the enumeration, not the return
 # value, precisely because the catch-all cannot fail.
-_reach_class() {   # <the Reachable cell> -> skip | serving | answered | dns | silent
-  case "${1:-}" in
-    # Every pattern QUOTED, deliberately: test-creds-show.sh asserts that each producer string
-    # appears as a literal among these case PATTERNS, and a bare word cannot be told apart from
-    # prose by that check.
-    ''|'-'|'not probed'|'not set'|'unresolved'|'unknown')  printf 'skip' ;;
-    # ⚠️ `LB up` IS `skip`, AND PUTTING IT IN `answered` SUPPRESSED THE POWERED-OFF WARNING.
-    # It is emitted by a PERFORMANCE CACHE (`_route_dead`) and by the no-host-to-name arm; its own
-    # producer comment (~:1221) says "the TCP probe passed and we did not learn anything about this
-    # route", which is this bucket's definition. MEASURED by a round against a listener that accepts
-    # TCP and closes — ONE HTTP probe issued in the whole run, returning 000, the other 8 rows never
-    # probed at all:
-    #   as `answered`: "0 of 11 serving, 8 answered but served nothing, 3 silent" + "the estate is
-    #                  not off", and `grep -c 'needs the lab'` = 0 — THE PRECONDITION BLOCK GONE,
-    #                  while `make fetch-harbor-ca` and the `re-check:` register still printed.
-    #   as `skip`:     "0 of 3 — NOTHING answered ... Consistent with the lab being OFF" + the
-    #                  precondition FIRES.
-    # One optimisation, two opposite verdicts. A memoised "we didn't ask" must never read as an answer.
-    'LB up')                                           printf 'skip' ;;
-    'serving')                                         printf 'serving' ;;
-    'no DNS here'|'stale DNS')                         printf 'dns' ;;
-    'silent')                                          printf 'silent' ;;
-    # ENUMERATED rather than left to the catch-all — see the header: the catch-all cannot fail, so
-    # anything a producer actually emits must be named here to be covered by the enumeration test.
-    'no route'|'no backend')                           printf 'answered' ;;
-    *)                                                 printf 'answered' ;;
-  esac
-}
+# _reach_class() is defined above the banner: the powered-off verdict needs it before the first print.
 # ⚠️ TABS ARE STRIPPED FROM EVERY CELL, and this is load-bearing rather than tidy. `rows` is a
 # TAB-separated record and every reader splits it with `IFS=$'\t' read -r c1..c5`; a TAB inside a
 # cell adds a field and shifts every later column left. MEASURED on the DNS flags: with a TAB in the
@@ -1632,7 +1705,8 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
   elif [ "${_hl_rc:-0}" = 124 ]; then
     # OUR budget, not the lab's. Saying "is headlamp installed?" here is a claim about the world
     # made on the strength of us not waiting -- and its remedy reinstalls a working component.
-    headlamp_tok="<could not ask — my own ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s budget expired>"
+    if [ "${_pre_off:-0}" = 1 ]; then headlamp_tok='<not read — nothing answered>'
+    else headlamp_tok="<not read — no answer within this report's ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s limit>"; fi
   elif [ "${_hl_rc:-0}" = 137 ]; then
     headlamp_tok="<could not ask — the probe was KILLED (rc=137)>"
   elif [ "${_hl_rc:-0}" = 0 ]; then
@@ -1666,7 +1740,8 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
             # naming an SSO bind for a credential we did not test could spend a lockout attempt.
             headlamp_tok="<auth failed — the GUEST kubeconfig was rejected for this namespace>" ;;
           UNREACHABLE)
-            headlamp_tok="<unreachable — the guest cluster did not answer>" ;;
+            if [ "${_pre_off:-0}" = 1 ]; then headlamp_tok='<not read — nothing answered>'
+            else headlamp_tok="<unreachable — the guest cluster did not answer>"; fi ;;
           STALE_CA|PLAINTEXT|NO_KUBE_TARGET|KUBECONFIG_UNUSABLE)
             headlamp_tok="<not read — the guest kubeconfig is unusable for this call>" ;;
           *)
@@ -1710,7 +1785,7 @@ add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress "
 # source, never field-by-field. `make harbor-admin-password` already does this correctly
 # (env_publish_all writes BOTH keys, and since B202 F4 it REFUSES to overwrite a robot$ pair).
 # test-creds-show.sh asserts this mechanically — a comment alone is not the control.
-add_row "Harbor (registry)" "$harbor_url" "$harbor_user" "$harbor_pw" "$(_reach_harbor)"
+add_row "Harbor (registry)" "$harbor_url" "$harbor_user" "$harbor_pw" "$_reach_harbor_cell"
 # ── _rejected_why — say WHEN the token died, not "usually an EXPIRED token" ──────────────────────
 # kubectl reports an expired token and a revoked/rotated credential IDENTICALLY as `Unauthorized`,
 # so the classifier cannot separate them and this used to hedge. The token's own `exp` claim can,
@@ -1816,7 +1891,7 @@ _kube_classify() {
     124|137)
       _kube_tok="<could not ask>"
       case "$_rc" in
-        124) _kube_state="${_p} — MY OWN timeout expired before the server answered (rc=124). This says NOTHING about the lab: give it longer with CREDS_KUBE_TIMEOUT_SECONDS (or CREDS_K8S_TIMEOUT for the Supervisor reads) and re-run." ;;
+        124) _kube_state="${_p} — no answer within this report's time limit (rc=124). That alone says nothing about the lab: give it longer with CREDS_KUBE_TIMEOUT_SECONDS (or CREDS_K8S_TIMEOUT for the Supervisor reads) and re-run." ;;
         # ⚠️ 137 IS NOT OUR BUDGET. GNU timeout emits 124 on expiry and 137 only with -k/-s KILL --
         # measured, this repo uses NEITHER anywhere. So 137 here is an EXTERNAL SIGKILL (the OOM
         # killer, or the process-group kill this repo's own rules prescribe), and naming our budget
@@ -1957,7 +2032,7 @@ if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
     '<'*) : ;;                                   # a placeholder — print it, never mask it
     *)    _h_admin_pw="$(_mask "$_h_admin_pw")" ;;
   esac
-  add_row "Harbor (web UI)" "$harbor_url" "admin" "$_h_admin_pw" "$(_reach_harbor)"
+  add_row "Harbor (web UI)" "$harbor_url" "admin" "$_h_admin_pw" "$_reach_harbor_cell"
 fi
 # Render the PROVENANCE with the value. A bare secret here reads as "this is your password",
 # and on the primary runbook it is the pre-rotation one from Step 5 onward — which is the state
@@ -1972,7 +2047,7 @@ fi
 # it in full, where it costs no width.
 _argo_initial_note=0
 if [ "${_argo_initial:-0}" = 1 ] && [ -n "$argo_pw" ]; then _argo_initial_note=1; fi
-add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"   "$(_reach_argocd)"
+add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"   "$_reach_argocd_cell"
 # CAPTURE INTO VARIABLES FIRST -- do NOT inline these `$( )` into add_row's ARGUMENTS.
 # MEASURED 2026-08-22 with a newly-enrolled app whose app_health_path() branch did not yet exist:
 #     FATAL  app 'nodejswebapp': add a branch to app_health_path()
@@ -2431,7 +2506,7 @@ fi
 # commit whose entire subject was stale citations in this file. Saying it
 # "REFUSES" unconditionally is false in the healthy state scenario-1 Step 9 produces — the operator
 # runs it, gets rc=0 and two INFO lines, and still has no password. Say what is true of BOTH arms.
-if [ -n "${_h_admin_why:-}" ]; then
+if [ -n "${_h_admin_why:-}" ] && [ "${_pre_off:-0}" != 1 ]; then
   case "${_h_admin_why}" in
     # "see the banner above" pointed ~40 lines up. Name the cause here; the NEXT line already
     # carries the only thing a reader acts on (harbor-admin-password will not help, and why).
@@ -2513,6 +2588,9 @@ esac
 case "$_legend_rows" in *'HTTP '*)
   printf '    HTTP <n>   = it replied with a status this report does not classify.\n' ;;
 esac
+case "$_legend_rows" in *'unresolved'*)
+  printf '    unresolved = the name does not resolve on this machine, so it was not probed.\n' ;;
+esac
 case "$_legend_rows" in *'silent'*)
   printf '    silent     = nothing answered — either nothing is listening on that address, or it took\n'
   printf '                 the connection and never finished a reply inside this report'"'"'s budget.\n' ;;
@@ -2573,9 +2651,18 @@ if [ "${_reach_total:-0}" -gt 0 ]; then
   if [ "${_reach_ok:-0}" -eq 0 ] && [ "${_reach_half:-0}" -eq 0 ] && [ "${_reach_dns:-0}" -eq 0 ] \
      && [ "${_deg_n:-0}" -eq 0 ]; then
     _reach_nothing=1
-    printf '  reachable: 0 of %s — NOTHING answered on this run, on either the guest ingress or the\n' "$_reach_total"
-    printf '             Supervisor services. Consistent with the lab being OFF; this report cannot\n'
-    printf '             tell "off" from "still booting" or "not reachable from here".\n'
+    if [ "${_pre_off:-0}" = 1 ]; then
+      :   # said at the top, with what to do
+    elif [ "${_cluster_up:-0}" = 1 ]; then
+      # "Consistent with the lab being OFF" over a cluster that ANSWERED was false (ran-it,
+      # vks-adversary 2026-09-14): stale service addresses from an earlier install look like this.
+      printf '  reachable: 0 of %s — none of the recorded service addresses answered, but the cluster\n' "$_reach_total"
+      printf '             API did, so the lab is up: those addresses are probably from an earlier install.\n'
+    else
+      printf '  reachable: 0 of %s — NOTHING answered on this run, of the addresses this report could\n' "$_reach_total"
+      printf '             probe. Consistent with the lab being OFF; this report cannot tell "off" from\n'
+      printf '             "still booting" or "not reachable from here".\n'
+    fi
   elif [ "${_reach_ok:-0}" -eq 0 ] && [ "${_reach_half:-0}" -eq 0 ] && [ "${_reach_dns:-0}" -eq 0 ]; then
     # Everything read silent, but %s of those were measured on a SHORTENED budget, so this run is
     # NOT entitled to say the estate is off. Say what is true instead.
@@ -2693,7 +2780,10 @@ fi
 # dead ends. The precondition is about the ESTATE, not about certificates.
 # ⚠️ AND IT MUST NOT INVENT A CHORE (RULE ZERO-B): a tenant cannot start someone else's lab, so the
 # honest second clause is a DEPENDENCY, not an instruction.
-if [ "${_reach_nothing:-0}" = 1 ]; then
+if [ "${_pre_off:-0}" = 1 ] && [ "${_reach_nothing:-0}" != 1 ]; then
+  printf 'BUG: creds.sh said NOTHING answered at the top, but the rows disagree (_reach_nothing=%s) — report this\n' "${_reach_nothing:-0}" >&2
+fi
+if [ "${_reach_nothing:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ] && [ "${_cluster_up:-0}" != 1 ]; then
   # "in this report", not "below": the `re-check:` register in the Context block is ABOVE this
   # line and is equally a dead end when nothing answers.
   printf '\n  ⚠️  every command in this report — including the re-check above — needs the lab\n'
@@ -2708,7 +2798,7 @@ fi
 #   ArgoCD  SANs are DNS-only, NO IP SAN, so a bare IP can NEVER verify -> --insecure or nothing
 # The old blanket line said "curl/CLI -> --insecure" for both, i.e. it told the operator to turn
 # verification OFF for the one endpoint we can verify.
-if [ "${_tls_note_needed:-0}" = 1 ]; then
+if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
   printf '\n  untrusted cert — what to do, per target:\n'
   printf '    browser: click through on the marked rows above.\n'
   # ⚠️ BUILT FROM THE SOURCE, NEVER FROM `harbor_url` -- that variable CONTAINS the marker, so
