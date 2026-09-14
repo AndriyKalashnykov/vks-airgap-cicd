@@ -2849,7 +2849,7 @@ printf "127.0.0.1 %s\n" "$2"
 '
   _ip="$(_closed_port)"
 
-  # (1) ASKED, NO ANSWER: a kubectl that outlives the budget. One refused ingress + an unresolved Harbor
+  # (1) ASKED, DEFINITIVE NO ANSWER: the stub prints "connection refused" and exits at once. One refused ingress + an unresolved Harbor
   #     is only one probe, so the cluster's silence is what earns the headline here.
   _na_out="$(_lab_fixture '#!/bin/sh
 case "$*" in *current-context*) echo ctx; exit 0 ;; esac
@@ -2891,6 +2891,68 @@ INGRESS_PROBE_PORT=${_ip}
   else
     bad "cluster-timeout+1: the fixture's cluster did not time out — the case is vacuous" "fix the fixture, not the product"
   fi
+
+
+  # (1c) kubectl's OWN client timeout (round 3, ran-it with real kubectl at CREDS_KUBE_TIMEOUT_SECONDS=10):
+  #      classify_kube_failure calls it UNREACHABLE, but it is a timeout, not a definitive no-answer.
+  _kt_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "Unable to connect to the server: context deadline exceeded" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  if [ "$(printf '%s' "$_kt_out" | grep -c "kubectl's own request timed out")" -ge 1 ]; then
+    ok "kubectl-timeout: the cluster line names kubectl's own timeout, not a definitive no-answer"
+    if [ "$(printf '%s\n' "$_kt_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+      ok "kubectl-timeout: kubectl's own timeout + one refused ingress is not the lab-off signature"
+    else
+      bad "kubectl-timeout: kubectl's own timeout promoted one refused ingress to the headline" "split UNREACHABLE: a timeout is not definitive"
+    fi
+  else
+    bad "kubectl-timeout: kubectl's 'context deadline exceeded' is not reported as a timeout" "split the UNREACHABLE class by its stderr"
+  fi
+
+  # (1d) `no such host`: DNS failed ON THIS MACHINE — nothing was dialled.
+  _nh_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "Unable to connect to the server: dial tcp: lookup api.gc.lab.test on 127.0.0.53:53: no such host" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  if [ "$(printf '%s' "$_nh_out" | grep -c 'does not resolve on this machine (nothing was dialled)')" -ge 1 ]; then
+    ok "no-such-host: the cluster line says nothing was dialled"
+    if [ "$(printf '%s\n' "$_nh_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+      ok "no-such-host: a local DNS failure + one refused ingress is not the lab-off signature"
+    else
+      bad "no-such-host: a local DNS failure counted as the cluster not answering" "nothing was dialled; it is not evidence"
+    fi
+  else
+    bad "no-such-host: the cluster line does not say the address does not resolve here" "no such host is a local DNS failure"
+  fi
+
+  # (1e) an error nothing classifies: the cluster line must say so, not a default claim about the world.
+  _uk_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "Unable to connect to the server: EOF" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  case "$_uk_out" in
+    *'an error this report does not classify'*) ok "unknown-error: the cluster line says the error is unclassified (agrees with the headline)" ;;
+    *) bad "unknown-error: the cluster line does not say the error is unclassified" "every _cluster_state needs its own line" ;;
+  esac
+
+  # (1f) Forbidden AUTHENTICATED us: never tell the operator the credential was rejected.
+  _fb_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "Error from server (Forbidden): forbidden: User \"x\" cannot get path \"/version\"" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  case "$_fb_out" in
+    *'the credential was accepted'*) ok "forbidden: a 403 is reported as an accepted credential, not a rejected one" ;;
+    *) bad "forbidden: a 403 is not reported as an accepted credential" "a rejected-credential line sends the operator to spend an SSO attempt" ;;
+  esac
 
   # (2) ASKED, ANSWERED WITH A REJECTION: the API is UP. Never the lab-off headline.
   _ua_out="$(_lab_fixture '#!/bin/sh
@@ -2936,7 +2998,9 @@ INGRESS_PROBE_PORT=${_ip}
   fi
 
   # (3) NEVER ASKED, ONE PROBE: the mirror of denominator-1 — refused ingress, unresolved Harbor,
-  #     unset ArgoCD, no kubeconfig at all.
+  #     unset ArgoCD. NOTE: `env -u KUBECONFIG` does not leave it unset — load_env re-exports a default
+  #     kubeconfig path, and the stub exits 1 with no stderr — so the state exercised is `unknown`, which
+  #     gates identically to `notasked` (both need two probed-silent endpoints).
   _m1_out="$(_lab_fixture '#!/bin/sh
 exit 1
 ' "INGRESS_LB_IP=127.0.0.1
@@ -2952,6 +3016,35 @@ HARBOR_URL=harbor.lab.test
     fi
   else
     bad "mirror-denominator-1: Harbor is not unresolved — the case is vacuous" "fix the fixture, not the product"
+  fi
+
+
+  # (4) CLUSTER UP, SOME ROWS SERVING, SOME SILENT — the state right after `lab-start`. The silent rows
+  #     must be explained (still starting, or a stale address), not left bare.
+  _lst_pf="$(mktemp)"
+  python3 -c 'import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(("127.0.0.1",0));s.listen(8);print(s.getsockname()[1],flush=True);time.sleep(60)' > "$_lst_pf" &
+  _lst_pid=$!
+  for _w in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do [ -s "$_lst_pf" ] && break; sleep 0.2; done
+  _lst_port="$(head -1 "$_lst_pf")"
+  _ss_out="$(_lab_fixture '#!/bin/sh
+case "$*" in
+  *current-context*) echo stub-ctx ;;
+  *version*) exit 0 ;;
+esac
+exit 0
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+ARGOCD_SERVER=127.0.0.1:${_lst_port}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  kill "$_lst_pid" 2>/dev/null; rm -f "$_lst_pf"
+  if [ "$(printf '%s\n' "$_ss_out" | grep -E '^  ArgoCD ' | grep -c 'serving$')" -ge 1 ]; then
+    ok "up+starting: ArgoCD serves while the ingress is silent (the case is live)"
+    case "$_ss_out" in
+      *'the silent rows are either still starting'*) ok "up+starting: the silent rows are explained (still starting, or a stale address)" ;;
+      *) bad "up+starting: silent rows under a cluster that answered are left unexplained" "say they are still starting or at a stale address" ;;
+    esac
+  else
+    bad "up+starting: ArgoCD did not read serving — the case is vacuous" "fix the fixture, not the product"
   fi
 
   # A REACHABLE cluster with every recorded service address silent is NOT a powered-off lab — it is

@@ -55,7 +55,7 @@ _no_probe_snapshot="${CREDS_NO_PROBE:-0}"
 # ⚠️ _ssh_verr ADDED 2026-09-05. It was MY OWN leak, and it is precisely the class this trap was
 # introduced for (the pre-existing _argo_err mktemp leaked on every error path): any death between
 # its mktemp and its rm left a temp file per run.
-trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" "${_h_err:-}" "${_route_dead:-}" "${_route_degraded:-}" 2>/dev/null || true' EXIT
+trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" "${_h_err:-}" "${_route_dead:-}" "${_route_degraded:-}" "${_reach_err:-}" 2>/dev/null || true' EXIT
 
 # B528/F3 — the route probe's COST BOUND. Every ingress row targets the SAME LB, so once one HTTP
 # probe fails to complete, the remaining eight will too — and each costs a full timeout.
@@ -791,7 +791,13 @@ fi
 # probe answers it. Pinned by STATE 8 in scripts/test-creds-show.sh.
 
 # Does the cluster actually answer? Bounded — never hang the summary on an unreachable API server.
-_cluster="not reachable (or KUBECONFIG unset)"
+_cluster="not asked — KUBECONFIG is not set"
+_cluster_notasked_why='unset'   # quoted: bare `unset` reads as the builtin (SC2209)
+if [ "$_no_probe_snapshot" = 1 ]; then
+  _cluster="not asked (CREDS_NO_PROBE=1)"; _cluster_notasked_why=noprobe
+elif [ -n "${KUBECONFIG:-}" ] && ! have kubectl; then
+  _cluster="not asked — kubectl is not installed"; _cluster_notasked_why=nokubectl
+fi
 # </dev/null ON EVERY kubectl HERE, and it is load-bearing. MEASURED 2026-08-16: with stdin an open
 # pipe that never reaches EOF -- which is what this inherits when run from a test harness or a make
 # recipe -- `kubectl version` blocks in unix_stream_data_wait INDEFINITELY. It hung `make ci` for 22
@@ -823,15 +829,41 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
     *)
       case "$(classify_kube_failure "$_reach_err" 2>/dev/null || true)" in
         UNREACHABLE)
-          _cluster="not answering — the API server did not respond"; _cluster_state=noanswer ;;
-        UNAUTHORIZED|FORBIDDEN)
+          # ⚠️ THE CLASS IS TOO WIDE FOR A VERDICT (vks-adversary round 3, ran-it with real kubectl):
+          # it also holds kubectl's OWN client timeout, so raising CREDS_KUBE_TIMEOUT_SECONDS — which
+          # this report recommends — turned a timeout into "definitive" and one refused ingress fired
+          # the headline again; and `no such host` is a DNS failure HERE, where nothing was dialled.
+          # Only a refused connection or no route is a definitive no-answer.
+          case "$(cat "$_reach_err" 2>/dev/null || true)" in
+            *"no such host"*)
+              _cluster="not asked — its address does not resolve on this machine (nothing was dialled)"
+              _cluster_state=notasked; _cluster_notasked_why=dns ;;
+            *"context deadline exceeded"*|*"Client.Timeout exceeded"*|*"i/o timeout"*|*"TLS handshake timeout"*)
+              _cluster="UNDETERMINED: kubectl's own request timed out (that alone does not mean it is down)"
+              _cluster_state=timeout ;;
+            *)
+              _cluster="not answering — the connection was refused or had no route"
+              _cluster_state=noanswer ;;
+          esac ;;
+        UNAUTHORIZED)
           _cluster="answering, but it REJECTED this kubeconfig's credential"; _cluster_state=answered ;;
+        FORBIDDEN)
+          # A 403 AUTHENTICATED us. "Rejected credential" sent operators to re-login — an SSO attempt.
+          _cluster="answering; the credential was accepted but is not allowed this request"; _cluster_state=answered ;;
         STALE_CA)
-          _cluster="answering, but its certificate is not trusted by this kubeconfig"; _cluster_state=answered ;;
+          _cluster="answering, but its certificate does not verify for this kubeconfig (untrusted CA or wrong name)"
+          _cluster_state=answered ;;
         PLAINTEXT)
           _cluster="answering, but not over TLS (a wrong scheme or port?)"; _cluster_state=answered ;;
-        KUBECONFIG_UNUSABLE|NO_KUBE_TARGET) _cluster_state=notasked ;;   # nothing was dialled
-        *) _cluster_state=unknown ;;
+        KUBECONFIG_UNUSABLE)
+          _cluster="not asked — KUBECONFIG names something missing or unusable, or its credential plugin failed"
+          _cluster_state=notasked; _cluster_notasked_why=config ;;
+        NO_KUBE_TARGET)
+          _cluster="not asked — the kubeconfig has no current target"
+          _cluster_state=notasked; _cluster_notasked_why=notarget ;;
+        *)
+          _cluster="UNDETERMINED: kubectl failed with an error this report does not classify"
+          _cluster_state=unknown ;;
       esac ;;
   esac
   rm -f "$_reach_err"
@@ -1022,9 +1054,15 @@ if [ "$_pre_off" = 1 ]; then
   # The cluster clause must agree with the Context line below it, so it says WHICH of the three it was.
   case "${_cluster_state:-notasked}" in
     noanswer) _cclause=', and the cluster API did not answer either' ;;
-    timeout)  _cclause=", and the cluster API did not answer within this report's ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s limit either" ;;
+    timeout)  _cclause=', and the cluster API did not answer in time either' ;;
     unknown)  _cclause=' (and this report could not tell whether the cluster API answered)' ;;
-    *)        _cclause=' (this report had no usable kubeconfig to ask the cluster)' ;;
+    *)
+      case "${_cluster_notasked_why:-unset}" in
+        nokubectl) _cclause=' (kubectl is not installed, so the cluster was not asked)' ;;
+        unset)     _cclause=' (KUBECONFIG is not set, so the cluster was not asked)' ;;
+        dns)       _cclause=" (the cluster's address does not resolve on this machine, so it was not asked)" ;;
+        *)         _cclause=' (this report had no usable kubeconfig to ask the cluster)' ;;
+      esac ;;
   esac
   printf '\n  %s\u26a0\ufe0f  NOTHING answered on this run%s.%s\n' "${_BOLD}${_RED}" "$_cclause" "${_RST}"
   # A STORED address that survives a rebuild: it may be a previous lab's (the ingress paragraph this
@@ -1056,7 +1094,7 @@ if [ "$_pre_off" = 1 ]; then
     _step=4
   fi
   printf '        %s. Re-run: make creds\n' "$_step"
-  printf '      Every other command in this report needs the lab answering.\n'
+  printf '      Every command below needs the lab answering.\n'
 fi
 if [ "${_SUP_DEAD:-0}" = 1 ] && [ "$_pre_off" != 1 ]; then
   # F5: the old headline said "every <not read> below needs it" and MEASURED to ZERO referents in
@@ -1833,7 +1871,8 @@ add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress "
 # source, never field-by-field. `make harbor-admin-password` already does this correctly
 # (env_publish_all writes BOTH keys, and since B202 F4 it REFUSES to overwrite a robot$ pair).
 # test-creds-show.sh asserts this mechanically — a comment alone is not the control.
-add_row "Harbor (registry)" "$harbor_url" "$harbor_user" "$harbor_pw" "${_reach_harbor_cell:-$(_reach_harbor)}"
+if [ -z "$_reach_harbor_cell" ]; then _reach_harbor_cell="$(_reach_harbor)"; fi   # once; both Harbor rows reuse it
+add_row "Harbor (registry)" "$harbor_url" "$harbor_user" "$harbor_pw" "$_reach_harbor_cell"
 # ── _rejected_why — say WHEN the token died, not "usually an EXPIRED token" ──────────────────────
 # kubectl reports an expired token and a revoked/rotated credential IDENTICALLY as `Unauthorized`,
 # so the classifier cannot separate them and this used to hedge. The token's own `exp` claim can,
@@ -2080,7 +2119,7 @@ if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
     '<'*) : ;;                                   # a placeholder — print it, never mask it
     *)    _h_admin_pw="$(_mask "$_h_admin_pw")" ;;
   esac
-  add_row "Harbor (web UI)" "$harbor_url" "admin" "$_h_admin_pw" "${_reach_harbor_cell:-$(_reach_harbor)}"
+  add_row "Harbor (web UI)" "$harbor_url" "admin" "$_h_admin_pw" "$_reach_harbor_cell"
 fi
 # Render the PROVENANCE with the value. A bare secret here reads as "this is your password",
 # and on the primary runbook it is the pre-rotation one from Step 5 onward — which is the state
@@ -2095,7 +2134,8 @@ fi
 # it in full, where it costs no width.
 _argo_initial_note=0
 if [ "${_argo_initial:-0}" = 1 ] && [ -n "$argo_pw" ]; then _argo_initial_note=1; fi
-add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"   "${_reach_argocd_cell:-$(_reach_argocd)}"
+if [ -z "$_reach_argocd_cell" ]; then _reach_argocd_cell="$(_reach_argocd)"; fi
+add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"   "$_reach_argocd_cell"
 # CAPTURE INTO VARIABLES FIRST -- do NOT inline these `$( )` into add_row's ARGUMENTS.
 # MEASURED 2026-08-22 with a newly-enrolled app whose app_health_path() branch did not yet exist:
 #     FATAL  app 'nodejswebapp': add a branch to app_health_path()
@@ -2565,7 +2605,7 @@ if [ "$_h_foot" = 1 ]; then
   case "${_h_admin_why}" in
     # "see the banner above" pointed ~40 lines up. Name the cause here; the NEXT line already
     # carries the only thing a reader acts on (harbor-admin-password will not help, and why).
-    *"Supervisor token expired"*) printf '\n  Harbor admin password NOT read (the Supervisor token expired).\n' ;;
+    *"Supervisor token expired"*) printf '\n  Harbor admin password NOT read: the Supervisor token expired — renew it (above), then re-run make creds.\n' ;;
     *) printf '\n  Harbor admin password NOT read: %s\n' "$_h_admin_why" ;;
   esac
   # No backticks: shellcheck reads them as command substitution inside a single-quoted printf
@@ -2756,6 +2796,12 @@ if [ "${_reach_total:-0}" -gt 0 ]; then
     _sil=$(( _reach_total - _reach_ok - _reach_half - _reach_dns ))
     [ "$_sil" -gt 0 ] && printf ', %s silent' "$_sil"
     printf '.\n'
+    # The cluster answered, so the silent rows are not a powered-off lab. Right after `lab-start` they
+    # are services still starting (it waits for neither); after a rebuild they may be stale addresses.
+    if [ "${_cluster_up:-0}" = 1 ] && [ "$_sil" -gt 0 ]; then
+      printf '             The cluster answered, so the silent rows are either still starting (re-run\n'
+      printf '             make creds in a few minutes) or at an address from an earlier install.\n'
+    fi
     # ⚠️ GATED ON THE BUCKET THAT JUSTIFIES IT, not merely on "nothing is serving". A round
     # measured this sentence telling an operator to wait for backends in a state that was 9/11
     # STALE DNS — whose remedy is the /etc/hosts line printed ~30 lines ABOVE and which the
@@ -2889,7 +2935,10 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
       *)  _ca_abs="${REPO_ROOT}/${HARBOR_CA_FILE#./}" ;;
     esac
     if [ -n "$_ca_abs" ] && [ -f "$_ca_abs" ] && [ -r "$_ca_abs" ] && [ -s "$_ca_abs" ]; then
-      printf '    - Harbor: if that CA is the one that signed it, this verifies —\n      curl --cacert %s %s://%s\n' \
+      # The curl hangs while Harbor is silent; say when it applies instead of prescribing a dead end.
+      _h_when=""
+      if [ "${_reach_harbor_cell:-}" != serving ]; then _h_when=" (once Harbor answers)"; fi
+      printf '    - Harbor%s: if that CA is the one that signed it, this verifies —\n      curl --cacert %s %s://%s\n' "$_h_when" \
         "$_ca_abs" "$harbor_scheme" "${HARBOR_URL}"
     else
       # ⚠️ SPLIT BY THE WIDTH GATE ADDED IN THE SAME CHANGE, on its FIRST run. This was ONE label
