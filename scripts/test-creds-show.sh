@@ -4223,10 +4223,12 @@ while True:
 
   # ── ALL SERVING: no summary line that only repeats the Reachable column (2026-09-15, owner) ──────
   # `_reach_probe 0`: one listener serves every probed ingress row, Harbor unset (not probed).
-  # `_reach_probe 1`: Harbor pointed at the same plain listener, whose probe reads silent — a PARTIAL
-  # state, the positive control that the summary still prints when something is not serving.
+  # `_reach_probe 1`: Harbor pointed at a port NOTHING listens on, so its row reads silent — a PARTIAL
+  # state, the positive control that the summary still prints when something is not serving. A DEAD
+  # port, not the plain listener: Harbor read silent there only because its probe always speaks https
+  # (implementation review), and a fixture must not depend on that accident.
   _reach_probe() {
-    local t p lp out
+    local t p dp lp out
     trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
     t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
     p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
@@ -4237,7 +4239,10 @@ while True:
     { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
     chmod +x "$t/bin/getent"
     printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\n' "$p" > "$t/.env"
-    if [ "$1" = 1 ]; then printf 'HARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" >> "$t/.env"; fi
+    if [ "$1" = 1 ]; then
+      dp="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+      printf 'HARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$dp" >> "$t/.env"
+    fi
     out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" TMPDIR="$t" \
               CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
     kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
@@ -4258,6 +4263,13 @@ while True:
     bad "all-serving: the report still prints a reachable summary that only repeats the column"
   else
     ok "all-serving: no reachable summary when everything probed is serving"
+  fi
+  # CONTROL for the partial case: the Harbor row really is not serving, or the next check proves nothing.
+  if grep -qE ' silent$' <<< "$(grep -E '^  Harbor \(registry\) ' <<< "$_ra_part" || true)"; then
+    ok "all-serving: the partial fixture's Harbor row reads silent (the control is live)"
+  else
+    bad "all-serving: the partial fixture's Harbor row is not silent — it cannot discriminate" \
+        "fix the fixture, not the product"
   fi
   if grep -qE '^  reachable: [0-9]+ of [0-9]+ serving, ' <<< "$_ra_part"; then
     ok "all-serving: a partial state still prints the reachable summary (positive control)"
