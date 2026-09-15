@@ -2838,7 +2838,7 @@ while True:
     for a in "$@"; do args+=("${a//@T@/$t}"); done   # `@T@` = this fixture's own directory
     # proxies CLEARED by default: a refusal is judged against the proxy environment, and the box running
     # the suite must not decide these verdicts. A case that needs a proxy passes one in its args.
-    out="$( cd "$t" && env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy "${args[@]}" PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+    out="$( cd "$t" && env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u NO_PROXY -u no_proxy "${args[@]}" PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
               CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
     printf '%s' "$out"
     rm -rf "$t"
@@ -3081,6 +3081,35 @@ INGRESS_PROBE_PORT=${_ip}
   else
     bad "proxy-url: a proxy-url-ambiguous refusal fired the lab-off headline" "it may be the proxy, not the cluster"
   fi
+
+
+  # (1o) GO'S NO_PROXY EDGES (round 7, ran-it against real kubectl + a CONNECT-logging proxy): each of these
+  #      WAS proxied by Go, so a refusal is NOT definitive. A leading-dot entry covers subdomains only; an
+  #      IP host is never suffix-matched; "127.<name>" is a hostname, not loopback.
+  for _edge in 'lab.test|.lab.test' '10.0.0.29|0.0.29' '127.lab.test|'; do
+    _eh="${_edge%%|*}"; _en="${_edge#*|}"
+    _edge_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "The connection to the server '"$_eh"':6449 was refused - did you specify the right host or port?" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc HTTPS_PROXY=http://127.0.0.1:1 NO_PROXY="$_en")"
+    case "$_edge_out" in
+      *'a proxy is configured for this address'*) ok "proxy-edge [$_eh / NO_PROXY=$_en]: Go proxies it, so the refusal stays undetermined" ;;
+      *) bad "proxy-edge [$_eh / NO_PROXY=$_en]: a proxied refusal is reported as the cluster refusing" "match Go: dot=subdomains only, no IP suffix match, loopback only for an IP" ;;
+    esac
+  done
+  # ...and the positive control for the same machinery: a real subdomain of a dot entry IS bypassed.
+  _sub_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "The connection to the server api.lab.test:6449 was refused - did you specify the right host or port?" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc HTTPS_PROXY=http://127.0.0.1:1 NO_PROXY=.lab.test)"
+  case "$_sub_out" in
+    *'cluster      : not answering'*) ok "proxy-edge [api.lab.test / NO_PROXY=.lab.test]: a subdomain of a dot entry bypasses (control)" ;;
+    *) bad "proxy-edge control: a subdomain of a dot entry is not bypassed" "dot entry must still cover subdomains" ;;
+  esac
 
   # (5) the ArgoCD login bullet: the ADDRESS first. fetch-argocd-ca refuses a bare IP the cert does not carry.
   _argo_bul="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh" | grep -F -A2 'argocd login / write' | tr '\n' ' ')"

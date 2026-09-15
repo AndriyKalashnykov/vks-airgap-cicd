@@ -873,12 +873,26 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
               _px_host=""
               _px_re='(the server|dial tcp) \[?([^] ]+)\]?:[0-9]+'
               if [[ $_reach_txt =~ $_px_re ]]; then _px_host="${BASH_REMATCH[2]}"; fi
-              case "$_px_host" in localhost|127.*|::1) _px_used=0 ;; esac
+              # (round 7, ran-it) Go's rules, and only the ones that make a bypass CERTAIN: an IP host is
+              # never suffix-matched and is loopback only as a real 127.x/::1 literal; a leading-dot entry
+              # covers SUBDOMAINS ONLY (".lab.test" still proxies "lab.test"). Anything else Go might
+              # bypass (ports, CIDRs, case, "*.x") keeps the cautious reading. if/elif, not `case`: this
+              # sits inside a classify_kube_failure consumer (check-classifier-consumers stops at `esac`).
+              _px_ip=0
+              if [[ "$_px_host" == *:* || "$_px_host" =~ ^[0-9.]+$ ]]; then _px_ip=1; fi
+              if [ "$_px_host" = localhost ] || [ "$_px_host" = ::1 ]; then _px_used=0
+              elif [ "$_px_ip" = 1 ] && [[ "$_px_host" == 127.* ]]; then _px_used=0; fi
               IFS=, read -r -a _np_list <<< "${NO_PROXY:-${no_proxy:-}}"
               for _np_e in "${_np_list[@]}"; do
-                _np_e="${_np_e// /}"; _np_e="${_np_e#.}"
+                _np_e="${_np_e//[[:space:]]/}"
                 if [ -z "$_np_e" ] || [ -z "$_px_host" ]; then continue; fi
-                if [ "$_np_e" = '*' ] || [ "$_px_host" = "$_np_e" ] || [[ "$_px_host" == *".$_np_e" ]]; then _px_used=0; fi
+                if [ "$_np_e" = '*' ]; then _px_used=0
+                elif [ "$_px_ip" = 1 ]; then
+                  if [ "$_px_host" = "$_np_e" ]; then _px_used=0; fi
+                elif [[ "$_np_e" == .* ]]; then
+                  if [[ "$_px_host" == *"$_np_e" ]]; then _px_used=0; fi
+                elif [ "$_px_host" = "$_np_e" ] || [[ "$_px_host" == *".$_np_e" ]]; then _px_used=0
+                fi
               done
             fi
             if [ "$_px_used" = 1 ]; then
@@ -3110,7 +3124,7 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
     # this report is the surface the operator is looking at when `argocd login` fails.
     printf '    - ArgoCD, argocd login / write — needs a NAME the cert carries, plus ARGOCD_CA_FILE:\n'
     printf '      set ARGOCD_SERVER=<a name the cert carries, resolvable here> in .env FIRST,\n'
-    printf '      then make fetch-argocd-ca (it refuses a bare IP), then set ARGOCD_CA_FILE in .env\n'
+    printf '      then make fetch-argocd-ca (it refuses an IP the cert does not carry), then set ARGOCD_CA_FILE in .env\n'
   fi
 fi
 
