@@ -1974,7 +1974,7 @@ _sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-or-empty> [
 # ArgoCD FOLLOW-UP line, which is emitted only when `_argo_pw_expired=1` -- set by that site's
 # EXPIRED arm and nowhere else. That flag IS the observable; the cell text no longer is.
 _sso_rows='creds/site1|creds||Supervisor token EXPIRED|has NOT expired|Expiry is unreadable
-creds/site2-sink|creds|VKS_STATE_KIND=1|read BY this report|not read — the Supervisor token is still valid|run: make argocd-password
+creds/site2-sink|creds|VKS_STATE_KIND=1|sup-unread: argocd|not read — the Supervisor token is still valid|run: make argocd-password
 argocd-password|argocd-password||EXPIRED at|has NOT expired|no readable expiry'
 
 # ⚠️ ASSERT THE PROPERTY, NOT AN EXACT COUNT. EXPIRED must name the command AT LEAST once (measured:
@@ -2021,6 +2021,62 @@ while IFS='|' read -r _sso_lbl _sso_bin _sso_sink _sso_mE _sso_mV _sso_mU; do
 done <<SSOROWS
 $_sso_rows
 SSOROWS
+
+
+# ══ THE TOKEN BANNER NAMES WHAT IT COULD NOT READ — and does not print when it read nothing (2026-09-15) ══
+# Measured before: "values that depend on it could not be read" printed with ARGOCD_AUTH_TOKEN set, an
+# admin Harbor user and no VKS_NAMESPACE, and under CREDS_NO_PROBE=1 — zero Supervisor reads either way.
+_tb_exp="$(_jwt 1000000000)"
+_tb_all="$(_sso_render creds "$_tb_exp" 'VKS_STATE_KIND=1' 'VKS_NAMESPACE=demo-ns' || true)"
+_tb_phantom="$(_sso_render creds "$_tb_exp" '' "HARBOR_USERNAME=admin
+ARGOCD_AUTH_TOKEN=x" || true)"
+_tb_noprobe="$(_sso_render creds "$_tb_exp" 'VKS_STATE_KIND=1' 'VKS_NAMESPACE=demo-ns
+CREDS_NO_PROBE=1' || true)"
+_tb_toks="$(grep -oE '^sup-unread: [a-z-]+' <<< "$_tb_all" | tr '\n' ' ')"
+if [ "$_tb_toks" = 'sup-unread: harbor-web sup-unread: argocd sup-unread: ssh ' ]; then
+  ok "token banner: robot + sink + VKS_NAMESPACE -> names the Harbor web UI, ArgoCD and SSH values"
+else
+  bad "token banner: expected harbor-web, argocd, ssh; got [$_tb_toks]"
+fi
+if grep -qF 'so this report could not read:' <<< "$_tb_all" \
+   && grep -qF 'the Harbor web UI admin password, the ArgoCD password, the guest node SSH address and password.' <<< "$_tb_all" \
+   && grep -qE '^     then re-run make creds\.$' <<< "$_tb_all"; then
+  ok "token banner: the human line names the same three values and ends with the re-run"
+else
+  bad "token banner: the named list or the re-run line is missing"
+fi
+if grep -qE 'second command|values that depend on it could not be read' <<< "$_tb_all"; then
+  bad "token banner: the removed 'second command' / unnamed-values wording is back"
+else
+  ok "token banner: no 'second command' clause and no unnamed 'values that depend on it'"
+fi
+if grep -qF 'Supervisor token EXPIRED' <<< "$_tb_phantom" || grep -qF 'sup-unread:' <<< "$_tb_phantom"; then
+  bad "token banner: printed although nothing token-dependent was read (admin Harbor, ARGOCD_AUTH_TOKEN, no VKS_NAMESPACE)"
+else
+  ok "token banner: absent when no Supervisor read was attempted"
+fi
+if grep -qF 'Supervisor token EXPIRED' <<< "$_tb_noprobe"; then
+  bad "token banner: printed under CREDS_NO_PROBE=1, where no Supervisor read happens"
+else
+  ok "token banner: absent under CREDS_NO_PROBE=1"
+fi
+if grep -qF 'Harbor admin password NOT read: the Supervisor token expired' <<< "$_tb_all"; then
+  bad "token banner: the Harbor footnote still restates the banner in the token-expired state"
+else
+  ok "token banner: no Harbor footnote restating it"
+fi
+if grep -qE '^    guest node SSH: NOT probed\.?$' <<< "$_tb_all"; then
+  bad "token banner: 'guest node SSH: NOT probed.' still printed under Lab access"
+else
+  ok "token banner: no bare 'guest node SSH: NOT probed.' header"
+fi
+# the robot sentence, in an arm that still prints it (CREDS_NO_PROBE=1: "not probed")
+if grep -qF 'it never replaces a robot credential with admin.' <<< "$_tb_noprobe" \
+   && ! grep -qF 'yours is a robot and it refuses' <<< "$_tb_noprobe"; then
+  ok "harbor footnote: 'it never replaces a robot credential with admin' (not the false 'it refuses')"
+else
+  bad "harbor footnote: the robot sentence is missing, or still says 'it refuses'"
+fi
 
 # ── THE 119 ARM OF THE GUEST-NODE-SSH PROBE HAD NO FIXTURE AT ALL ────────────────────────────────
 # B717 shipped the classification of a NOT-ATTEMPTED Supervisor read (`_sup_timeout` returns 119
@@ -2709,7 +2765,7 @@ _hdr_case_empty "rc=0 -> prints nothing"            0 0   ""
 _hdr_case "rc=124 (our timeout) -> NOT a lab fact"  0 124 "some state"  "NOTHING answered"
 _hdr_case "rc=137 (external kill) -> NOT a lab fact" 0 137 "some state" "NOTHING answered"
 # the token expired BEFORE dialling: nothing was asked, so neither claim applies
-_hdr_case "rc=119 (token expired, never dialled)"   0 119 "some state"  "NOT probed"
+_hdr_case_empty "rc=119 (token expired, never dialled) -> nothing (the banner names it)" 0 119 "some state"
 # ⚠️ A REFUSAL IS AN ANSWER. The server replied; it said no. That IS a live read and a real RBAC
 # fact, so it must not be lumped with "nothing answered" — the naive fix for this defect would.
 # ⚠️ FORBIDDEN IS "ANSWERED BUT NOT READ", NOT "read live." — CORRECTED. This case used to pin
@@ -2720,7 +2776,7 @@ _hdr_case "rc=119 (token expired, never dialled)"   0 119 "some state"  "NOT pro
 # simply not a READ, and the header must not say the addresses were read.
 _hdr_case "forbidden -> ANSWERED but not read" 1 403 "some state" "ANSWERED but the addresses were not readable" 0 1
 # never probed at all
-_hdr_case "never probed -> NOT probed"              0 1   ""            "NOT probed"
+_hdr_case_empty "never probed -> nothing (the footnote gives the reason)" 0 1 ""
 # NOTHING WAS ASKED: the kube config named no reachable target, so "asked, and NOTHING answered"
 # would be a claim about the LAB made from a fault inside this box.
 _hdr_case "never-asked -> NOT probed, not a lab fact"  0 1 "some state" "kube config named no reachable target" 1
