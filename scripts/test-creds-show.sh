@@ -2134,7 +2134,7 @@ _tb_off() {  # _tb_off <extra .env lines>: refused ports (the powered-off signat
   # shellcheck disable=SC2016
   { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
   { printf '#!/bin/sh\ncase "$*" in\n'; printf '  *user.token*) printf %%s %s; exit 0 ;;\n' "'$_tb_exp'"
-    printf 'esac\necho "The connection to the server 127.0.0.1:1 was refused" >&2; exit 1\n'; } > "$t/bin/kubectl"
+    printf 'esac\necho "The connection to the server 127.0.0.1:1 was refused - did you specify the right host or port?" >&2; exit 1\n'; } > "$t/bin/kubectl"
   chmod +x "$t/bin/getent" "$t/bin/kubectl"
   printf 'apiVersion: v1\nkind: Config\n' > "$t/sup"
   printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n%s\n' \
@@ -2166,6 +2166,140 @@ if grep -qF 'renew the Supervisor token (it expired' <<< "$_tb_off_ssh" \
   ok "powered-off: the renew step names the values that need the token"
 else
   bad "powered-off: the renew step is missing, or does not name the values that need the token"
+fi
+
+# ══ argocd-password.sh's EXIT CODE CARRIES THE CAUSE, and creds.sh keys on it (2026-09-15) ══════════
+# Before: exit 3 for every failure, and creds.sh blamed the expired token for all of them — a refused
+# or unresolvable Supervisor, a bad cert, a 503 — and prescribed `make vks-login` (one of THREE SSO
+# attempts). And the child classified BOTH candidates' stderr together, so a guest refusal SHADOWED a
+# real Supervisor 401. The stub answers `get secret` PER KUBECONFIG ($t/sup = Supervisor, $t/kc = guest)
+# with REAL kubectl strings, and appends to stderr (`>&2`, never a reopened /dev/stderr, which truncates).
+_AC_401='error: You must be logged in to the server (Unauthorized)'
+_AC_REF='The connection to the server 192.0.2.10:6443 was refused - did you specify the right host or port?'
+_AC_NSNF='Error from server (NotFound): namespaces "cicd" not found'
+_AC_SNF='Error from server (NotFound): secrets "argocd-initial-admin-secret" not found'
+_AC_FORB='Error from server (Forbidden): secrets "argocd-initial-admin-secret" is forbidden: User "sso:x@vsphere.local" cannot get resource "secrets" in API group "" in the namespace "cicd"'
+_AC_X509='Unable to connect to the server: tls: failed to verify certificate: x509: certificate signed by unknown authority'
+_AC_503='Error from server (ServiceUnavailable): the server is currently unable to handle the request'
+_ac_render() {  # _ac_render <creds|argocd-password> <token> <sup-stderr> <guest-stderr> [extra .env] [child args]
+  local which="$1" tok="$2" sm="$3" gm="$4" extra="${5:-}" args="${6:-}" t rc=0 out real
+  t="$(mktemp -d)"; mkdir -p "$t/bin"
+  cp .env.example "$t/.env.example"
+  # admin Harbor + no VKS_NAMESPACE: ArgoCD is the ONLY possible Supervisor reader, so the banner and
+  # `make vks-login` can come from nowhere else. Gitea/Harbor passwords set: the "do not exist yet"
+  # note can only be armed by ArgoCD (positive control below).
+  printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME=admin\nHARBOR_PASSWORD=x\nGITEA_ADMIN_PASSWORD=x\n" > "$t/.env"
+  if [ -n "$extra" ]; then printf '%s\n' "$extra" >> "$t/.env"; fi
+  : > "$t/kc"; printf 'apiVersion: v1\nkind: Config\n' > "$t/sup"
+  if [ -n "${_AC_SINK:-}" ]; then printf '%s\n' "$_AC_SINK" > "$t/.env.state"; fi
+  printf '%s\n' "$sm" > "$t/msg-sup"; printf '%s\n' "$gm" > "$t/msg-guest"
+  # shellcheck disable=SC2016
+  { printf '#!/bin/sh\ncase "$*" in\n'
+    printf '  *user.token*) printf %%s %s; exit 0 ;;\n' "'$tok'"
+    printf '  *current-context*) echo stub-ctx; exit 0 ;;\n'
+    printf '  *version*) exit 0 ;;\n'
+    printf '  *"get ns"*|*"get secret"*) case "${KUBECONFIG:-}" in */sup) cat "%s/msg-sup" >&2 ;; *) cat "%s/msg-guest" >&2 ;; esac; exit 1 ;;\n' "$t" "$t"
+    printf 'esac\nexit 0\n'; } > "$t/bin/kubectl"
+  printf '#!/bin/sh\nexit 1\n' > "$t/bin/curl"; cp "$t/bin/curl" "$t/bin/getent"
+  chmod +x "$t/bin/kubectl" "$t/bin/curl" "$t/bin/getent"
+  if [ "${_AC_T126:-0}" = 1 ]; then
+    real="$(command -v timeout)"
+    # shellcheck disable=SC2016
+    printf '#!/bin/sh\ncase "$*" in *argocd-password.sh*) exit 126 ;; esac\nexec %s "$@"\n' "$real" > "$t/bin/timeout"
+    chmod +x "$t/bin/timeout"
+  fi
+  # shellcheck disable=SC2086
+  out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+      KUBECONFIG="$t/kc" VKS_SUPERVISOR_KUBECONFIG="$t/sup" CREDS_TOKEN=1 \
+      VKS_LAB_STATE_DIR="$t/no-lab" \
+      "${_CREDS_REPO}/scripts/${which}.sh" $args 2>&1 )" || rc=$?
+  rm -rf "$t"
+  printf '%s\nac-rc: %s\n' "$out" "$rc"
+}
+_ac_creds() {  # _ac_creds <label> <render> <yes|no: ArgoCD named in the banner> <substring of the ArgoCD cell>
+  local lbl="$1" out="$2" named="$3" cell="$4" miss="" row
+  row="$(grep -E '^  ArgoCD ' <<< "$out" || true)"
+  if [ -z "$row" ]; then bad "cause codes: $lbl rendered no ArgoCD row — the case is vacuous"; return 0; fi
+  if [ "$named" = yes ]; then
+    if ! grep -qxF 'sup-unread: argocd' <<< "$out"; then miss="$miss not-named"; fi
+  else
+    if grep -qxF 'sup-unread: argocd' <<< "$out"; then miss="$miss named"; fi
+    if grep -qF 'make vks-login' <<< "$out"; then miss="$miss prescribes-vks-login"; fi
+  fi
+  if ! grep -qF -- "$cell" <<< "$row"; then miss="$miss cell[$row]"; fi
+  if grep -qF 'those passwords do not exist yet' <<< "$out"; then miss="$miss do-not-exist-note"; fi
+  if [ -z "$miss" ]; then ok "cause codes: creds $lbl"; else bad "cause codes: creds $lbl:$miss"; fi
+}
+_ac_exp="$(_jwt 1000000000)"
+_ac_creds "A 401/ns-NotFound -> named, <not read>" "$(_ac_render creds "$_ac_exp" "$_AC_401" "$_AC_NSNF")" yes '<not read>'
+_ac_creds "B 401/Forbidden -> named, <not read>" "$(_ac_render creds "$_ac_exp" "$_AC_401" "$_AC_FORB")" yes '<not read>'
+_ac_creds "C 401/refused -> named, <not read>" "$(_ac_render creds "$_ac_exp" "$_AC_401" "$_AC_REF")" yes '<not read>'
+_ac_creds "E refused/refused -> not named, could not be reached" "$(_ac_render creds "$_ac_exp" "$_AC_REF" "$_AC_REF")" no 'could not be reached from this machine'
+_ac_creds "G x509/ns-NotFound -> not named, see why" "$(_ac_render creds "$_ac_exp" "$_AC_X509" "$_AC_NSNF")" no 'run: make argocd-password to see why'
+_ac_creds "K 503/401 -> not named, see why" "$(_ac_render creds "$_ac_exp" "$_AC_503" "$_AC_401")" no 'run: make argocd-password to see why'
+_ac_creds "exit 126 -> not named, says the exit code" "$(_AC_T126=1 _ac_render creds "$_ac_exp" "$_AC_401" "$_AC_NSNF")" no 'argocd-password.sh exited 126'
+# POSITIVE CONTROL for the note-absence checks above: with the SAME fixture, an ABSENT secret (NotFound
+# everywhere, exit 3, no overlay) must still arm "do not exist yet" — else those checks prove nothing.
+_ac_n="$(_ac_render creds "$(_jwt 9999999999)" "$_AC_SNF" "$_AC_NSNF")"
+if grep -qF 'those passwords do not exist yet' <<< "$_ac_n"; then
+  ok "cause codes: positive control — an absent secret still arms the 'do not exist yet' note"
+else
+  bad "cause codes: an absent secret did not arm the note — the note-absence checks above are vacuous"
+fi
+# The CHILD's exit code, at --wait 0 (creds.sh's call) AND a positive wait (make argocd-password):
+# round 2 measured one derivation per operating point giving OPPOSITE codes for the same inputs.
+# (No case NotFounds the secret on the guest at wait 1, so none of them sleeps.)
+_ac_code() {  # _ac_code <label> <want> <token> <sup> <guest> <wait>
+  local got
+  got="$(_ac_render argocd-password "$3" "$4" "$5" "" "--wait $6" | sed -n 's/^ac-rc: //p' | tail -1)"
+  if [ "$got" = "$2" ]; then ok "cause codes: argocd-password $1 --wait $6 -> exit $2"
+  else bad "cause codes: argocd-password $1 --wait $6 -> exit ${got:-?}, want $2"; fi
+}
+for _acw in 0 1; do
+  _ac_code "A 401/ns-NotFound" 5 "$_ac_exp" "$_AC_401" "$_AC_NSNF" "$_acw"
+  _ac_code "C 401/refused (was shadowed)" 5 "$_ac_exp" "$_AC_401" "$_AC_REF" "$_acw"
+  _ac_code "E refused/refused" 6 "$_ac_exp" "$_AC_REF" "$_AC_REF" "$_acw"
+  _ac_code "G x509/ns-NotFound" 7 "$_ac_exp" "$_AC_X509" "$_AC_NSNF" "$_acw"
+  _ac_code "K 503/401" 7 "$_ac_exp" "$_AC_503" "$_AC_401" "$_acw"
+  _ac_code "VALID 401/ns-NotFound" 8 "$(_jwt 9999999999)" "$_AC_401" "$_AC_NSNF" "$_acw"
+done
+_ac_code "absent: NotFound everywhere" 3 "$(_jwt 9999999999)" "$_AC_SNF" "$_AC_NSNF" 0
+# kubectl NOISE beside a NotFound is still ABSENT (impl round, measured): a klog discovery error and a
+# deprecation Warning used to flip exit 3 to 7 and the creds cell to "see why".
+_AC_KLOG="E0915 11:26:00.016131  123456 memcache.go:287] couldn't get resource list for metrics.k8s.io/v1beta1: the server is currently unable to handle the request"
+_AC_WARN='Warning: v1 ComponentStatus is deprecated in v1.19+'
+_ac_code "absent + klog/Warning noise" 3 "$(_jwt 9999999999)" "$_AC_KLOG"$'\n'"$_AC_SNF" "$_AC_WARN"$'\n'"$_AC_NSNF" 0
+_ac_kn="$(_ac_render creds "$(_jwt 9999999999)" "$_AC_KLOG"$'\n'"$_AC_SNF" "$_AC_WARN"$'\n'"$_AC_NSNF")"
+if grep -qF 'see why' <<< "$(grep -E '^  ArgoCD ' <<< "$_ac_kn" || true)"; then
+  bad "cause codes: creds absent + klog noise renders 'see why' — kubectl noise is read as a failed read"
+else
+  ok "cause codes: creds absent + klog noise is not rendered as a failed read"
+fi
+# The remaining creds arms, each by its own cell text (a deleted arm must go RED).
+_ac_creds "absent + overlay -> (it waits)" "$(_AC_SINK='VKS_STATE_KIND=1' _ac_render creds "$(_jwt 9999999999)" "$_AC_SNF" "$_AC_NSNF")" no 'run: make argocd-password (it waits)'
+_ac_creds "VALID 401 -> rejected: rotated, revoked" "$(_ac_render creds "$(_jwt 9999999999)" "$_AC_401" "$_AC_NSNF")" no 'is being REJECTED: rotated, revoked'
+_ac_creds "no-expiry 401 -> rejected, see why" "$(_ac_render creds notajwt "$_AC_401" "$_AC_NSNF")" no 'rejected this kubeconfig; run: make argocd-password to see why'
+# The CHILD's wording per code: a failed read is not "genuinely gone", and the quoted kubectl line is its
+# summary, not the klog line in front of it (both measured live against the lab).
+_ac_g="$(_ac_render argocd-password "$_ac_exp" "$_AC_X509" "$_AC_NSNF" "" "--wait 0")"
+if grep -qF 'genuinely gone' <<< "$_ac_g"; then
+  bad "cause codes: argocd-password exit 7 still says the secret may be 'genuinely gone'"
+elif grep -qF 'the read failed: Unable to connect to the server: tls' <<< "$_ac_g"; then
+  ok "cause codes: argocd-password exit 7 names the failure, not 'genuinely gone'"
+else
+  bad "cause codes: argocd-password exit 7 does not quote the x509 failure"
+fi
+_ac_e="$(_ac_render argocd-password "$_ac_exp" 'E0915 11:26:00.016131  123456 memcache.go:265] "Unhandled Error" err="dial tcp 127.0.0.1:1: connect: connection refused"'$'\n'"$_AC_REF" "$_AC_REF" "" "--wait 0")"
+if grep -qF "kubectl said: $_AC_REF" <<< "$_ac_e"; then
+  ok "cause codes: argocd-password exit 6 quotes kubectl's summary line, not the klog line"
+else
+  bad "cause codes: argocd-password exit 6 quotes the wrong kubectl line"
+fi
+# C's HEADLINE: the guest refusal used to shadow the Supervisor's 401, so the EXPIRED headline vanished.
+if grep -qF 'the Supervisor token EXPIRED' <<< "$(_ac_render argocd-password "$_ac_exp" "$_AC_401" "$_AC_REF" "" "--wait 0")"; then
+  ok "cause codes: argocd-password C 401/refused leads with the EXPIRED headline"
+else
+  bad "cause codes: argocd-password C 401/refused lost the EXPIRED headline (a guest refusal shadows the Supervisor again)"
 fi
 
 # ── THE 119 ARM OF THE GUEST-NODE-SSH PROBE HAD NO FIXTURE AT ALL ────────────────────────────────
