@@ -1147,7 +1147,7 @@ make creds-show
 **Expect:** a `Lab access` section listing `vCenter` and `vcf CLI` — the values YOU supplied in `.env`, with the Supervisor host on the vcf CLI row — and a `guest node SSH` row whose password is read LIVE from the Supervisor, with the username `vmware-system-user`.
 (A separate kubectl vsphere row appears only if VKS_PASSWORD is set or VKS_AUTH_METHOD is vsphere — the legacy login, which this walk does not use.)
 **Expect:** the `guest node SSH` row shows the secret name it read (a `-ssh-password` secret) when it succeeds, or a short token such as `<forbidden>` / `<no kubeconfig>` when it could not ask — never a blank that would read as *this cluster has none*.
-**Expect:** a warning that vCenter SSO locks the account `PERMANENTLY after 3 failed attempts`, and that this report SHOWS these values and never authenticates with them.
+**Expect:** a warning that vCenter SSO locks the account `PERMANENTLY after 3 failed attempts`, and that if one of these SSO passwords is rejected you stop and get the correct value rather than retry.
 
 The ArgoCD row is the exception if you changed that password in Step 5: it can only show the
 generated one, or say it cannot read it. Yours is in your password manager.

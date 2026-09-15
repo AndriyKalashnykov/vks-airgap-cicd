@@ -494,9 +494,9 @@ fi
 # each run" and "(probed live)", so `_live` read 0, the case fell to the "unreachable here" arm,
 # and reverting the legend to the false form left the suite GREEN. The pattern now covers what the
 # three arms ACTUALLY print, measured:
-#   STORED     : "Reachable is probed live, and the headlamp token is MINTED fresh on every run"
+#   STORED     : "Reachable is probed live."  (the headlamp clause was cut 2026-09-15)
 #   DISCOVERED : "read from the cluster you are talking to now"
-#   plain .env : "except Reachable (probed live) and the headlamp token (minted each run)"
+#   plain .env : "your .env and live reads from the cluster. Reachable is probed live."
 # ⚠️ THE CONTENT ASSERTION, AND ITS ABSENCE WAS A HIGH. An impl-round MEASURED that truncating the
 # legend to just "Reachable = the address answered." -- DELETING the entire new claim -- left this
 # suite at the SAME COUNT, 0 FAIL, rc=0. The two checks around it are the OLD pinned prefix and the
@@ -2323,6 +2323,140 @@ if grep -qF 'the read failed: kubectl exited 1 with no message' <<< "$_ac_s"; th
 else
   bad "cause codes: argocd-password a silent failed read quotes a blank (or is not exit 7)"
 fi
+
+# ══ FOUR LINES THAT GAVE THE READER NOTHING TO DO (2026-09-15, owner + idea round) ══════════════════
+# 1 "ArgoCD: this password is CURRENT" prints nothing (STALE keeps its line), and no ArgoCD note under a
+# token row; 2 no headlamp-only "minted" clause; 3 the re-check names the ArgoCD admin login when that
+# check would try it; 4 the SSO footer names the three SSO rows, without "never authenticates" or
+# "ask the lab owner". The stub serves ArgoCD's initial secret on the guest kubeconfig, created
+# 2026-09-06T07:45:25Z: <mtime> equal -> CURRENT, newer -> STALE.
+_fl_render() {  # _fl_render <admin.passwordMtime> [extra .env lines]
+  local mt="$1" extra="${2:-}" t
+  t="$(mktemp -d)"; mkdir -p "$t/bin"; cp .env.example "$t/.env.example"
+  printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME=admin\nHARBOR_PASSWORD=x\nGITEA_ADMIN_PASSWORD=x\nARGOCD_NAMESPACE=cicd\n" > "$t/.env"
+  if [ -n "$extra" ]; then printf '%s\n' "$extra" >> "$t/.env"; fi
+  : > "$t/kc"
+  # shellcheck disable=SC2016
+  { printf '#!/bin/sh\ncase "$*" in\n'
+    printf '  *passwordMtime*) printf %%s %s; exit 0 ;;\n' "$(printf '%s' "$mt" | base64 | tr -d '\n')"
+    printf '  *creationTimestamp*) printf %%s 2026-09-06T07:45:25Z; exit 0 ;;\n'
+    printf '  *data.password*) printf %%s cGFzcw==; exit 0 ;;\n'
+    printf '  *current-context*) echo stub-ctx; exit 0 ;;\n'
+    printf 'esac\nexit 0\n'; } > "$t/bin/kubectl"
+  printf '#!/bin/sh\nexit 1\n' > "$t/bin/curl"; cp "$t/bin/curl" "$t/bin/getent"
+  chmod +x "$t/bin/kubectl" "$t/bin/curl" "$t/bin/getent"
+  ( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" KUBECONFIG="$t/kc" \
+      VKS_SUPERVISOR_KUBECONFIG="$t/no-sup" VKS_LAB_STATE_DIR="$t/no-lab" CREDS_TOKEN=1 \
+      "${_CREDS_REPO}/scripts/creds.sh" 2>&1 )
+  rm -rf "$t"
+}
+_fl_cur="$(_fl_render 2026-09-06T07:45:25Z 'ARGOCD_SERVER=10.0.0.9' || true)"
+_fl_old="$(_fl_render 2026-09-10T00:00:00Z 'ARGOCD_SERVER=10.0.0.9' || true)"
+_fl_tok="$(_fl_render 2026-09-10T00:00:00Z 'ARGOCD_SERVER=10.0.0.9
+ARGOCD_AUTH_TOKEN=x' || true)"
+_fl_lb="$(_fl_render 2026-09-06T07:45:25Z 'ARGOCD_LB_IP=10.0.0.9' || true)"
+_fl_noharbor="$(_fl_render 2026-09-06T07:45:25Z 'ARGOCD_SERVER=10.0.0.9
+HARBOR_URL=' || true)"
+_fl_unk_lb="$(_fl_render '' 'ARGOCD_LB_IP=10.0.0.9' || true)"
+_fl_unk_srv="$(_fl_render '' 'ARGOCD_SERVER=10.0.0.9' || true)"
+_fl_vs="$(_fl_render 2026-09-06T07:45:25Z 'ARGOCD_SERVER=10.0.0.9
+VKS_PASSWORD=x' || true)"
+# 1. POSITIVE CONTROL first: a STALE password still reaches the note block and prints its line.
+if grep -qF 'the password above is DEAD' <<< "$_fl_old"; then
+  ok "four lines: a STALE ArgoCD password still prints its line (the note block is reached)"
+else
+  bad "four lines: the STALE line is missing — the CURRENT-absence check cannot discriminate" \
+      "fix the fixture, not the product"
+fi
+if grep -qF 'this password is CURRENT' <<< "$_fl_cur"; then
+  bad "four lines: 'ArgoCD: this password is CURRENT' still prints"
+elif grep -qF 'cannot tell whether this password' <<< "$_fl_cur"; then
+  bad "four lines: the CURRENT fixture rendered UNKNOWN — the absence check does not test CURRENT" \
+      "fix the fixture, not the product"
+else
+  ok "four lines: nothing prints for a CURRENT ArgoCD password"
+fi
+# The "cannot tell" note names argocd-auth-check only where that check would try the login.
+_fl_unk_lb_l="$(grep -m1 'cannot tell whether this password' <<< "$_fl_unk_lb" || true)"
+_fl_unk_srv_l="$(grep -m1 'cannot tell whether this password' <<< "$_fl_unk_srv" || true)"
+if [ -z "$_fl_unk_lb_l" ] || [ -z "$_fl_unk_srv_l" ]; then
+  bad "four lines: an UNKNOWN fixture did not render the 'cannot tell' note" "fix the fixture, not the product"
+elif grep -qF 'argocd-auth-check' <<< "$_fl_unk_lb_l"; then
+  bad "four lines: with only ARGOCD_LB_IP the 'cannot tell' note still prescribes argocd-auth-check (it exits UNSET)"
+elif ! grep -qF 'Check: make argocd-auth-check' <<< "$_fl_unk_srv_l"; then
+  bad "four lines: with ARGOCD_SERVER set the 'cannot tell' note lost its check"
+else
+  ok "four lines: the 'cannot tell' note names argocd-auth-check only when ARGOCD_SERVER is set"
+fi
+if grep -qE 'the password above is DEAD|cannot tell whether this password' <<< "$_fl_tok"; then
+  bad "four lines: an ARGOCD_AUTH_TOKEN reader gets a note about a password their row does not show"
+else
+  ok "four lines: no ArgoCD password note under a token row (same STALE stub)"
+fi
+# 2. No headlamp-only clause, in the arm this fixture renders AND the legend fixture's arm.
+if grep -qiE 'minted' <<< "$_fl_cur$_o_leg"; then
+  bad "four lines: a 'values below' arm still says the headlamp token is minted"
+elif grep -qF 'values below :' <<< "$_fl_cur" && grep -qF 'live reads from the cluster. Reachable is probed live.' <<< "$_fl_cur"; then
+  ok "four lines: 'values below' names live reads and keeps 'probed live', with no headlamp clause"
+else
+  bad "four lines: the 'values below' line is not the new wording"
+fi
+# ...and under CREDS_NO_PROBE=1 (the legend fixture) it claims no live read at all.
+if grep -qF 'nothing was read live (CREDS_NO_PROBE=1)' <<< "$_o_leg" && ! grep -qE 'live reads|probed live' <<< "$_o_leg"; then
+  ok "four lines: under CREDS_NO_PROBE=1 'values below' says nothing was read live"
+else
+  bad "four lines: under CREDS_NO_PROBE=1 'values below' still claims live reads"
+fi
+# The legend's contradiction check above now renders no live-read value (its fixture is no-probe), so
+# repeat it on a PROBING render, where it can fire.
+_fl_leg="$(grep -m1 'Reachable = the address answered' <<< "$_fl_cur" || true)"
+if [ -n "$_fl_leg" ] && grep -qF 'probed live' <<< "$_fl_cur" && ! grep -qiE 'as configured|never read back|echoed from' <<< "$_fl_leg"; then
+  ok "four lines: a probing render names live reads and its legend makes no echoed-config claim"
+else
+  bad "four lines: the probing render's legend check could not run, or the legend claims echoed config"
+fi
+# 3. The re-check names the ArgoCD admin login only when that check would try it.
+_fl_rc="$(grep -m1 're-check:' <<< "$_fl_cur" || true)"
+case "$_fl_rc" in
+  *'make harbor-auth-check · make argocd-auth-check'*'or says why it could not; this table does not'*)
+    ok "four lines: re-check names both logins, and says a check may not get to try" ;;
+  *) bad "four lines: re-check does not name make argocd-auth-check beside harbor-auth-check (got: $_fl_rc)" ;;
+esac
+_fl_miss=""
+while IFS= read -r _fl_t; do
+  [ -n "$_fl_t" ] || continue
+  grep -qE "^${_fl_t}:[^=]" Makefile || _fl_miss="$_fl_miss $_fl_t"
+done <<< "$(grep -oE 'make [^[:space:]]+' <<< "$_fl_rc" | cut -d' ' -f2)"
+if [ -z "$_fl_miss" ]; then ok "four lines: every make target on the re-check line exists in this Makefile"
+else bad "four lines: re-check names target(s) this Makefile does not define:$_fl_miss"; fi
+case "$(grep -m1 're-check:' <<< "$_fl_tok" || true)" in
+  *argocd-auth-check*) bad "four lines: re-check offers argocd-auth-check (an ADMIN login test) to an ARGOCD_AUTH_TOKEN reader" ;;
+  *harbor-auth-check*) ok "four lines: with ARGOCD_AUTH_TOKEN the re-check names only harbor-auth-check" ;;
+  *) bad "four lines: the token fixture printed no Harbor re-check" ;;
+esac
+case "$(grep -m1 're-check:' <<< "$_fl_lb" || true)" in
+  *argocd-auth-check*) bad "four lines: re-check offers argocd-auth-check with no ARGOCD_SERVER (it dies UNSET there)" ;;
+  *harbor-auth-check*) ok "four lines: with only ARGOCD_LB_IP (KinD) the re-check does not offer argocd-auth-check" ;;
+  *) bad "four lines: the ARGOCD_LB_IP fixture printed no Harbor re-check" ;;
+esac
+case "$(grep -m1 're-check:' <<< "$_fl_noharbor" || true)" in
+  *'re-check: make argocd-auth-check   ('*) ok "four lines: with no HARBOR_URL the re-check names argocd-auth-check alone" ;;
+  *) bad "four lines: with no HARBOR_URL and an admin ArgoCD row, the re-check does not name argocd-auth-check alone" ;;
+esac
+# 4. The SSO footer names the SSO rows SHOWN.
+if grep -qF 'PERMANENTLY after 3 failed attempts. If the vCenter or vcf CLI password is rejected,' <<< "$_fl_cur" \
+   && grep -qF 'STOP — do not retry or guess; get the correct value from your own records, or from whoever gave it to you.' <<< "$_fl_cur" \
+   && ! grep -qE 'never authenticates|ask the lab owner|kubectl vsphere password' <<< "$_fl_cur"; then
+  ok "four lines: the SSO footer names the vCenter and vcf CLI rows and what to do"
+else
+  bad "four lines: the SSO footer is not the new wording (or names a kubectl vsphere row that is not shown)"
+fi
+if grep -qE '^  kubectl vsphere ' <<< "$_fl_vs" \
+   && grep -qF 'If the vCenter, vcf CLI or kubectl vsphere password is rejected,' <<< "$_fl_vs"; then
+  ok "four lines: with the kubectl vsphere row shown, the footer names it too"
+else
+  bad "four lines: the kubectl vsphere row is shown but the footer does not name it (or the row did not render)"
+fi
 # C's HEADLINE: the guest refusal used to shadow the Supervisor's 401, so the EXPIRED headline vanished.
 if grep -qF 'the Supervisor token EXPIRED' <<< "$(_ac_render argocd-password "$_ac_exp" "$_AC_401" "$_AC_REF" "" "--wait 0")"; then
   ok "cause codes: argocd-password C 401/refused leads with the EXPIRED headline"
@@ -2522,7 +2656,7 @@ fi
 # ══ THE RE-CHECK REGISTER sits under "Nothing here is auth-tested." with its reason (idea round F5) ══
 _rcpos="$(printf '%s\n' "$_ac_grant" | grep -A1 -F 'Nothing here is auth-tested.' | tail -1)"
 case "$_rcpos" in
-  *'re-check: make env-validate'*'this table does not'*|*'re-check: make harbor-auth-check'*'this table does not'*)
+  *'re-check: make env-validate'*'this table does not'*|*'re-check: make harbor-auth-check'*'this table does not'*|*'re-check: make argocd-auth-check'*'this table does not'*)
     ok "re-check: directly under the auth-tested legend, with its reason" ;;
   *) bad "re-check: not directly under 'Nothing here is auth-tested.' (got: $_rcpos)" "the register belongs beside the sentence that explains it" ;;
 esac

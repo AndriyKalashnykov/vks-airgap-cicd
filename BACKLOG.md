@@ -9951,3 +9951,34 @@ other `_ssh_tok` values (`<no kubeconfig>`, `<ambiguous>`, `<none>`, `<no key>`,
 `<no node address yet>` endpoint were not driven. If one of those renders WITHOUT a matching
 sentence, that is a real gap — but it is a gap in the SENTENCE, not in the legend, and the fix is
 another arm beside the four that exist.
+
+## 🔴 B733 — "vCenter SSO locks out PERMANENTLY after 3 failed attempts" may be false for the SSO account (owner decision needed)
+
+**Filed 2026-09-15 from the idea round on the `make creds` footer rewrite.** The footer keeps the number;
+this row exists because an adversary graded the number itself, and the owner's standing rules state it.
+
+**What contradicts it (not yet reconciled):**
+
+- `nested-vsphere-lab/docs/DOCTRINE.md` (measured 2026-08-04, its B223) read the SSO lockout policy from
+  vmdir: `vmwPasswordChangeMaxFailedAttempts: 5`, `FailedAttemptIntervalSec: 180`,
+  `AutoUnlockIntervalSec: 300` (self-unlocking). That doc marks as INFERRED that these govern failed
+  *logins* rather than password changes. The "3 / lockout 0" figures there belong to the VCSA
+  appliance-local `root` account.
+- Broadcom 7.0 "Edit the vCenter Single Sign-On Lockout Policy": the policy "applies only to user
+  accounts, not to system accounts such as `administrator@vsphere.local`" — `7.0-doc-inferred-for-9.1`.
+- On a third-party lab the policy is the customer's and is unknowable from this repo.
+
+**Homes — derive them, do not count them by hand.** A first count here said 8; an implementation review
+measured that as a large undercount missing four operator-printed strings. This grep matched 17 files on
+2026-09-15 (`creds.sh` 12 lines, `test-creds-show.sh` 10, `lib/os.sh` 4, `argocd-password.sh` 3,
+`29-vcenter-service-check.sh` 3, `02-env.sh` 2, `scenario-1.md` 2 including the Step 13 Expect literal,
+`matrix-standing-rules.md` 2, `CLAUDE.md` and 8 more). Some are unrelated "three attempts" prose, so read each:
+`grep -rnE 'PERMANENTLY|locks? out permanently|3 failed (log|attempt)|THREE (failed|vCenter SSO attempts|attempts)' scripts/ docs/ CLAUDE.md`
+
+**Do not fix one home.** Settle the fact first (read the vSphere Client Lockout Policy page for 9.1, and
+whether the attributes govern logins), then change every home in one commit, including the Expect
+literal and the test. Candidate wording if it is false: *"vCenter SSO locks an account after repeated
+failed logins; how many, and for how long, is set by whoever runs vCenter."* Treating it as 3 remains
+the right discipline for an agent; printing it as a fact is the question.
+
+**Done when:** the printed claim matches a measured or primary-sourced 9.1 fact, in every home.
