@@ -1903,13 +1903,13 @@ _reach_ingress() {
 # registry :1709, Harbor web UI :1956, ArgoCD :1971) legitimately pass five arguments — those rows
 # are not ingress rows and have no namespace to name. MEASURED before it shipped: the unguarded
 # form dies `6: unbound variable` and takes the whole report with it.
-add_row() { local _sep=$'\t\n' _ns="${6:-}"
-  rows="${rows}${1//[$_sep]/ }"$'\t'"${2//[$_sep]/ }"$'\t'"${3//[$_sep]/ }"$'\t'"${4//[$_sep]/ }"$'\t'"${5:--}"$'\t'"${_ns//[$_sep]/ }"$'\n'; }
+add_row() { local _sep=$'\t\n' _ns="${6:-}" _host="${7:-}"
+  rows="${rows}${1//[$_sep]/ }"$'\t'"${2//[$_sep]/ }"$'\t'"${3//[$_sep]/ }"$'\t'"${4//[$_sep]/ }"$'\t'"${5:--}"$'\t'"${_ns//[$_sep]/ }"$'\t'"${_host//[$_sep]/ }"$'\n'; }
 
 
 # Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry) -> ArgoCD (deploy) -> apps.
-add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"  "$(_reach_ingress "${GITEA_HOST:-}")" "${GITEA_NAMESPACE:-gitea}"
-add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)" "$(_reach_ingress "${TEKTON_DASHBOARD_HOST:-}")" "${TEKTON_NAMESPACE:-tekton-pipelines}"
+add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"  "$(_reach_ingress "${GITEA_HOST:-}")" "${GITEA_NAMESPACE:-gitea}" "${GITEA_HOST:-}"
+add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)" "$(_reach_ingress "${TEKTON_DASHBOARD_HOST:-}")" "${TEKTON_NAMESPACE:-tekton-pipelines}" "${TEKTON_DASHBOARD_HOST:-}"
 
 # ---- headlamp -------------------------------------------------------------------------------
 # ⚠️ THE TOKEN IS MINTED HERE, AT REPORT TIME, AND STORED NOWHERE. `kubectl create token` issues a
@@ -2068,7 +2068,7 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
 else
   headlamp_tok="<not read — no KUBECONFIG>"
 fi
-add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress "${HEADLAMP_HOST:-}")" "${HEADLAMP_NAMESPACE:-headlamp}"
+add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress "${HEADLAMP_HOST:-}")" "${HEADLAMP_NAMESPACE:-headlamp}" "${HEADLAMP_HOST:-}"
 # ⚠️ KEYED ON A HEADLAMP FACT, NOT ON AN ARGOCD ONE. This note first shipped nested inside
 # `if [ "${_argo_initial_note:-0}" = 1 ]`, which is set only when ArgoCD's INITIAL admin secret is
 # still readable -- so the one sentence that breaks the "paste a stale token -> bounce -> paste
@@ -2399,7 +2399,7 @@ while read -r _a; do
   # This arms the moment one does -- app_build_args' go arm (an intentional empty printf) is the
   # precedent for a per-language accessor that legitimately prints nothing.
   [ -n "$_health" ] || die "app '$_a': app_health_path() returned nothing — refusing to print a credentials row with a blank health path."
-  add_row "$_a" "$_url" "-" "(no login; health at ${_health})" "$(_reach_ingress "$(app_host "$_a")")" "$_a"
+  add_row "$_a" "$_url" "-" "(no login; health at ${_health})" "$(_reach_ingress "$_host")" "$_a" "$_host"
 done <<EOF
 ${_apps}
 EOF
@@ -2460,7 +2460,7 @@ _row_host() {
   case "$_u" in ''|'<'*|-) return 0 ;; esac
   printf '%s' "$_u"
 }
-while IFS=$'\t' read -r c1 c2 c3 c4 c5 c6 _rest; do
+while IFS=$'\t' read -r c1 c2 c3 c4 c5 c6 c7 _rest; do
   [ -n "$c1" ] || continue
   # ⚠️ AGGREGATE THE EVIDENCE. A round MEASURED that with the estate powered off this report made
   # at least SEVEN independent failed probes and never combined them: the top line read
@@ -2508,11 +2508,11 @@ while IFS=$'\t' read -r c1 c2 c3 c4 c5 c6 _rest; do
     # cell, `-`) used to append a BARE SPACE, and `tr ' ' '|'` then produced a trailing `|` — an
     # EMPTY ALTERNATIVE, which GNU grep 3.11 matches against EVERY LINE of /etc/hosts. The printed
     # command would have told the operator that every line claims our names.
-    *'stale DNS'*)   _h="$(_row_host "$c2")"
+    *'stale DNS'*)   _h="${c7:-$(_row_host "$c2")}"
                      [ -n "$_h" ] && { _dns_stale=1;  _dns_stale_hosts="${_dns_stale_hosts}${_h} "; } ;;
   esac
   case "$c5" in
-    *'no DNS here'*) _h="$(_row_host "$c2")"
+    *'no DNS here'*) _h="${c7:-$(_row_host "$c2")}"
                      [ -n "$_h" ] && { _dns_absent=1; _dns_absent_hosts="${_dns_absent_hosts}${_h} "; } ;;
   esac
   # A MARKER (`<...>`) is a placeholder, not a value — never footnote one. Measured: capping at 44
