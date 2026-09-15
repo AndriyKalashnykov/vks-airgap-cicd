@@ -9756,3 +9756,189 @@ before quoting it again.
 
 **Grade:** `measured` (impl-round on #1250, product-tier: real `creds.sh` driven by a loopback
 listener and a `getent` stub, `/etc/hosts` semantics in `debian:12` under podman).
+
+## ⚪ B730 — CLOSED BY #<pr>: `LB up` was classed as an ANSWER, which SUPPRESSED the powered-off warning
+
+Filed 2026-09-11 as "the `LB up` / `silent` split is an artifact of ROW ORDER" — true, and it
+understated the defect. An implementation round measured the consequence:
+
+`_reach_ingress` writes the `_route_dead` sentinel the FIRST time a curl returns 000; every later
+ingress row short-circuits to `LB up` WITHOUT PROBING. That is a performance cache. Promoting
+`LB up` to the `answered` bucket gave it semantic weight it never had, and the aggregate then said
+the estate was alive on the strength of rows nobody asked about.
+
+MEASURED by the round against a listener that accepts TCP and closes — exactly ONE HTTP probe
+issued in the whole run, returning 000:
+
+    reachable: 0 of 11 serving, 8 answered but served nothing, 3 silent.
+               Something IS answering, so the estate is not off ...
+    grep -c 'needs the lab'  ->  0        <- THE PRECONDITION BLOCK GONE
+
+...while `make fetch-harbor-ca` and the `re-check:` register still printed. Same facts with the
+cache removed: `0 of 11 — NOTHING answered ... Consistent with the lab being OFF`, and the
+precondition FIRES. One optimisation, two opposite verdicts — and the wrong one hid the warning
+that stops a 2x10s `make argocd-password` dead end.
+
+FIXED: `_reach_class` classes `LB up` as `skip`. Its producer's own comment already said "the TCP
+probe passed and we did not learn anything about this route", which is the `skip` bucket's
+definition. RED-proven by putting it back.
+
+RESIDUAL, still open and NOT fixed: the TABLE still shows `silent` on the first ingress row and
+`LB up` on the rest for one identical state, so two cells disagree by evaluation order. The
+aggregate no longer repeats that split (both are out of the denominator), but an operator reading
+the column sees it. The producer is where the rows must be made to agree.
+
+## ⚪ B731 — CLOSED by PR #1252: `no backend` had no remedy — and the FIRST fix was FALSE for a 404
+
+⚠️ **CLOSED 2026-09-11, and read the two refutations before touching this area again.** The fix
+took THREE commits because the first two were each refuted by the round that followed them.
+
+**Round 5 (the original finding — below) was right.** The gate was conjoined on `_reach_ok == 0`,
+so the live state that produced it (10 serving + 2 `no backend`) suppressed the only sentence that
+explains a 5xx. And that conjunct never did the job its comment claimed: the stale-DNS state it
+cited has `_reach_half == 0`, so `_reach_half > 0` alone already excluded it.
+
+**Round 6 refuted the fix, in both halves.**
+
+1. **`_reach_half` IS NOT THE 5xx BUCKET.** It is `_reach_class`'s `answered` CLASS —
+   `no backend` (5xx) **plus `no route` (404) plus the catch-all** (`HTTP <n>`). Relaxing the gate
+   to `_reach_half > 0` therefore turned a rarely-fired vague sentence into a frequently-fired
+   specific one that is **FALSE for a 404**. MEASURED on the parent commit with a 404 fixture: it
+   printed *"the route IS rendered"* and *"kubectl -n \<app\> get pods"* for a hostname the
+   ingress never learned — **two lines under a legend the same diff added** saying *"no route = the
+   ingress does not know that hostname"*, and **certified by an assertion the same diff added**.
+   Fixed with `_reach_5xx` / `_reach_404`, counted on the **CELL** not the class; 404 now gets its
+   own sentence pointing at the ingress.
+2. **"Its namespace is the name in the Service column" is FALSE.** The column reads `Gitea` and
+   `Tekton`; the namespaces are `gitea` and `tekton-pipelines` — and all three infra namespaces are
+   operator knobs, so **no rule over that column can be right**. The values were in scope via
+   `load_env` and referenced **zero** times. The namespace is now carried as a **sixth `add_row`
+   field**. Verified independently: all six `deploy/*/kustomization.yaml` namespaces equal their
+   registry name, and the three infra defaults match `49-psa-check.sh`'s triple exactly.
+
+**Also shipped with it:** the kubectl remedy carries its **precondition** (this report prints
+`cluster : not reachable` in renders where a row can still read `no backend` — the ingress answers
+from its own LB and does not need our kubeconfig); `silent` was the **FIFTH** producer value with
+no reader-facing definition, while the legend's own comment listed it among those "explained".
+
+**Caught before it shipped:** `${6//[$_sep]/ }` under `set -u` dies `6: unbound variable` on the
+three call sites that legitimately pass five arguments.
+
+`test-creds-show.sh` 177 → 190; **8 new assertions RED-proven against the parent** in a worktree.
+The table is **byte-unchanged**, measured: the whole no-probe render diffs parent-vs-tip to a
+single temp-path line. ⚠️ One of those assertions first **passed on the parent** because it matched
+the **legend** rather than the remedy — the trap that file records one block up.
+
+### The original finding, kept
+
+MEASURED on the live lab 2026-09-11, during the post-restart window:
+
+    javawebapp    ...  no backend
+    dotnetwebapp  ...  no backend
+    reachable: 10 of 12 serving, 2 answered but served nothing, 0 silent.
+
+`grep -cE 'build-apps|run the pipeline|still starting'` over that whole render: **0**. Every other
+finding in this report carries a remedy — the DNS advice block, the per-target cert block, the
+estate-down precondition. This one names a problem and stops.
+
+⚠️ AND THE OBVIOUS REMEDY IS PREMISED ON A FALSE CLAIM. `_reach_ingress`'s own comment says a 503 is
+
+    "the NORMAL state after `make install-all`, which builds no app image (B529) —
+     so it means 'run the pipeline', not 'the ingress is broken'."
+
+`Makefile:1076` ends `install-all` with **`build-apps`**, and its help says "so the demo actually
+SERVES". The comment was TRUE in the B529 era and a later change falsified it — the same
+un-gateable class (`hooks.md`) a round caught in this file this morning. Writing "run the pipeline"
+from it would ship advice whose stated trigger cannot occur.
+
+⚠️ AND THE CAUSE I ACTUALLY MEASURED WAS NEITHER. Both rows went to `serving` ~3 minutes later with
+NOTHING done in between — the pods were still starting after the lab restart. So a remedy that says
+"run the pipeline" would send an operator to run a build for a condition that clears itself.
+
+So the honest note must DISCRIMINATE, and this report cannot do it from a status code alone:
+a 503 is identical whether the pods are starting, crash-looping, or were never built. Any remedy
+must therefore either say both and cost nothing, or acquire the discriminating fact — which is a
+cluster read this printer deliberately does not do for the app rows.
+
+Fix the comment FIRST (it is a false claim in a guarded file), then design the note.
+Do NOT implement the note without an idea-round: it is a new operator-facing remedy (RULE ZERO-V).
+
+## ⚪ B566 — CLOSED: a fixed `/tmp` fixture path made two parallel gate runs read each other's data
+
+A gate test reused `ci.yml`'s literal `/tmp/ci-jobs.tsv`. That path is CORRECT in the workflow — a
+GitHub runner is a fresh VM with one job in it — and unsafe in a test, where two runs in parallel
+worktrees share the one file and silently read each other's fixture. Fixed by redirecting into the
+run's own directory; the substitution is a PATH only, so the logic under test is untouched.
+
+Cited by `scripts/test-ci-pass-retry.sh:70` as "the B566 class". Row added 2026-09-11 so the
+citation resolves — it had none (B719).
+
+## ⚪ B567 — CLOSED: Tekton pulled a PUBLIC image from inside the air gap, for the life of the repo
+
+Tekton's controller injects a `place-scripts` init container from a hardcoded `-shell-image` FLAG
+STRING, so `cgr.dev/chainguard/busybox` was fetched from the public internet on every TaskRun —
+inside the air gap. The incident shape is what makes it nasty: **a public image in an INIT
+container**, which a naive "check the workload image" scan does not look at.
+
+Guarded by `scripts/97-verify-workload-images.sh` + `scripts/test-workload-images.sh` (which carries
+the init-container case explicitly). ⚠️ Its named blind spot: kaniko's `.image` is the DESTINATION it
+pushes, not the base it pulled FROM, so a public `FROM` is INVISIBLE to any run-time pod-image check
+— that half is covered at build time by `check-selfbuilt` and by the manifest host scan (B568).
+
+Row added 2026-09-11 so the citation resolves (B719).
+
+## ⚪ B568 — CLOSED: the unhandled-registry-host scanner, the BUILD-TIME half of B567
+
+`lib/hostscan.sh` scans manifests for registry hosts that nothing remaps to Harbor — the static
+counterpart to B567's run-time gate. Tested by `scripts/test-hostscan.sh`.
+
+Row added 2026-09-11 so the citation resolves (B719).
+
+## ⚪ B569 — CLOSED: `e2e-kind` pinned the ingress controller TWICE, and the second pin silently won
+
+The target carried a `$(origin INGRESS_CONTROLLER)` export AND a literal `INGRESS_CONTROLLER=istio`
+in the `$(MAKE)` goal list. A sub-make COMMAND-LINE variable outranks the caller's own command line,
+so `make e2e-kind INGRESS_CONTROLLER=traefik` silently ran **istio** — verbatim the bug the comment
+above the target claimed to have FIXED, and an inversion of the invariant at `Makefile:147`.
+
+⚠️ THE OBVIOUS RED-PROOF DOES NOT WORK, and an adversary round prescribed it anyway: `make -n`
+prints recipe TEXT while a target-specific `export` lives in the ENVIRONMENT, so the two invocations
+look identical. Guarded by `scripts/test-e2e-ingress-pin.sh`.
+
+Row added 2026-09-11 so the citation resolves (B719).
+
+## ⚪ B732 — REFUTED: the Lab-access legend is NOT incomplete; its markers are explained by a STRONGER mechanism
+
+**Filed from a persona read** (2026-09-10) as: *the Lab-access legend defines `<not set>` while the
+cells use `<not read>` (9), `<could not read node addresses>` (7) and `<not readable>` (2)* — so a
+derived legend, like the one the Reachable column already has, was the obvious fix.
+
+**MEASURED 2026-09-11, and the premise does not survive it.** Two things were wrong with the filing:
+
+1. **The counts are of occurrences in the SOURCE, not in a render**, and most of them are in the
+   **services** table (headlamp's `<not read>`, Harbor's `<not read>`), not the lab one.
+2. **The SSH row's markers are already explained — by name, with their CAUSE**, which is strictly
+   more than a legend entry would give. Driven with a `kubectl` stub returning a Forbidden on the
+   node query (`CREDS_NO_PROBE=0`, `VKS_NAMESPACE` set), the render is:
+
+        guest node SSH: the server ANSWERED but the addresses were not readable — see the
+                        note below.
+        ...
+        guest node SSH  <not allowed to read addresses>  vmware-system-user  <forbidden>
+        ...
+        Guest-node SSH password NOT read: could not ask — FORBIDDEN: this identity may not read
+          that in 'ns1'. Ask your platform admin.
+        Guest-node ADDRESSES not read either — same cause as the line above.
+
+   `_ssh_header_line` (five arms, keyed on the RETURN CODE not the rendered cell) sits above the
+   table and `_ssh_state` / `_ssh_ep_state` each get their own sentence below it. Both markers in
+   that render are accounted for, and the reader is told what to DO.
+
+**So a derived legend here would DUPLICATE an explanation that already names the cause** — and a
+second, weaker statement of the same fact is how two homes drift apart. Do not build it.
+
+⚠️ **What is NOT refuted, and is the honest residual:** only the FORBIDDEN arm was measured. The
+other `_ssh_tok` values (`<no kubeconfig>`, `<ambiguous>`, `<none>`, `<no key>`, `<empty>`) and the
+`<no node address yet>` endpoint were not driven. If one of those renders WITHOUT a matching
+sentence, that is a real gap — but it is a gap in the SENTENCE, not in the legend, and the fix is
+another arm beside the four that exist.

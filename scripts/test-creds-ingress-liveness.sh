@@ -101,6 +101,18 @@ _DEAD='is NOT ANSWERING on port'
 
 # ── 1. THE RED. Accept-then-RST: TCP says alive, HTTP completes nothing. ─────────────────────────
 port="$(listen rst)"; out="$(render 127.0.0.1 "$port")"; _kill_srv
+# NO REINSTALL ESCALATION in this paragraph (vks-adversary round 4, measured live): with a silent Harbor
+# every guest pod was ImagePullBackOff, and `re-run the ingress install` would block in helm --wait.
+if grep -qF 're-run the ingress install' <<< "$(grep -A6 -F "$_WARN" <<< "$out")"; then
+  bad "accept-then-RST: the paragraph still escalates to 're-run the ingress install' before Harbor is known"
+else
+  ok "accept-then-RST: no reinstall escalation before the table (Harbor's own row decides that)"
+fi
+if grep -qF 'ask whoever runs the lab' <<< "$(grep -A7 -F "$_WARN" <<< "$out")"; then
+  ok "accept-then-RST: the paragraph has a stopping condition (it prints where the after-table arm cannot)"
+else
+  bad "accept-then-RST: the paragraph loops 're-run in a few minutes' with no stopping condition"
+fi
 if grep -qF "$_WARN" <<< "$out"; then
   ok "accept-then-RST: the routeless-gateway warning appears"
 else

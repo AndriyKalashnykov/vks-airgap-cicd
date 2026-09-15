@@ -155,9 +155,60 @@ ck "after a 000 the sentinel is SET (the first row still says silent)" \
    "$( ( eval "$_fn"; _ing="127.0.0.1:1"; _ing_live=1; _route_dead="$_sc"
          CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=1 _reach_ingress dead.local ) )" "silent"
 ck "the sentinel file was created" "$( [ -e "$_sc" ] && echo yes || echo no )" "yes"
-ck "a LATER row short-circuits to LB up instead of timing out again" \
+# ⚠️ THIS BLOCK HAS PINNED THE ARITHMETIC OF A BUG TWICE. First it asserted a later row must
+# short-circuit after ONE failure; then, after that was fixed, after TWO. Both are statements that a
+# HEALTHY row must go UNPROBED — and an un-asked row cannot contradict "NOTHING answered", which is
+# how a serving ingress came to be reported as "Consistent with the lab being OFF" (measured over 9
+# rows at several recovery points). So assert the PROPERTY the cache is actually for — a bounded
+# COST — never the skipping, which was the defect.
+#
+# ⚠️ AND RESET THE SENTINEL PER CASE. `$_sc` accumulates one byte per failure across every `ck` in
+# this block, so the cases were ORDER-COUPLED: inserting one unrelated failing case above shifted
+# the counts and reddened two assertions whose names blame the cold-start protection, reading as
+# "I broke the fix".
+: > "$_sc"
+ck "strike 1: the row still says silent" \
+   "$( ( eval "$_fn"; _ing="127.0.0.1:1"; _ing_live=1; _route_dead="$_sc"
+         CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=1 _reach_ingress dead1.local ) )" "silent"
+ck "after ONE failure a later row is still PROBED (a transient 000 must not speak for the rest)" \
    "$( ( eval "$_fn"; _ing="127.0.0.1:${PORT}"; _ing_live=1; _route_dead="$_sc"
-         CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _reach_ingress ok.local ) )" "LB up"
+         CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _reach_ingress ok.local ) )" "serving"
+: > "$_sc"; printf '..' > "$_sc"     # two strikes, set EXPLICITLY rather than accumulated
+ck "after TWO failures a later row is STILL PROBED — the budget degrades, the probe does not vanish" \
+   "$( ( eval "$_fn"; _ing="127.0.0.1:${PORT}"; _ing_live=1; _route_dead="$_sc"
+         CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _reach_ingress ok.local ) )" "serving"
+# THE COST BOUND, which is what the cache exists to buy. A hanging responder (accepts TCP, never
+# replies) is the shape that motivated it: nine rows at the 2s default measured 18.1s.
+_hang_port="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()' 2>/dev/null || echo 0)"
+if [ "${_hang_port:-0}" -gt 0 ]; then
+  python3 -c 'import socket,sys
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(64); held=[]
+while True:
+    try: c,_=s.accept(); held.append(c)
+    except Exception: break' "$_hang_port" >/dev/null 2>&1 &
+  _hp=$!
+  sleep 1
+  : > "$_sc"; printf '..' > "$_sc"
+  _t0="$(date +%s%N)"
+  for _i in 1 2 3 4 5 6 7 8 9; do
+    ( eval "$_fn"; _ing="127.0.0.1:${_hang_port}"; _ing_live=1; _route_dead="$_sc"
+      CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=2 _reach_ingress "h${_i}.local" ) >/dev/null
+  done
+  _ms=$(( ( $(date +%s%N) - _t0 ) / 1000000 ))
+  kill "$_hp" 2>/dev/null || true
+  # CONTROL: the degraded budget must actually be SHORTER than the normal one, or "under budget"
+  # would be satisfied by a probe that never happened.
+  # ⚠️ THIS SUITE'S HELPER IS `ck`, not ok/bad — those belong to test-creds-show.sh. Calling them
+  # here died `ok: command not found` AFTER the assertions had printed, so the suite exited non-zero
+  # with no FAIL line: a harness error wearing a product failure's clothes.
+  ck "route-cost: the rows really were PROBED (not a no-op)" \
+     "$( [ "$_ms" -gt 200 ] && echo probed || echo "no-op(${_ms}ms)" )" "probed"
+  # 9 rows x 0.5s degraded ~ 4.5s. The un-cached cost this bound exists to prevent is 18.1s.
+  ck "route-cost: 9 hanging rows stayed under budget (un-cached is ~18100ms)" \
+     "$( [ "$_ms" -lt 9000 ] && echo under || echo "over(${_ms}ms)" )" "under"
+fi
+: > "$_sc"
 ck "with NO sentinel the same row probes normally (the short-circuit is not always-on)" \
    "$( ( eval "$_fn"; _ing="127.0.0.1:${PORT}"; _ing_live=1; _route_dead="$T/never-created"
          CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _reach_ingress ok.local ) )" "serving"
