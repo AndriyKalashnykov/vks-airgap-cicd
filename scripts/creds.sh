@@ -791,6 +791,8 @@ fi
 # probe answers it. Pinned by STATE 8 in scripts/test-creds-show.sh.
 
 # Does the cluster actually answer? Bounded — never hang the summary on an unreachable API server.
+# (Reachable only if KUBECONFIG is EMPTY. load_env always exports a default path, so on a fresh box the
+#  probe runs and lands in NO_KUBE_TARGET/nofile below — this default is kept as a safe floor, not a state.)
 _cluster="not asked — KUBECONFIG is not set"
 _cluster_notasked_why='unset'   # quoted: bare `unset` reads as the builtin (SC2209)
 if [ "$_no_probe_snapshot" = 1 ]; then
@@ -812,6 +814,7 @@ fi
 # answered and REJECTED the credential" and "no route". Only the last is evidence the lab is down;
 # a rejected token is the ordinary state right after `lab-start`, and it proves the API is UP.
 _cluster_state=notasked
+_cl_ans="The cluster answered"; _cl_did="the cluster API did"
 if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; then
   _reach_err="$(mktemp)"
   # ⚠️ CAPTURE THE EXIT CODE. The default above claims "not reachable", which is a statement about
@@ -837,33 +840,60 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
           # if/elif, NOT a nested `case`: check-classifier-consumers reads this consumer up to the FIRST
           # `esac`, so an inner one hid every class below it from the gate (measured: it FAILED here).
           _reach_txt="$(cat "$_reach_err" 2>/dev/null || true)"
-          if [[ "$_reach_txt" == *"no such host"* ]]; then
-            _cluster="not asked — its address does not resolve on this machine (nothing was dialled)"
+          # ALLOW-LIST, most specific first (round 4, ran-it): the class also holds DNS failures and a
+          # dead LOCAL proxy, where nothing reached the cluster; a deny-list with a DEFINITIVE default
+          # blamed the cluster for both. Unplaced text is `unknown`, which needs two silent endpoints.
+          if [[ "$_reach_txt" == *"lookup "* ]]; then
+            _cluster="not asked — its address could not be looked up on this machine (nothing was dialled)"
             _cluster_state=notasked; _cluster_notasked_why=dns
+          elif [[ "$_reach_txt" == *"proxyconnect"* ]]; then
+            _cluster="not asked — this machine's proxy refused the connection (nothing reached the cluster)"
+            _cluster_state=notasked; _cluster_notasked_why=proxy
+          elif [[ "$_reach_txt" == *"connection refused"* || "$_reach_txt" == *"no route to host"* \
+               || "$_reach_txt" == *"network is unreachable"* || "$_reach_txt" == *"host is down"* ]]; then
+            _cluster="not answering — the connection was refused or had no route"
+            _cluster_state=noanswer
           elif [[ "$_reach_txt" == *"context deadline exceeded"* || "$_reach_txt" == *"Client.Timeout exceeded"* \
                || "$_reach_txt" == *"i/o timeout"* || "$_reach_txt" == *"TLS handshake timeout"* ]]; then
             _cluster="UNDETERMINED: kubectl's own request timed out (that alone does not mean it is down)"
             _cluster_state=timeout
           else
-            _cluster="not answering — the connection was refused or had no route"
-            _cluster_state=noanswer
+            _cluster="UNDETERMINED: kubectl could not connect, and its error is not one this report can place"
+            _cluster_state=unknown
           fi ;;
         UNAUTHORIZED)
           _cluster="answering, but it REJECTED this kubeconfig's credential"; _cluster_state=answered ;;
         FORBIDDEN)
           # A 403 AUTHENTICATED us. "Rejected credential" sent operators to re-login — an SSO attempt.
-          _cluster="answering; the credential was accepted but is not allowed this request"; _cluster_state=answered ;;
-        STALE_CA)
-          _cluster="answering, but its certificate does not verify for this kubeconfig (untrusted CA or wrong name)"
+          # EXCEPT as system:anonymous, where no credential was accepted at all (round 4, ran-it).
+          if [[ "$(cat "$_reach_err" 2>/dev/null || true)" == *"system:anonymous"* ]]; then
+            _cluster="answering, but it accepted no credential from this kubeconfig (anonymous) and refused the request"
+          else
+            _cluster="answering; the credential was accepted but is not allowed this request"
+          fi
           _cluster_state=answered ;;
+        STALE_CA)
+          # "wrong name" may mean a DIFFERENT endpoint — so later text must not say THE cluster answered.
+          _cluster="answering, but its certificate does not verify for this kubeconfig (untrusted CA or wrong name)"
+          _cluster_state=answered
+          _cl_ans="Something answered at the cluster address"; _cl_did="something at the cluster address did" ;;
         PLAINTEXT)
-          _cluster="answering, but not over TLS (a wrong scheme or port?)"; _cluster_state=answered ;;
+          _cluster="answering, but not over TLS (a wrong scheme or port?)"; _cluster_state=answered
+          _cl_ans="Something answered at the cluster address"; _cl_did="something at the cluster address did" ;;
         KUBECONFIG_UNUSABLE)
           _cluster="not asked — KUBECONFIG names something missing or unusable, or its credential plugin failed"
           _cluster_state=notasked; _cluster_notasked_why=config ;;
         NO_KUBE_TARGET)
-          _cluster="not asked — the kubeconfig has no current target"
-          _cluster_state=notasked; _cluster_notasked_why=notarget ;;
+          # load_env always exports a default KUBECONFIG path, and kubectl reads a MISSING file as an empty
+          # config and dials localhost:8080 — so "no current target" usually means "the file is not there".
+          if [ ! -s "${KUBECONFIG%%:*}" ]; then
+            _cluster="not asked — KUBECONFIG (${KUBECONFIG%%:*}) does not exist or is empty"
+            _cluster_notasked_why=nofile
+          else
+            _cluster="not asked — the kubeconfig has no current context"
+            _cluster_notasked_why=notarget
+          fi
+          _cluster_state=notasked ;;
         *)
           _cluster="UNDETERMINED: kubectl failed with an error this report does not classify"
           _cluster_state=unknown ;;
@@ -1063,7 +1093,9 @@ if [ "$_pre_off" = 1 ]; then
       case "${_cluster_notasked_why:-unset}" in
         nokubectl) _cclause=' (kubectl is not installed, so the cluster was not asked)' ;;
         unset)     _cclause=' (KUBECONFIG is not set, so the cluster was not asked)' ;;
-        dns)       _cclause=" (the cluster's address does not resolve on this machine, so it was not asked)" ;;
+        dns)       _cclause=" (the cluster's address could not be looked up on this machine, so it was not asked)" ;;
+        proxy)     _cclause=" (this machine's proxy refused the connection, so the cluster was not asked)" ;;
+        nofile)    _cclause=' (there is no kubeconfig file at KUBECONFIG, so the cluster was not asked)' ;;
         *)         _cclause=' (this report had no usable kubeconfig to ask the cluster)' ;;
       esac ;;
   esac
@@ -1366,10 +1398,14 @@ elif [ -n "${INGRESS_LB_IP:-}" ]; then
     #     i.e. INSIDE that window -- the highest-probability moment for this warning -- where
     #     "re-run the ingress install" tears down a healthy ingress that was merely starting.
     echo "  ⚠️  ${INGRESS_LB_IP} accepts TCP connections but completed no HTTP request within"
+    # NO REINSTALL ESCALATION HERE (vks-adversary round 4, measured live 28 min after lab-start): every
+    # guest pod — the ingress gateway's included — was ImagePullBackOff on a Harbor that was not answering,
+    # so `re-run the ingress install` would block in `helm --wait` on the same unpullable image. Whether a
+    # reinstall is warranted is only knowable after the table, where Harbor's own row is probed.
     echo "      ${CREDS_ROUTE_TIMEOUT_SECONDS:-${CREDS_PROBE_TIMEOUT_SECONDS:-2}}s. That is a gateway with no routes attached, an ingress still"
-    echo "      starting (a fresh LoadBalancer can take 5-60s to wire its data path), or TLS on"
-    echo "      port ${INGRESS_PROBE_PORT:-80}. The line below is correct IF this is your current ingress."
-    echo "      Re-run 'make creds' in a minute; only if it persists, re-run the ingress install."
+    echo "      starting (a fresh LoadBalancer can take 5-60s to wire its data path), pods that cannot"
+    echo "      start (their images come from a registry that is not answering), or TLS on port ${INGRESS_PROBE_PORT:-80}."
+    echo "      The line below is correct IF this is your current ingress. Re-run 'make creds' in a few minutes."
     echo
   fi
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
@@ -2756,8 +2792,8 @@ if [ "${_reach_total:-0}" -gt 0 ]; then
       # vks-adversary 2026-09-14): stale service addresses from an earlier install look like this.
       # NOT "probably from an earlier install": right after `lab-start` the addresses are CURRENT and
       # the services are simply not up yet (lab-start waits for neither). Nothing here tells those apart.
-      printf '  reachable: 0 of %s — none of the recorded service addresses answered, but the cluster\n' "$_reach_total"
-      printf '             API did, so the lab is at least partly up. Its services are either still starting\n'
+      printf '  reachable: 0 of %s — none of the recorded service addresses answered, but %s,\n' "$_reach_total" "$_cl_did"
+      printf '             so the lab is at least partly up. Its services are either still starting\n'
       printf '             (re-run make creds in a few minutes) or at addresses from an earlier install;\n'
       printf '             nothing here can tell which.\n'
     else
@@ -2802,8 +2838,18 @@ if [ "${_reach_total:-0}" -gt 0 ]; then
     # The cluster answered, so the silent rows are not a powered-off lab. Right after `lab-start` they
     # are services still starting (it waits for neither); after a rebuild they may be stale addresses.
     if [ "${_cluster_up:-0}" = 1 ] && [ "$_sil" -gt 0 ]; then
-      printf '             The cluster answered, so the silent rows are either still starting (re-run\n'
-      printf '             make creds in a few minutes) or at an address from an earlier install.\n'
+      if [ "${_reach_harbor_cell:-}" = silent ]; then
+        # MEASURED live (round 4): with Harbor silent every guest pod was ImagePullBackOff on it — the
+        # other silent rows follow from this one, so name it rather than leave the reader to re-run forever.
+        printf '             Harbor is not answering, and this repo'"'"'s installs pull their images from it (the\n'
+        printf '             ingress'"'"'s included), so nothing behind the ingress can start until it does.\n'
+        printf '             Re-run make creds in a few minutes; if Harbor stays silent, ask whoever runs the lab.\n'
+      else
+        printf '             %s, so the silent rows are most likely still starting: re-run make creds\n' "$_cl_ans"
+        printf '             in a few minutes. If they stay silent across re-runs, the lab is not finishing its\n'
+        printf '             start, the addresses are from an earlier install, or this machine cannot reach them:\n'
+        printf '             re-run the ingress install only then, or ask whoever runs the lab.\n'
+      fi
     fi
     # ⚠️ GATED ON THE BUCKET THAT JUSTIFIES IT, not merely on "nothing is serving". A round
     # measured this sentence telling an operator to wait for backends in a state that was 9/11
@@ -2940,7 +2986,10 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
     if [ -n "$_ca_abs" ] && [ -f "$_ca_abs" ] && [ -r "$_ca_abs" ] && [ -s "$_ca_abs" ]; then
       # The curl hangs while Harbor is silent; say when it applies instead of prescribing a dead end.
       _h_when=""
-      if [ "${_reach_harbor_cell:-}" != serving ]; then _h_when=" (once Harbor answers)"; fi
+      case "${_reach_harbor_cell:-}" in
+        silent)     _h_when=" (once Harbor answers)" ;;
+        unresolved) _h_when=" (once its name resolves on this machine — see make show-dns-records)" ;;
+      esac
       printf '    - Harbor%s: if that CA is the one that signed it, this verifies —\n      curl --cacert %s %s://%s\n' "$_h_when" \
         "$_ca_abs" "$harbor_scheme" "${HARBOR_URL}"
     else

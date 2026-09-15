@@ -2795,7 +2795,7 @@ while True:
         "a reader stops at the first advice they can act on; the verdict must precede it"
   fi
   for _want in 'silent: the ingress 127.0.0.1 (a stored address' 'Check this machine can reach the lab network' 'Re-run: make creds' \
-               'no usable kubeconfig to ask the cluster'; do
+               'so the cluster was not asked'; do
     case "$_off_out" in
       *"$_want"*) ok "lab-off: the headline carries '$_want'" ;;
       *)          bad "lab-off: the headline is missing '$_want'" "name the silent endpoint, the reach check, and the re-run" ;;
@@ -2919,7 +2919,7 @@ echo "Unable to connect to the server: dial tcp: lookup api.gc.lab.test on 127.0
 ' "INGRESS_LB_IP=127.0.0.1
 INGRESS_PROBE_PORT=${_ip}
 " "$_getent_no_test" KUBECONFIG=@T@/kc)"
-  if [ "$(printf '%s' "$_nh_out" | grep -c 'does not resolve on this machine (nothing was dialled)')" -ge 1 ]; then
+  if [ "$(printf '%s' "$_nh_out" | grep -c 'could not be looked up on this machine (nothing was dialled)')" -ge 1 ]; then
     ok "no-such-host: the cluster line says nothing was dialled"
     if [ "$(printf '%s\n' "$_nh_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
       ok "no-such-host: a local DNS failure + one refused ingress is not the lab-off signature"
@@ -2953,6 +2953,89 @@ INGRESS_PROBE_PORT=${_ip}
     *'the credential was accepted'*) ok "forbidden: a 403 is reported as an accepted credential, not a rejected one" ;;
     *) bad "forbidden: a 403 is not reported as an accepted credential" "a rejected-credential line sends the operator to spend an SSO attempt" ;;
   esac
+
+
+  # (1g) DNS SERVFAIL ("server misbehaving") and (1h) a dead LOCAL proxy: nothing reached the cluster.
+  #      Round 4 (ran-it): the deny-list's DEFINITIVE default fired the headline and blamed the cluster.
+  _sm_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "Unable to connect to the server: dial tcp: lookup api.gc.lab.test on 127.0.0.53:53: server misbehaving" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  case "$_sm_out" in
+    *'could not be looked up on this machine'*) ok "dns-servfail: 'server misbehaving' is a local lookup failure, not a refused connection" ;;
+    *) bad "dns-servfail: a local DNS SERVFAIL is not reported as a lookup failure" "match 'lookup ' before any connection text" ;;
+  esac
+  if [ "$(printf '%s\n' "$_sm_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+    ok "dns-servfail: a local DNS failure + one refused ingress is not the lab-off signature"
+  else
+    bad "dns-servfail: a local DNS failure fired the lab-off headline" "nothing was dialled"
+  fi
+  _px_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "Unable to connect to the server: proxyconnect tcp: dial tcp 127.0.0.1:3128: connect: connection refused" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  case "$_px_out" in
+    *"this machine's proxy refused the connection"*) ok "proxy: a refused LOCAL proxy is blamed on the proxy, not the cluster" ;;
+    *) bad "proxy: a refused local proxy is reported as the cluster refusing" "match 'proxyconnect' before 'connection refused'" ;;
+  esac
+  if [ "$(printf '%s\n' "$_px_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+    ok "proxy: a dead local proxy + one refused ingress is not the lab-off signature"
+  else
+    bad "proxy: a dead local proxy fired the lab-off headline" "nothing reached the cluster"
+  fi
+
+  # (1g2) the RESOLVER itself refused (round 4 mechanics): "lookup … read udp …: connection refused" contains
+  #       "connection refused" — `lookup ` must win, or a dead local resolver reads as a refused cluster.
+  _rr_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "Unable to connect to the server: dial tcp: lookup api.gc.lab.test on 127.0.0.53:53: read udp 127.0.0.1:40000->127.0.0.53:53: read: connection refused" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  if [ "$(printf '%s\n' "$_rr_out" | grep -c '^lab-off: 0$')" -eq 1 ] \
+     && [ "$(printf '%s' "$_rr_out" | grep -c 'could not be looked up on this machine')" -ge 1 ]; then
+    ok "dns-resolver-refused: a refused LOCAL resolver is a lookup failure, not a refused cluster"
+  else
+    bad "dns-resolver-refused: a refused local resolver was read as the cluster refusing" "match 'lookup ' before 'connection refused'"
+  fi
+
+  # (1i) a 403 as system:anonymous accepted NO credential.
+  _an_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "Error from server (Forbidden): forbidden: User \"system:anonymous\" cannot get path \"/version\"" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  case "$_an_out" in
+    *'accepted no credential'*) ok "forbidden-anonymous: an anonymous 403 is not reported as an accepted credential" ;;
+    *) bad "forbidden-anonymous: an anonymous 403 is reported as an accepted credential" "system:anonymous means nothing was accepted" ;;
+  esac
+
+  # (1j) PLAINTEXT may be a different endpoint: never say THE cluster answered.
+  _pt_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "Unable to connect to the server: http: server gave HTTP response to HTTPS client" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+HARBOR_URL=127.0.0.1:$(_closed_port)
+HARBOR_PASSWORD=x
+HARBOR_INSECURE=1
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  if [ "$(printf '%s' "$_pt_out" | grep -c 'not over TLS')" -ge 1 ]; then
+    ok "plaintext: the cluster line reports a non-TLS answer (the case is live)"
+    # POSITIVE assertion. The absence form was RED-proven VACUOUS: the old wording split "but the cluster"
+    # and "API did" across two lines, so a single-line absence match could never fire on it.
+    case "$_pt_out" in
+      *'something at the cluster address did'*) ok "plaintext: says something answered at the cluster address, not that the cluster did" ;;
+      *) bad "plaintext: does not say it was only something at the cluster address" "a non-TLS reply may be a different endpoint" ;;
+    esac
+  else
+    bad "plaintext: the fixture did not reach the PLAINTEXT class — the case is vacuous" "fix the fixture, not the product"
+  fi
 
   # (2) ASKED, ANSWERED WITH A REJECTION: the API is UP. Never the lab-off headline.
   _ua_out="$(_lab_fixture '#!/bin/sh
@@ -3040,11 +3123,44 @@ ARGOCD_SERVER=127.0.0.1:${_lst_port}
   if [ "$(printf '%s\n' "$_ss_out" | grep -E '^  ArgoCD ' | grep -c 'serving$')" -ge 1 ]; then
     ok "up+starting: ArgoCD serves while the ingress is silent (the case is live)"
     case "$_ss_out" in
-      *'the silent rows are either still starting'*) ok "up+starting: the silent rows are explained (still starting, or a stale address)" ;;
+      *'the silent rows are most likely still starting'*) ok "up+starting: the silent rows are explained, with a stopping condition" ;;
       *) bad "up+starting: silent rows under a cluster that answered are left unexplained" "say they are still starting or at a stale address" ;;
     esac
   else
     bad "up+starting: ArgoCD did not read serving — the case is vacuous" "fix the fixture, not the product"
+  fi
+
+
+  # (4b) CLUSTER UP, HARBOR SILENT, ArgoCD serving: Harbor is the DEPENDENCY of the other silent rows
+  #      (measured live: every guest pod ImagePullBackOff on it). Name it and give a stopping condition.
+  _lst_pf2="$(mktemp)"
+  python3 -c 'import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(("127.0.0.1",0));s.listen(8);print(s.getsockname()[1],flush=True);time.sleep(60)' > "$_lst_pf2" &
+  _lst_pid2=$!
+  for _w in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do [ -s "$_lst_pf2" ] && break; sleep 0.2; done
+  _lst_port2="$(head -1 "$_lst_pf2")"
+  _hs_out="$(_lab_fixture '#!/bin/sh
+case "$*" in
+  *current-context*) echo stub-ctx ;;
+  *version*) exit 0 ;;
+esac
+exit 0
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+ARGOCD_SERVER=127.0.0.1:${_lst_port2}
+HARBOR_URL=127.0.0.1:$(_closed_port)
+HARBOR_PASSWORD=x
+HARBOR_INSECURE=1
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  kill "$_lst_pid2" 2>/dev/null; rm -f "$_lst_pf2"
+  if [ "$(printf '%s\n' "$_hs_out" | grep -E '^  Harbor \(registry\)' | grep -c 'silent$')" -ge 1 ] \
+     && [ "$(printf '%s\n' "$_hs_out" | grep -E '^  ArgoCD ' | grep -c 'serving$')" -ge 1 ]; then
+    ok "harbor-silent: Harbor is silent while ArgoCD serves under an answering cluster (the case is live)"
+    case "$_hs_out" in
+      *'Harbor is not answering'*'ask whoever runs the lab'*) ok "harbor-silent: Harbor is named as the dependency, with a stopping condition" ;;
+      *) bad "harbor-silent: the silent Harbor is not named as the dependency of the other silent rows" "measured: every guest image comes from it" ;;
+    esac
+  else
+    bad "harbor-silent: the fixture did not produce silent Harbor + serving ArgoCD — the case is vacuous" "fix the fixture, not the product"
   fi
 
   # A REACHABLE cluster with every recorded service address silent is NOT a powered-off lab — it is
