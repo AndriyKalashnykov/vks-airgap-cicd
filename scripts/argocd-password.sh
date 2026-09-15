@@ -134,25 +134,39 @@ _candidates() {
 # at the point of the read, which is why the caller could only see "empty" and waited 900s on an
 # EXPIRED token (measured on the live lab: 15 minutes for a secret it would never see).
 # Each candidate APPENDS, because there are two of them and they fail DIFFERENTLY — see _should_wait.
+# ⚠️ AND THE SUPERVISOR CANDIDATE'S stderr ALSO GOES TO ITS OWN FILE (arg 2), TRUNCATED PER CALL.
+# (2026-09-15, three design rounds.) Classifying the COMBINED file let a guest refusal SHADOW a real
+# Supervisor 401: classify_kube_failure's UNREACHABLE arm sits above UNAUTHORIZED, so "Supervisor
+# said 401, guest said refused" read as UNREACHABLE and the EXPIRED headline never printed. The cause
+# of a Supervisor read is decided from the Supervisor's own answer. Each attempt writes to a per-call
+# file that is then APPENDED synchronously — no process substitution, so no ordering question.
 _read_secret() {
-  local kc enc errf="${1:-/dev/null}"
+  local kc enc errf="${1:-/dev/null}" supf="${2:-/dev/null}" sup one
   : > "$errf" 2>/dev/null || true
+  : > "$supf" 2>/dev/null || true
+  sup="$(supervisor_kubeconfig 2>/dev/null || true)"
+  one="$(mktemp)"
   while IFS= read -r kc; do
     [ -n "$kc" ] && [ -f "$kc" ] || continue
     # BOUNDED, and stdin CLOSED — see the timing note below.
     if enc="$(KUBECONFIG="$kc" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl --request-timeout=5s \
                 -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret \
-                -o jsonpath='{.data.password}' </dev/null 2>>"$errf")" && [ -n "$enc" ]; then
-      printf '%s\t%s' "$kc" "$enc"; return 0
+                -o jsonpath='{.data.password}' </dev/null 2>"$one")" && [ -n "$enc" ]; then
+      rm -f "$one"; printf '%s\t%s' "$kc" "$enc"; return 0
     fi
+    cat "$one" >> "$errf" 2>/dev/null || true
+    if [ -n "$sup" ] && [ "$kc" = "$sup" ]; then cat "$one" >> "$supf" 2>/dev/null || true; fi
   done < <(_candidates)
+  rm -f "$one"
   return 1
 }
 
 # The read's stderr, kept for the WAIT decision below. A file, not a variable, because _read_secret
 # runs inside `$( )` — see its header. Removed on exit; an operator never sees or needs it.
-_ap_err="$(mktemp)"
-trap 'rm -f "$_ap_err"' EXIT
+_ap_err="$(mktemp)"; _ap_sup_err="$(mktemp)"
+trap 'rm -f "$_ap_err" "$_ap_sup_err"' EXIT
+# Set BEFORE the kubectl gate: with no kubectl the block below never runs, and the exit code reads them.
+_ap_sup_cls=""; _ap_exp=""
 
 # ── _should_wait <errfile> — is waiting the RIGHT thing, or will it never arrive? ────────────────
 # ⚠️ THE TEST IS A POSITIVE NotFound ON THE SECRET, NOT A CLASSIFICATION. classify_kube_failure has
@@ -239,7 +253,7 @@ if command -v kubectl >/dev/null 2>&1; then
   # 6s-delayed stdin for the full 6,004 ms, which on a terminal is an indefinite hang.
   # A report that hangs is worse than one that says <not set>: the operator Ctrl-Cs and never sees
   # the Context block explaining why the value is stale.
-  if ans="$(_read_secret "$_ap_err")" && [ -n "$ans" ]; then
+  if ans="$(_read_secret "$_ap_err" "$_ap_sup_err")" && [ -n "$ans" ]; then
     _split_answer "$ans"; enc="$ENC"
     log_info "read argocd-initial-admin-secret from ns/${ARGOCD_NAMESPACE} via ${ANSWERED_KC}"
     if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
@@ -280,22 +294,30 @@ if command -v kubectl >/dev/null 2>&1; then
   # lab, an EXPIRED Supervisor token bought a 900s wait for a secret that would never appear, while
   # `make creds` PRESCRIBED this command in exactly that state and called it "(it waits)". Same
   # forbidden-reads-as-absent class as B484.
+  # THE SUPERVISOR'S CAUSE, DECIDED ONCE, from its own stderr (see _read_secret), and used by BOTH the
+  # wait branch and the final diagnosis. Two derivations let `make argocd-password` and creds.sh's
+  # `--wait 0` call report opposite causes for the same inputs (round 2, measured).
+  # `kube_token_expiry` is OFFLINE (the JWT's own exp), so this costs no vCenter SSO attempt.
+  _ap_sup_cls="$(classify_kube_failure "$_ap_sup_err" 2>/dev/null || true)"
+  if [ "$_ap_sup_cls" = UNAUTHORIZED ]; then
+    _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
+  fi
   if [ "$_wait" -gt 0 ] && [ -z "${ARGOCD_ADMIN_PASSWORD:-}" ] && ! _should_wait "$_ap_err"; then
-    # classify_kube_failure WORDS this; it never DECIDES it (no NotFound arm — see _should_wait).
-    _ap_cls="$(classify_kube_failure "$_ap_err" 2>/dev/null || true)"
-    # ONE sentence, in the reader's vocabulary. This was two lines of the classifier explaining
-    # its own reasoning ("the read did not fail with a NotFound naming …", "classified: X") --
-    # our words, not theirs. What they need is that waiting will not help and why.
-    log_warn "not waiting: the secret is not still being created — the cluster rejected our credential."
+    # ONE sentence, in the reader's vocabulary, PER CAUSE: it used to say "the cluster rejected our
+    # credential" for every failure that was not a NotFound — false for a refusal, a bad cert, a 503.
+    case "$_ap_sup_cls" in
+      UNAUTHORIZED) log_warn "not waiting: the secret is not still being created — the Supervisor rejected our credential." ;;
+      UNREACHABLE)  log_warn "not waiting: the Supervisor could not be reached from this machine." ;;
+      *)            log_warn "not waiting: the read failed for a reason waiting cannot fix (see below)." ;;
+    esac
     # ⚠️ THE SSO COMMAND APPEARS ON EXACTLY ONE ARM BELOW: EXPIRED, where the token's own `exp`
     # makes the cause a FACT. Everywhere else there is deliberately NO command — the obvious remedy
     # performs a vSphere SSO bind and vCenter locks out PERMANENTLY after 3 failures, so it must
     # never be prescribed for a state this cannot decide. Keep this arm-for-arm identical to
     # creds.sh's `_rejected_why`; a round found the two copies DISAGREEING on the undecidable arm.
-    if [ "$_ap_cls" = UNAUTHORIZED ]; then
+    if [ "$_ap_sup_cls" = UNAUTHORIZED ]; then
       # The token's own exp claim separates "expired" from "rotated/revoked" — kubectl reports both
-      # as Unauthorized. Offline, so it costs none of the THREE vCenter SSO attempts before lockout.
-      _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
+      # as Unauthorized. `_ap_exp` was read once, above.
       case "$_ap_exp" in
         # ONE sentence, from lib/os.sh — NOT a hand-written copy. A round measured the two copies
         # DISAGREEING on the undecidable arm, and "locks out PERMANENTLY" missing from this file's
@@ -316,7 +338,7 @@ if command -v kubectl >/dev/null 2>&1; then
     _w=0
     while [ "$_w" -lt "$_wait" ]; do
       sleep 15; _w=$((_w + 15))
-      if ans="$(_read_secret "$_ap_err")" && [ -n "$ans" ]; then
+      if ans="$(_read_secret "$_ap_err" "$_ap_sup_err")" && [ -n "$ans" ]; then
         _split_answer "$ans"; enc="$ENC"
         log_info "read argocd-initial-admin-secret from ns/${ARGOCD_NAMESPACE} via ${ANSWERED_KC} (after ${_w}s)"
         _st="$(_password_state "$ANSWERED_KC")"
@@ -372,20 +394,40 @@ fi
 # exact conflation creds.sh's rc=124 arm was fixed for the same day. `kube_token_expiry` is
 # OFFLINE (it reads the JWT's own exp), so this costs none of the THREE vCenter SSO attempts
 # before permanent lockout. `_ap_err` is created at :154 with an EXIT trap, so it is still alive.
-if [ -z "${_ap_exp:-}" ] && [ -z "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
-  _ap_cls="${_ap_cls:-$(classify_kube_failure "$_ap_err" 2>/dev/null || true)}"
-  if [ "${_ap_cls:-}" = UNAUTHORIZED ]; then
-    _ap_exp="$(kube_token_expiry "$(supervisor_kubeconfig 2>/dev/null || true)" 2>/dev/null || printf 'UNKNOWN')"
-  fi
+# ── THE EXIT CODE CARRIES THE CAUSE (2026-09-15). creds.sh is this code's only consumer and keys on
+# it, never on the text below, so the cause is decided HERE, once, from the Supervisor's own answer:
+#   5  the Supervisor REJECTED an EXPIRED token            -> renewing is the fix (the SSO command)
+#   6  the Supervisor could not be reached from here        -> network; NO SSO command
+#   8  the Supervisor REJECTED a token that has NOT expired -> rotated/revoked; ask, NO SSO command
+#   7  the read failed for any other reason (bad cert, 503, Forbidden, a dead guest...)
+#   3  ABSENT: every attempt said NotFound, or nothing could be tried
+# 3 USED TO COVER ALL OF THEM, so the parent could only guess from the token, and a leftover expired
+# kubeconfig on an unreachable Supervisor was rendered as "renew" (one of THREE SSO attempts).
+_ap_code=3
+_ap_other="$(grep -vE '^[[:space:]]*$|Error from server \(NotFound\)' "$_ap_err" 2>/dev/null || true)"
+if [ "${_ap_exp%% *}" = EXPIRED ]; then _ap_code=5
+elif [ "$_ap_sup_cls" = UNREACHABLE ]; then _ap_code=6
+elif [ "$_ap_sup_cls" = UNAUTHORIZED ]; then _ap_code=8
+elif [ -n "$_ap_other" ]; then _ap_code=7
 fi
-case "${_ap_exp:-}" in
-  EXPIRED*)
+case "$_ap_code" in
+  5)
     log_error "Cannot read ArgoCD's password: the Supervisor token EXPIRED at ${_ap_exp#EXPIRED }."
     log_error "  ArgoCD is a Supervisor Service, so reading it needs that token. Two steps, in order:"
     log_error "    1. $(supervisor_renew_how)"
     log_error "    2. THEN re-run: make argocd-password"
     ;;
+  6)
+    # NOT "did not answer": UNREACHABLE also covers a DNS, proxy or no-route failure on THIS machine.
+    # No SSO command — a vCenter bind against an endpoint that cannot be reached helps nothing.
+    log_error "Cannot read ArgoCD's password: the Supervisor could not be reached from this machine."
+    log_error "  kubectl said: $(grep -m1 -vE '^[[:space:]]*$' "$_ap_sup_err" 2>/dev/null || true)"
+    log_error "  Check this machine's route, DNS and proxy to it, then re-run: make argocd-password"
+    ;;
   *)
+    if [ "$_ap_code" != 3 ]; then
+      log_error "Cannot read ArgoCD's password: the read failed: $(printf '%s\n' "$_ap_other" | head -1)"
+    fi
     log_error "No ArgoCD 'admin' password is available locally for this context."
     log_error "  Looked for argocd-initial-admin-secret in ns/${ARGOCD_NAMESPACE} via: $(_candidates | tr '\n' ' ')"
     log_error "  • real VKS: the secret is created by the ArgoCD instance. If it is genuinely gone,"
@@ -398,4 +440,4 @@ if [ "${VKS_STATE_KIND:-0}" = 1 ]; then
 log_error "  • KinD: set ARGOCD_ADMIN_PASSWORD in .env and re-run 'make install-argocd' for a known"
 log_error "    login, or ensure the cluster is up so the generated 'argocd-initial-admin-secret' is readable."
 fi
-exit 3
+exit "$_ap_code"

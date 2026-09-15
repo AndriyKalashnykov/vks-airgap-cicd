@@ -555,7 +555,8 @@ else harbor_pw="$(_unset_pw HARBOR_PASSWORD)"; _pw_unset_harbor=1; fi
 gitea_user="${GITEA_ADMIN_USER:-<unset — see GITEA_ADMIN_USER in .env.example>}"
 if [ -n "${GITEA_ADMIN_PASSWORD:-}" ]; then gitea_pw="$(_mask "$GITEA_ADMIN_PASSWORD")"
 else gitea_pw="$(_unset_pw GITEA_ADMIN_PASSWORD)"; _pw_unset_gitea=1; fi
-# ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
+# ArgoCD via the context-aware resolver. Its exit code carries the CAUSE (see argocd-password.sh's
+# exit table): 3 absent, 5 expired token, 6 unreachable, 7 other failure, 8 rotated token.
 # `--wait 0` is an ARGUMENT, not an env var: this is a PRINTER and must never block. argocd-password
 # defaults to a 900s wait for the still-reconciling case, and an env-var opt-out would be defeated by
 # the .env.example clobber class (load_env sources it with `set -a` AFTER the caller's environment).
@@ -672,15 +673,43 @@ else
     argo_pw="<not read — no answer within this report's ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s limit; make argocd-password waits longer>"
     # This cell now names OUR cap as the cause, so ArgoCD must stop contributing to a note that
     # blames the overlay. Withdraw it here, beside the correction, rather than in the note.
+    # Once it answers, that read needs the (dead) token — unless .env supplies the password.
+    case "$_sup_expiry_probe" in EXPIRED*) [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ] || _argo_pw_needs_token=1 ;; esac
     _pw_unset_argo=0
-  elif [ "${_sup_expiry_probe%% *}" = EXPIRED ]; then
+  elif [ "${_argo_rc:-0}" = 5 ]; then
     # (2026-09-15) NOT GATED ON THE STATE OVERLAY. This was the first arm of the `_have_sink` case
     # below, so a Supervisor kubeconfig with NO overlay -- a real tenant state -- kept `_unset_pw`'s
     # "<generated at install — see note>" and the note "those passwords do not exist yet" over a read
     # that had failed on the expired token, and the banner never named ArgoCD. Reuses the
     # `_sup_expiry_probe` read at the top of this file (one read, one verdict). `_argo_pw_expired` is
     # the only observable that proves THIS arm ran; `sup-unread: argocd` reports it.
-    argo_pw="<not read>"; _argo_pw_expired=1
+    # (2026-09-15) KEYED ON THE CHILD'S EXIT 5 — the Supervisor itself rejected an expired token —
+    # not on the probe alone, which blamed the token for a refusal, a bad cert or a 503 and prescribed
+    # an SSO login for them. The probe stays a second condition: the child reads the clock later, so a
+    # token that expired between the two reads must not set the flag without the banner.
+    if [ "${_sup_expiry_probe%% *}" = EXPIRED ]; then argo_pw="<not read>"; _argo_pw_expired=1
+    else argo_pw="<not read — the Supervisor token expired during this run; re-run make creds>"; fi
+    _pw_unset_argo=0
+  elif [ "${_argo_rc:-0}" = 6 ]; then
+    # "could not be reached FROM THIS MACHINE", not "did not answer": the class covers DNS, proxy and
+    # no-route failures here too. No SSO command. It still NEEDS the token once reachable, and the
+    # powered-off block's renew step says so (`_argo_pw_needs_token`), the banner does not.
+    argo_pw="<not read — the Supervisor could not be reached from this machine>"
+    case "$_sup_expiry_probe" in EXPIRED*) _argo_pw_needs_token=1 ;; esac
+    _pw_unset_argo=0
+  elif [ "${_argo_rc:-0}" = 8 ]; then
+    case "$_sup_expiry_probe" in
+      # A LIVE token that the Supervisor rejects is rotated/revoked, not expired — and waiting
+      # cannot fix that, so do not send the reader into `argocd-password`'s wait.
+      VALID*) argo_pw="<not read — the Supervisor token is still valid (${_sup_expiry_probe#VALID }); it is being REJECTED, so the credential was rotated — ask whoever owns the lab>" ;;
+      *)      argo_pw="<not read — the Supervisor rejected this kubeconfig; run: make argocd-password to see why>" ;;
+    esac
+    _pw_unset_argo=0
+  elif [ "${_argo_rc:-0}" = 7 ]; then
+    argo_pw="<not read — run: make argocd-password to see why>"
+    _pw_unset_argo=0
+  elif [ "${_argo_rc:-0}" != 3 ]; then
+    argo_pw="<not read — argocd-password.sh exited ${_argo_rc:-?}>"
     _pw_unset_argo=0
   elif [ "$_have_sink" = 1 ]; then
     # ⚠️ WITHDRAW HERE TOO. Every arm below REPLACES the cell with a "could not read" explanation,
@@ -693,18 +722,10 @@ else
     # ⚠️ NOT before the enclosing `if`: if NEITHER branch runs, the cell keeps `_unset_pw`'s marker
     # and the flag must STAY armed.
     _pw_unset_argo=0
-    # ⚠️ REUSE :116's PROBE, do not re-run it. Byte-identical inputs, but each call reads the clock
-    # independently (lib/os.sh's `date -u +%s`), so a token expiring BETWEEN the two reads yielded
-    # `<not read>` + `_argo_pw_expired=1` with NO banner and no explanation anywhere in the report.
-    # One read, one verdict.
-    _ap_exp="$_sup_expiry_probe"
-    case "$_ap_exp" in
-      # EXPIRED never reaches here: the arm above handles it before the overlay test.
-      # A LIVE token that the Supervisor rejects is rotated/revoked, not expired — and waiting
-      # cannot fix that, so do not send the reader into `argocd-password`'s wait.
-      VALID*)   argo_pw="<not read — the Supervisor token is still valid (${_ap_exp#VALID }); if it is being REJECTED the credential was rotated — ask whoever owns the lab>" ;;
-      *)        argo_pw="<not read — run: make argocd-password (it waits)>" ;;
-    esac
+    # rc=3 now means ABSENT — every attempt said NotFound — so the secret may still be reconciling,
+    # and the command that waits for it is the true next step. Rejections and failures have their
+    # own exit codes above.
+    argo_pw="<not read — run: make argocd-password (it waits)>"
   fi
 fi
 
@@ -724,6 +745,8 @@ if [ -n "${ARGOCD_AUTH_TOKEN:-}" ]; then
   # advertising `make argocd-password` for a row that already holds a working credential -- and a
   # tenant cannot run that command at all (it reads a Supervisor secret; RULE ZERO-A0).
   _argo_pw_expired=0
+  # ...and nor may the powered-off block tell a token holder to spend an SSO bind for ArgoCD.
+  _argo_pw_needs_token=0
   # ⚠️ AND THE FOURTH WITHDRAWAL, for the same reason as the other three. This cell now holds a
   # REAL, USABLE credential — the exact opposite of "unset" — so ArgoCD must stop contributing to a
   # note that says "those passwords are not published in the state overlay". The rc=124 arm and the
@@ -1189,14 +1212,24 @@ _sup_reads_ssh() {
 }
 # Computed BEFORE the powered-off block: its renew step is gated on this list too. It used to print
 # whenever the token had expired, including when nothing in this report needed the token.
-_sup_unread=""; _sup_unread_tok=""
+# TWO LISTS. `_sup_unread` = "could not read BECAUSE the token expired" (the banner's causal claim).
+# `_sup_needed` = that, plus a value whose read FAILED FOR ANOTHER REASON but will need the token once
+# it gets through (ArgoCD after a timeout or an unreachable Supervisor) — the powered-off block's
+# "once it answers, renew" step, where that sentence is true and the banner's would not be.
+_sup_unread=""; _sup_unread_tok=""; _sup_needed=""
 if [ "${_SUP_DEAD:-0}" = 1 ]; then
-  if _sup_reads_harbor_web; then _sup_unread="the Harbor web UI admin password"; _sup_unread_tok="harbor-web"; fi
+  if _sup_reads_harbor_web; then
+    _sup_unread="the Harbor web UI admin password"; _sup_unread_tok="harbor-web"; _sup_needed="$_sup_unread"
+  fi
   if [ "${_argo_pw_expired:-0}" = 1 ]; then
     _sup_unread="${_sup_unread:+${_sup_unread}, }the ArgoCD password"; _sup_unread_tok="${_sup_unread_tok} argocd"
   fi
+  if [ "${_argo_pw_expired:-0}" = 1 ] || [ "${_argo_pw_needs_token:-0}" = 1 ]; then
+    _sup_needed="${_sup_needed:+${_sup_needed}, }the ArgoCD password"
+  fi
   if _sup_reads_ssh; then
     _sup_unread="${_sup_unread:+${_sup_unread}, }the guest node SSH address and password"; _sup_unread_tok="${_sup_unread_tok} ssh"
+    _sup_needed="${_sup_needed:+${_sup_needed}, }the guest node SSH address and password"
   fi
 fi
 # A machine token per value, so the tests assert WHICH values were named rather than prose.
@@ -1250,10 +1283,10 @@ if [ "$_pre_off" = 1 ]; then
   _step=3
   # Only when this report needed the token: the same `_sup_unread` list the banner prints. An expired
   # token that nothing here reads is not a step.
-  if [ -n "$_sup_unread" ]; then
+  if [ -n "$_sup_needed" ]; then
     _rh="$(_renew_how)"
     printf '        %s. Once it answers, renew the Supervisor token (it expired %s); this report needs it\n' "$_step" "${_SUP_DEAD_AT:-?}"
-    printf '           for %s:\n' "$_sup_unread"
+    printf '           for %s:\n' "$_sup_needed"
     printf '             %s\n' "${_rh#renew: }"
     printf '           Three failed logins lock the vCenter account PERMANENTLY — do not retry blind.\n'
     _step=4
