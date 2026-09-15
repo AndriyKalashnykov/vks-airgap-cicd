@@ -3290,7 +3290,7 @@ _vks_login_requires() {
   printf 'KUBECONFIG\n'                                   # :33  — global, every method
   case "${VKS_AUTH_METHOD:-}" in
     vcf)     printf 'SUPERVISOR_HOST\nVKS_CONTEXT_NAME\nVCF_CLI_VSPHERE_PASSWORD\n' ;;             # :59 :60, then :380
-    vsphere) printf 'SUPERVISOR_HOST\nVKS_NAMESPACE\nVKS_CLUSTER_NAME\nVKS_USERNAME\nVKS_PASSWORD\n' ;; # :462-466
+    vsphere) printf 'SUPERVISOR_HOST\nVKS_NAMESPACE\nVKS_CLUSTER_NAME\nVKS_USERNAME\nVKS_PASSWORD\n' ;; # :482-486
   esac
 }
 # ⚠️ TWO KINDS OF FATAL, and the message must not conflate them. The `:?` variables above kill
@@ -3321,7 +3321,6 @@ _lab_plain() { if [ -n "${1:-}" ]; then printf '%s' "$1"; else printf '<not set>
 _lab_secret() { if [ -n "${1:-}" ]; then _mask "$1"; else printf '<not set>'; fi; }
 
 _vc_ep=""; if [ -n "${VCENTER_HOST:-}" ]; then _vc_ep="https://${VCENTER_HOST}"; fi
-_sup_ep=""; if [ -n "${SUPERVISOR_HOST:-}" ]; then _sup_ep="https://${SUPERVISOR_HOST}"; fi
 _lab_add "vCenter"   "$(_lab_plain "$_vc_ep")"  "$(_lab_plain "${VCENTER_USERNAME:-}")" "$(_lab_secret "${VCENTER_PASSWORD:-}")"
 # ── the Supervisor login rows (owner decision 2026-09-15, option A; idea round cleared-with-changes) ──
 # BEFORE: `VKS / SSO | https://sup | user | <not set — vsphere method only>` directly above
@@ -3338,7 +3337,7 @@ _lab_add "vCenter"   "$(_lab_plain "$_vc_ep")"  "$(_lab_plain "${VCENTER_USERNAM
 #  - the vsphere-method row is labelled `kubectl vsphere` (the tool its password is FOR:
 #    KUBECTL_VSPHERE_PASSWORD, 30-vks-login.sh:488) and renders ONLY when VKS_PASSWORD is set or
 #    VKS_AUTH_METHOD=vsphere. Outside those it would describe a login nothing runs. Under vsphere with
-#    VKS_PASSWORD unset it shows `<not set>`, which there IS an obligation (the trailer names it too).
+#    VKS_PASSWORD unset it shows `<not set>`, which there IS an obligation (the trailer names it once the earlier requirements are met).
 # ⚠️ If the NOT-WIRED fallback VKS_PASSWORD -> VCF_CLI_VSPHERE_PASSWORD (30-vks-login.sh:325-335) is ever
 # wired, this visibility rule must be revisited.
 #

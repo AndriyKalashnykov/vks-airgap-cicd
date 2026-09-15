@@ -323,7 +323,7 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # (`op run -- …`, `vault exec -- …`); do not persist it to disk.
     #
     # NOT WIRED HERE, DELIBERATELY. The correct wiring is a COMMAND-SCOPED prefix reusing the
-    # VKS_PASSWORD that already exists (.env.example:805), mirroring line ~92 below:
+    # VKS_PASSWORD that already exists (.env.example:1998), mirroring the KUBECTL_VSPHERE_PASSWORD prefix at :488:
     #     [ -n "${VKS_PASSWORD:-}" ] && pw=(VCF_CLI_VSPHERE_PASSWORD="$VKS_PASSWORD")
     #     env "${pw[@]}" vcf context create "$VKS_CONTEXT_NAME" …
     # Command-scoped, not exported: a bare `export` would put a vCenter SSO admin password in the

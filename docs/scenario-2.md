@@ -845,7 +845,7 @@ air gap. `mirror-verify` could not see it (Harbor genuinely had what we mirrored
 pulled. Run it **after** `make verify`, or the pods do not exist yet and it reports `SKIPPED`.
 
 **Expect:** `make gitops` logs `write mechanism: api`.
-**Expect:** `make creds-show` prints a `Lab access` section — as a TENANT you supplied `VKS_USERNAME` and `SUPERVISOR_HOST` in `.env`, so those rows carry YOUR values, not placeholders. This document never asks you for vCenter credentials, so unless you set them yourself the vCenter row reads `<not set>`.
+**Expect:** `make creds-show` prints a `Lab access` section — as a TENANT you supplied `VKS_USERNAME` and `SUPERVISOR_HOST` in `.env`, so the `vcf CLI` row carries YOUR values, not placeholders. This document never asks you for vCenter credentials, so unless you set them yourself the vCenter row reads `<not set>`.
 **Expect:** the `guest node SSH` row is the one a tenant is most likely to see FAIL: if your identity may not list secrets in the vSphere Namespace it shows `<forbidden>` and a note telling you to ask your platform admin — that is a permissions answer, NOT `this cluster has no such secret`.
 **Expect:** if a Harbor credential is rejected, the report names BOTH `make env-validate` (which DIAGNOSES, reporting the 401) and `make harbor-admin-password` (which FIXES it) — and the latter REFUSES outright if your `HARBOR_USERNAME` is a robot account, because replacing it with `admin` would downgrade your least-privilege setup.
 

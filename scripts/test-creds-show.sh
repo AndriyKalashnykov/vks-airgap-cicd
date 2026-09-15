@@ -143,8 +143,11 @@ export KUBECONFIG="/nonexistent/test-creds-show-sandbox.kubeconfig"
 # exported in the caller's environment, which is the shape of any operator who sourced `.env` or any
 # jump-box container run with `-e HARBOR_URL=...`. The KUBECONFIG sandbox above had the right idea
 # and did not cover the selectors that decide the Harbor and ArgoCD rows.
+# VKS_*/SUPERVISOR_HOST/VCF_CLI_VSPHERE_PASSWORD too (impl round 2026-09-15, measured): the Lab access row
+# visibility keys on them, so an operator who exported their .env got 3 FALSE failures against a correct product.
 unset HARBOR_URL HARBOR_PASSWORD HARBOR_INSECURE HARBOR_CA_FILE \
-      ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_CA_FILE INGRESS_CONTROLLER INGRESS_LB_IP
+      ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_CA_FILE INGRESS_CONTROLLER INGRESS_LB_IP \
+      VKS_PASSWORD VKS_AUTH_METHOD VKS_USERNAME SUPERVISOR_HOST VCF_CLI_VSPHERE_PASSWORD
 export ARGOCD_KUBECONFIG="$KUBECONFIG"
 
 render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; SKIP_DOTENV=1 CREDS_TOKEN=1 ./scripts/creds.sh 2>/dev/null; }
