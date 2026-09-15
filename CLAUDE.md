@@ -1089,8 +1089,8 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 ### NOT done — next units, in order
 
-1. **VKS/SSO row** — `<not set — vsphere method only>` sits beside the vcf CLI row. Two rewordings
-   were refuted; left for the owner's decision.
+1. ~~VKS/SSO row~~ **DONE 2026-09-15 (owner chose option A, PR #1254):** `vcf CLI` carries the bare
+   Supervisor host; `kubectl vsphere` renders only when VKS_PASSWORD is set or the vsphere method.
 2. **Partial-state sentences are fixture-verified only** (Harbor-dependency, still-starting,
    at-least-partly-up). No live render on the final commit — capture one during the next lab start.
 3. **B728** — `09-harbor-auth-check.sh:53` claims RBAC push permission was checked while

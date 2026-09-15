@@ -3290,7 +3290,7 @@ _vks_login_requires() {
   printf 'KUBECONFIG\n'                                   # :33  — global, every method
   case "${VKS_AUTH_METHOD:-}" in
     vcf)     printf 'SUPERVISOR_HOST\nVKS_CONTEXT_NAME\nVCF_CLI_VSPHERE_PASSWORD\n' ;;             # :59 :60, then :380
-    vsphere) printf 'SUPERVISOR_HOST\nVKS_NAMESPACE\nVKS_CLUSTER_NAME\nVKS_USERNAME\nVKS_PASSWORD\n' ;; # :462-466
+    vsphere) printf 'SUPERVISOR_HOST\nVKS_NAMESPACE\nVKS_CLUSTER_NAME\nVKS_USERNAME\nVKS_PASSWORD\n' ;; # :482-486
   esac
 }
 # ⚠️ TWO KINDS OF FATAL, and the message must not conflate them. The `:?` variables above kill
@@ -3321,19 +3321,28 @@ _lab_plain() { if [ -n "${1:-}" ]; then printf '%s' "$1"; else printf '<not set>
 _lab_secret() { if [ -n "${1:-}" ]; then _mask "$1"; else printf '<not set>'; fi; }
 
 _vc_ep=""; if [ -n "${VCENTER_HOST:-}" ]; then _vc_ep="https://${VCENTER_HOST}"; fi
-_sup_ep=""; if [ -n "${SUPERVISOR_HOST:-}" ]; then _sup_ep="https://${SUPERVISOR_HOST}"; fi
 _lab_add "vCenter"   "$(_lab_plain "$_vc_ep")"  "$(_lab_plain "${VCENTER_USERNAME:-}")" "$(_lab_secret "${VCENTER_PASSWORD:-}")"
-# VKS / SSO's password cell is the ONE lab row that does not use _lab_secret, because a bare
-# `<not set>` here is FALSE-BY-CONTRAST: the rows above and below show a value for the SAME account
-# (administrator@vsphere.local), so the operator reads "you are missing something" when they are not.
-# MEASURED on a live 9.1 lab: VKS_USERNAME == VCENTER_USERNAME, VCENTER_PASSWORD set,
-# VCF_CLI_VSPHERE_PASSWORD set, VKS_PASSWORD unset — and unset is CORRECT, because .env.example:1761
-# documents VKS_PASSWORD as "vsphere method only" and every reader confirms it (02-env.sh:245,
-# 30-vks-login.sh:486-488, and the vsphere arm of _vks_login_requires below). This is creds.sh:318's
-# own doctrine — AN UNSET PASSWORD IS NOT AUTOMATICALLY "YOU MUST SET IT" — which the services table
-# already applies via _unset_pw() and the lab rows never got.
+# ── the Supervisor login rows (owner decision 2026-09-15, option A; idea round cleared-with-changes) ──
+# BEFORE: `VKS / SSO | https://sup | user | <not set — vsphere method only>` directly above
+# `vcf CLI | (the VKS / SSO account) | user | <password>` — the SAME account, one row "not set", the
+# next with a value. True (VKS_PASSWORD's ONLY readers are the vsphere arm: 30-vks-login.sh:486-488,
+# 02-env.sh, _vks_login_requires above), and still read as "you are missing a password" by the owner.
+# NOW:
+#  - `vcf CLI` ALWAYS renders and carries the Supervisor endpoint, because that IS its endpoint
+#    (30-vks-login.sh:106 and 31-fetch-argocd-kubeconfig.sh pass `--endpoint "$SUPERVISOR_HOST"`; no
+#    path points the vcf CLI at vCenter). It renders the BARE host, not https://: `--endpoint` takes a
+#    bare host and the scheme form is recorded as UNVERIFIED (30-vks-login.sh:90-92) — a cell an
+#    operator may paste into an SSO login must be the form that has run. (vCenter keeps https://: that
+#    one is a REST/browser URL.)
+#  - the vsphere-method row is labelled `kubectl vsphere` (the tool its password is FOR:
+#    KUBECTL_VSPHERE_PASSWORD, 30-vks-login.sh:488) and renders ONLY when VKS_PASSWORD is set or
+#    VKS_AUTH_METHOD=vsphere. Outside those it would describe a login nothing runs. Under vsphere with
+#    VKS_PASSWORD unset it shows `<not set>`, which there IS an obligation (the trailer names it once the earlier requirements are met).
+# ⚠️ If the NOT-WIRED fallback VKS_PASSWORD -> VCF_CLI_VSPHERE_PASSWORD (30-vks-login.sh:325-335) is ever
+# wired, this visibility rule must be revisited.
 #
-# ⚠️ TWO REFUTED FIXES, recorded so they are not rebuilt (idea round, 2026-09-05):
+# ⚠️ TWO REFUTED FIXES, recorded so they are not rebuilt (idea round, 2026-09-05) — NEITHER is re-entered:
+# each row still shows ONLY its own variable, and nothing is keyed on printing the method's value.
 #  1. "show VCF_CLI_VSPHERE_PASSWORD here instead" — WRONG SECRET UNDER THE WRONG LABEL.
 #     .env.example:1591 says the two keys are the same value "on a STANDARD lab", which is permission
 #     to differ, not identity; and the vcf CLI row one line below ALREADY shows it. An operator whose
@@ -3346,10 +3355,10 @@ _lab_add "vCenter"   "$(_lab_plain "$_vc_ep")"  "$(_lab_plain "${VCENTER_USERNAM
 #     commonest configuration renders `<not needed: VKS_AUTH_METHOD=>`. It is also a claim about the
 #     OPERATOR'S OBLIGATION, which docs/matrix-standing-rules.md:469 requires to be TRUE of the
 #     cluster at that moment — and it is false under the vsphere method.
-# So the marker states what is unconditionally true of the VARIABLE. Whether it BLOCKS you now is
-# answered where it belongs: _vks_login_requires' vsphere arm already names VKS_PASSWORD as a blocker.
-_lab_add "VKS / SSO" "$(_lab_plain "$_sup_ep")" "$(_lab_plain "${VKS_USERNAME:-}")"     "$(if [ -n "${VKS_PASSWORD:-}" ]; then _mask "$VKS_PASSWORD"; else printf '<not set — vsphere method only>'; fi)"
-_lab_add "vcf CLI"   "(the VKS / SSO account)"  "$(_lab_plain "${VKS_USERNAME:-}")"     "$(_lab_secret "${VCF_CLI_VSPHERE_PASSWORD:-}")"
+_lab_add "vcf CLI" "$(_lab_plain "${SUPERVISOR_HOST:-}")" "$(_lab_plain "${VKS_USERNAME:-}")" "$(_lab_secret "${VCF_CLI_VSPHERE_PASSWORD:-}")"
+if [ -n "${VKS_PASSWORD:-}" ] || [ "${VKS_AUTH_METHOD:-}" = vsphere ]; then
+  _lab_add "kubectl vsphere" "$(_lab_plain "${SUPERVISOR_HOST:-}")" "$(_lab_plain "${VKS_USERNAME:-}")" "$(_lab_secret "${VKS_PASSWORD:-}")"
+fi
 
 # ── guest-node SSH — READ LIVE, because the END USER CAN READ IT ────────────────────────────────
 # The operator asked whether knowing the vCenter/SSO credentials yields ssh access. MEASURED
@@ -3517,8 +3526,9 @@ else
     # block below), so the report invited `ssh vmware-system-user@cicd-gc1-ssh-password`, which
     # cannot resolve to anything. The secret name is PROVENANCE and already appears in the note
     # under the table; it does not belong in a column that promises an address.
-    # NOTE THE RULE IS "NO LOOKUP KEY", NOT "ONLY AN ADDRESS": the sibling `vcf CLI` row correctly
-    # renders `(the VKS / SSO account)` because a local binary has no endpoint at all.
+    # NOTE THE RULE IS "NO LOOKUP KEY": a cell is an address or `<not set>`. (The sibling `vcf CLI` row
+    # used to render `(the VKS / SSO account)` there; since 2026-09-15 it carries the Supervisor host
+    # it is actually pointed at, 30-vks-login.sh:106.)
     # WE DO NOT CLAIM ROUTABILITY. Whether a jump box can reach the node network is UNVERIFIED
     # here, and asserting reachability we have not measured is exactly how this report earned the
     # complaint that started this work. We print what the cluster says, and nothing more.
@@ -3793,7 +3803,8 @@ fi
 # ⚠️ SCOPED TO THE vCenter ROW, AND STATED ABOUT THE DOCUMENTS — NOT THE READER (B536).
 # A whole-table condition would re-import the three-meanings problem this note exists to remove:
 # on a doc-following tenant render the ONLY bare tokens left are these three, and they carry ONE
-# meaning. MEASURED: nothing-set fixture = 7 bare tokens (the CI/e2e state, not a person);
+# meaning. MEASURED 2026-09-15 (after the login-row change): nothing-set fixture = 6 bare row tokens,
+# vCenter 3 + vcf CLI 3 (it was 7 with the old VKS / SSO row; the CI/e2e state, not a person);
 # a tenant who supplies what scenario-2 ASKS FOR (VKS_USERNAME, SUPERVISOR_HOST,
 # VCF_CLI_VSPHERE_PASSWORD) = 3, all on this row.
 #
