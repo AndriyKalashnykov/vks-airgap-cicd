@@ -1393,7 +1393,13 @@ case "$_prov" in
                 # ⚠️ ONE LINE. The break here was arbitrary: joined it is 133 chars, in a report whose
                 # table is 140 wide and which already prints a 202-char /etc/hosts line (measured).
                 # Wrapping a sentence that fits makes the reader reassemble it for no reason.
-                printf '    values below : your .env, install-time discovery, and live reads from the cluster. Reachable is probed live.\n'
+                # Under CREDS_NO_PROBE=1 nothing is read live, and the same render says so on its first
+                # line — "live reads … probed live" contradicted it (implementation review, measured).
+                if [ "$_no_probe_snapshot" = 1 ]; then
+                  printf '    values below : your .env + install-time discovery — nothing was read live (CREDS_NO_PROBE=1).\n'
+                else
+                  printf '    values below : your .env, install-time discovery, and live reads from the cluster. Reachable is probed live.\n'
+                fi
                 # ⚠️ CUT 2026-09-10: "Nothing records which cluster they came from — normal for a
                 # real lab." The operator asked what it was FOR, twice, and it has no answer: it is
                 # UNACTIONABLE BY CONSTRUCTION. If nothing recorded the cluster, no command can
@@ -1446,7 +1452,11 @@ case "$_prov" in
                 # ⚠️ NOT ALL OF THEM: several cells are read live (the Harbor web UI admin, ArgoCD, the
                 # guest node SSH password, the headlamp token), so a blanket "the values you supplied"
                 # is false. (2026-09-15: the headlamp-only clause was cut; it named one of four.)
-                printf '    values below : your .env and live reads from the cluster. Reachable is probed live.\n'
+                if [ "$_no_probe_snapshot" = 1 ]; then
+                  printf '    values below : your .env — nothing was read live (CREDS_NO_PROBE=1).\n'
+                else
+                  printf '    values below : your .env and live reads from the cluster. Reachable is probed live.\n'
+                fi
                 # ⚠️ SAME TARGET SWAP AS THE STORED ARM ABOVE, for the same reason: this register
                 # offers a re-check of the CREDENTIALS printed below, and `env-validate` cannot
                 # judge a robot's push right at all (B715). The stamped-MISMATCH arm above keeps
@@ -2850,7 +2860,13 @@ if [ "${_argo_initial_note:-0}" = 1 ]; then
         "${_argo_changed_at:+ at ${_argo_changed_at}}"
       printf '          recovered (only a hash is kept); ask whoever changed it, or reset it.\n' ;;
     *)
-      printf '\n  ArgoCD: cannot tell whether this password is still current. Check: make argocd-auth-check\n' ;;
+      # The command only where it would try THIS login (`_argo_recheck`): without ARGOCD_SERVER it exits
+      # UNSET at once, while the re-check line below already withholds it (implementation review, measured).
+      if [ "${_argo_recheck:-0}" = 1 ]; then
+        printf '\n  ArgoCD: cannot tell whether this password is still current. Check: make argocd-auth-check\n'
+      else
+        printf '\n  ArgoCD: cannot tell whether this password is still current.\n'
+      fi ;;
   esac
 fi
 # ⚠️ KEYED ON A FLAG, NOT ON THE RENDERED STRING. This case used to match the URL text, and the
@@ -3585,6 +3601,7 @@ _lab_add "vCenter"   "$(_lab_plain "$_vc_ep")"  "$(_lab_plain "${VCENTER_USERNAM
 _lab_add "vcf CLI" "$(_lab_plain "${SUPERVISOR_HOST:-}")" "$(_lab_plain "${VKS_USERNAME:-}")" "$(_lab_secret "${VCF_CLI_VSPHERE_PASSWORD:-}")"
 if [ -n "${VKS_PASSWORD:-}" ] || [ "${VKS_AUTH_METHOD:-}" = vsphere ]; then
   _lab_add "kubectl vsphere" "$(_lab_plain "${SUPERVISOR_HOST:-}")" "$(_lab_plain "${VKS_USERNAME:-}")" "$(_lab_secret "${VKS_PASSWORD:-}")"
+  _lab_vsphere_row=1   # the SSO footer names this row only when it is shown
 fi
 
 # ── guest-node SSH — READ LIVE, because the END USER CAN READ IT ────────────────────────────────
@@ -4118,10 +4135,12 @@ echo
 
 # (2026-09-15, owner + idea round F2/F3) Dropped "This report never authenticates TO vCENTER": a
 # statement about the report, nothing to act on. The three rows that bind to the SSO account are
-# named (Harbor web UI, guest node SSH, Gitea and ArgoCD admin are local accounts). "Ask the lab
+# named — only those SHOWN: the kubectl vsphere row renders only with VKS_PASSWORD or the vsphere method
+# (the Harbor web UI, guest node SSH, Gitea and ArgoCD admin accounts are local, not SSO). "Ask the lab
 # owner" was wrong for a scenario-1 admin; "check the value" was wrong for a tenant, whose only way
 # to check is a login, i.e. an attempt. Keep `PERMANENTLY after 3 failed attempts` on ONE line:
 # docs/scenario-1.md Step 13 backticks it as an Expect literal.
-printf '  ⚠️ vCenter SSO locks out PERMANENTLY after 3 failed attempts. If the vCenter, vcf CLI or\n'   # the `echo` above is the separator; a leading \n here made a double blank
-printf '     kubectl vsphere password is rejected, STOP — do not retry or guess; get the correct value\n'
-printf '     from your own records, or from whoever gave it to you.\n'
+_sso_rows="vCenter or vcf CLI"
+if [ "${_lab_vsphere_row:-0}" = 1 ]; then _sso_rows="vCenter, vcf CLI or kubectl vsphere"; fi
+printf '  ⚠️ vCenter SSO locks out PERMANENTLY after 3 failed attempts. If the %s password is rejected,\n' "$_sso_rows"   # the `echo` above is the separator; a leading \n here made a double blank
+printf '     STOP — do not retry or guess; get the correct value from your own records, or from whoever gave it to you.\n'

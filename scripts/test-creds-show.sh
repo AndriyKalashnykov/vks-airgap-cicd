@@ -2357,6 +2357,10 @@ ARGOCD_AUTH_TOKEN=x' || true)"
 _fl_lb="$(_fl_render 2026-09-06T07:45:25Z 'ARGOCD_LB_IP=10.0.0.9' || true)"
 _fl_noharbor="$(_fl_render 2026-09-06T07:45:25Z 'ARGOCD_SERVER=10.0.0.9
 HARBOR_URL=' || true)"
+_fl_unk_lb="$(_fl_render '' 'ARGOCD_LB_IP=10.0.0.9' || true)"
+_fl_unk_srv="$(_fl_render '' 'ARGOCD_SERVER=10.0.0.9' || true)"
+_fl_vs="$(_fl_render 2026-09-06T07:45:25Z 'ARGOCD_SERVER=10.0.0.9
+VKS_PASSWORD=x' || true)"
 # 1. POSITIVE CONTROL first: a STALE password still reaches the note block and prints its line.
 if grep -qF 'the password above is DEAD' <<< "$_fl_old"; then
   ok "four lines: a STALE ArgoCD password still prints its line (the note block is reached)"
@@ -2366,8 +2370,23 @@ else
 fi
 if grep -qF 'this password is CURRENT' <<< "$_fl_cur"; then
   bad "four lines: 'ArgoCD: this password is CURRENT' still prints"
+elif grep -qF 'cannot tell whether this password' <<< "$_fl_cur"; then
+  bad "four lines: the CURRENT fixture rendered UNKNOWN — the absence check does not test CURRENT" \
+      "fix the fixture, not the product"
 else
   ok "four lines: nothing prints for a CURRENT ArgoCD password"
+fi
+# The "cannot tell" note names argocd-auth-check only where that check would try the login.
+_fl_unk_lb_l="$(grep -m1 'cannot tell whether this password' <<< "$_fl_unk_lb" || true)"
+_fl_unk_srv_l="$(grep -m1 'cannot tell whether this password' <<< "$_fl_unk_srv" || true)"
+if [ -z "$_fl_unk_lb_l" ] || [ -z "$_fl_unk_srv_l" ]; then
+  bad "four lines: an UNKNOWN fixture did not render the 'cannot tell' note" "fix the fixture, not the product"
+elif grep -qF 'argocd-auth-check' <<< "$_fl_unk_lb_l"; then
+  bad "four lines: with only ARGOCD_LB_IP the 'cannot tell' note still prescribes argocd-auth-check (it exits UNSET)"
+elif ! grep -qF 'Check: make argocd-auth-check' <<< "$_fl_unk_srv_l"; then
+  bad "four lines: with ARGOCD_SERVER set the 'cannot tell' note lost its check"
+else
+  ok "four lines: the 'cannot tell' note names argocd-auth-check only when ARGOCD_SERVER is set"
 fi
 if grep -qE 'the password above is DEAD|cannot tell whether this password' <<< "$_fl_tok"; then
   bad "four lines: an ARGOCD_AUTH_TOKEN reader gets a note about a password their row does not show"
@@ -2381,6 +2400,20 @@ elif grep -qF 'values below :' <<< "$_fl_cur" && grep -qF 'live reads from the c
   ok "four lines: 'values below' names live reads and keeps 'probed live', with no headlamp clause"
 else
   bad "four lines: the 'values below' line is not the new wording"
+fi
+# ...and under CREDS_NO_PROBE=1 (the legend fixture) it claims no live read at all.
+if grep -qF 'nothing was read live (CREDS_NO_PROBE=1)' <<< "$_o_leg" && ! grep -qE 'live reads|probed live' <<< "$_o_leg"; then
+  ok "four lines: under CREDS_NO_PROBE=1 'values below' says nothing was read live"
+else
+  bad "four lines: under CREDS_NO_PROBE=1 'values below' still claims live reads"
+fi
+# The legend's contradiction check above now renders no live-read value (its fixture is no-probe), so
+# repeat it on a PROBING render, where it can fire.
+_fl_leg="$(grep -m1 'Reachable = the address answered' <<< "$_fl_cur" || true)"
+if [ -n "$_fl_leg" ] && grep -qF 'probed live' <<< "$_fl_cur" && ! grep -qiE 'as configured|never read back|echoed from' <<< "$_fl_leg"; then
+  ok "four lines: a probing render names live reads and its legend makes no echoed-config claim"
+else
+  bad "four lines: the probing render's legend check could not run, or the legend claims echoed config"
 fi
 # 3. The re-check names the ArgoCD admin login only when that check would try it.
 _fl_rc="$(grep -m1 're-check:' <<< "$_fl_cur" || true)"
@@ -2410,14 +2443,19 @@ case "$(grep -m1 're-check:' <<< "$_fl_noharbor" || true)" in
   *'re-check: make argocd-auth-check   ('*) ok "four lines: with no HARBOR_URL the re-check names argocd-auth-check alone" ;;
   *) bad "four lines: with no HARBOR_URL and an admin ArgoCD row, the re-check does not name argocd-auth-check alone" ;;
 esac
-# 4. The SSO footer.
-if grep -qF 'PERMANENTLY after 3 failed attempts. If the vCenter, vcf CLI or' <<< "$_fl_cur" \
-   && grep -qF 'kubectl vsphere password is rejected, STOP — do not retry or guess' <<< "$_fl_cur" \
-   && grep -qF 'from your own records, or from whoever gave it to you.' <<< "$_fl_cur" \
-   && ! grep -qE 'never authenticates|ask the lab owner' <<< "$_fl_cur"; then
-  ok "four lines: the SSO footer names the SSO rows and what to do, without 'never authenticates' or 'ask the lab owner'"
+# 4. The SSO footer names the SSO rows SHOWN.
+if grep -qF 'PERMANENTLY after 3 failed attempts. If the vCenter or vcf CLI password is rejected,' <<< "$_fl_cur" \
+   && grep -qF 'STOP — do not retry or guess; get the correct value from your own records, or from whoever gave it to you.' <<< "$_fl_cur" \
+   && ! grep -qE 'never authenticates|ask the lab owner|kubectl vsphere password' <<< "$_fl_cur"; then
+  ok "four lines: the SSO footer names the vCenter and vcf CLI rows and what to do"
 else
-  bad "four lines: the SSO footer is not the new wording"
+  bad "four lines: the SSO footer is not the new wording (or names a kubectl vsphere row that is not shown)"
+fi
+if grep -qE '^  kubectl vsphere ' <<< "$_fl_vs" \
+   && grep -qF 'If the vCenter, vcf CLI or kubectl vsphere password is rejected,' <<< "$_fl_vs"; then
+  ok "four lines: with the kubectl vsphere row shown, the footer names it too"
+else
+  bad "four lines: the kubectl vsphere row is shown but the footer does not name it (or the row did not render)"
 fi
 # C's HEADLINE: the guest refusal used to shadow the Supervisor's 401, so the EXPIRED headline vanished.
 if grep -qF 'the Supervisor token EXPIRED' <<< "$(_ac_render argocd-password "$_ac_exp" "$_AC_401" "$_AC_REF" "" "--wait 0")"; then

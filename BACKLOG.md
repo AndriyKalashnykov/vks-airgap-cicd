@@ -9968,9 +9968,12 @@ this row exists because an adversary graded the number itself, and the owner's s
   accounts, not to system accounts such as `administrator@vsphere.local`" — `7.0-doc-inferred-for-9.1`.
 - On a third-party lab the policy is the customer's and is unknowable from this repo.
 
-**Homes (8):** printed by `scripts/creds.sh` (the footer) and `scripts/lib/os.sh` (`supervisor_renew_how`);
-`docs/scenario-1.md` (3 places, one a backticked Expect literal at Step 13); `docs/matrix-standing-rules.md`;
-this file; `scripts/test-creds-show.sh` requires "locks out PERMANENTLY" in os.sh's message.
+**Homes — derive them, do not count them by hand.** A first count here said 8; an implementation review
+measured that as a large undercount missing four operator-printed strings. This grep matched 17 files on
+2026-09-15 (`creds.sh` 12 lines, `test-creds-show.sh` 10, `lib/os.sh` 4, `argocd-password.sh` 3,
+`29-vcenter-service-check.sh` 3, `02-env.sh` 2, `scenario-1.md` 2 including the Step 13 Expect literal,
+`matrix-standing-rules.md` 2, `CLAUDE.md` and 8 more). Some are unrelated "three attempts" prose, so read each:
+`grep -rnE 'PERMANENTLY|locks? out permanently|3 failed (log|attempt)|THREE (failed|vCenter SSO attempts|attempts)' scripts/ docs/ CLAUDE.md`
 
 **Do not fix one home.** Settle the fact first (read the vSphere Client Lockout Policy page for 9.1, and
 whether the attributes govern logins), then change every home in one commit, including the Expect
