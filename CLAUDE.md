@@ -1056,100 +1056,62 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-11 (afternoon) — SIX rounds, six refutations, and each of the last two killed my fix for the one before
+## ▶️ HANDOFF 2026-09-15 — `make creds` tells the truth about a DOWN lab; merged after 9 review rounds
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### 🔴 DISTRUST FIRST — the instruments that lied, and TWO of them were things I wrote to check my own work
+### Shipped — PR #1252, squash `333474f` (merged 2026-09-15)
+
+`make creds` validated against a lab that was REALLY powered off, then started, then fully up:
+
+- **powered off:** the report now leads with "⚠️ NOTHING answered on this run", names what was silent,
+  and gives the steps (check reach, start the lab, renew the token only if expired, re-run). The
+  the token and SSO banners are suppressed there: they cannot help while nothing answers.
+- **the lab-off signature requires evidence:** ingress probed and silent, Harbor/ArgoCD silent or
+  skipped, cluster not up, AND either the cluster refused/had no route or ≥2 endpoints were silent.
+- **the cluster probe's UNREACHABLE class is split by kubectl's REAL stderr** (allow-list): proxy,
+  DNS, no local route, refused/no-route, timeout, unknown. A refusal is definitive ONLY when no
+  proxy was USED for that address — Go's rules modelled: kubeconfig `proxy-url` wins; the server
+  SCHEME picks `HTTPS_PROXY`/`HTTP_PROXY` (unknown scheme → either); canonical `127.x.x.x`/`::1`
+  loopback only; `.x` NO_PROXY entries cover subdomains only; IPs never suffix-matched.
+- test-creds-show **136 → 260** assertions, every new one RED-proven against its parent.
+
+### 🔴 DISTRUST FIRST
 
 | instrument | what it did |
 |---|---|
-| **a worktree adversary's `git show HEAD`** | MEASURED with `git worktree list`: both `isolation:"worktree"` agents were created from **`origin/main`, SIXTEEN commits behind my branch** — NOT from my HEAD, which is what `agents.md` says. A brief that says "review the top commit" then reviews a commit nobody is proposing. Corrected mid-run by sending explicit refs. **Run `git worktree list` immediately after every dispatch.** |
-| a new assertion greping `'the ingress does not know that hostname'` | that phrase is ALSO in the `no route` **legend**, so it **passed on the parent** — the assertion was reading the legend and calling it the remedy. The file records this exact trap one block up ("Match the ROWS, not the whole render"). Fixed to grep the COUNTED sentence (`answered 404: the ingress does not know`), which re-RED'd. |
-| `${6//[$_sep]/ }` in `add_row`, under `set -u` | dies **`6: unbound variable`** on the three call sites that legitimately pass five arguments (Harbor registry, Harbor web UI, ArgoCD) — i.e. it would have taken the whole report down. Caught by running it, not by reading it; `${6:-}` is the fix. |
-| `grep -c '^ok '` on `test-creds-show` | the suite prints `ok` at **column 0** here and **indented** in its sibling — the same grep is right in one file and returns **0** in the other. Anchor per file, or read the tail verdict. |
-
-Plus yesterday's nine, unchanged in kind: a phrase spanning a newline, a python anchor matching two
-lines, two `timeout` caps shorter than the target's own poll budget, a `git status` read mid-flight,
-and a body-wide grep satisfied by the function's own output literals.
-
-### In flight — PR #1252, branch `fix/creds-lab-down-state`, 15 commits
-
-**CI green** (`ci-pass: pass`, `static-check-fast: pass`) and **local `make static-check` GREEN**:
-rc=0, **155 suites, 0 failed, 604s**, and its own `tree-stability: OK — 557 file(s) unchanged for the
-whole run`, so that green is about the tree that is committed. `test-creds-show.sh` **136 → 190**
-(32s), `test-creds-reach-ingress.sh` 27 → 31.
-
-⚠️ **NOT MERGED.** The implementation round on the top commit had not reported when this was written.
-An idea-round clearance authorises IMPLEMENTING, never SHIPPING.
-
-### 🔴 THE ARC — six rounds, and rounds 5 and 6 each refuted the fix for the round before
-
-| # | what it killed |
-|---|---|
-| 1–4 | the `LB up` classification, in both directions, then three threshold fixes (see git history — the mechanism no longer exists in the tree) |
-| 5 | the K=3 design shipped; the round then found the **B731 gate** was conjoined on `_reach_ok == 0`, so 10 serving + 2 `no backend` **suppressed the only sentence that explains a 5xx** |
-| 6 | **my fix for 5.** I relaxed the gate to `_reach_half > 0` believing that was the 5xx bucket. It is the **`answered` CLASS** — `no backend` (5xx) **PLUS `no route` (404) PLUS the catch-all**. So the diff turned a rarely-fired vague sentence into a frequently-fired specific one that is **FALSE for a 404** — and **the test I shipped in the same commit certified it** |
-| 7 | out at the time of writing |
-
-**Round 6's second CRITICAL, and it is the more instructive one:** *"Its namespace is the name in the
-Service column"* is FALSE for the two rows most likely to hit it — the column reads `Gitea` and
-`Tekton` while the namespaces are `gitea` and `tekton-pipelines`, and all three infra namespaces are
-operator knobs, so **no rule over that column can be right**. The values were already in scope via
-`load_env` and referenced **zero** times.
-
-**MEASURED on the parent with a 404 fixture:** it printed *"the route IS rendered"* and
-*"kubectl -n \<app\> get pods"* for a hostname the ingress never learned — two lines under a legend
-**the same diff added** saying *"no route = the ingress does not know that hostname"*.
-
-### What the tip now does, and what was measured about it
-
-- `_reach_5xx` / `_reach_404` are counted **on the CELL, not the class**, and 404 gets its own
-  sentence pointing at the **ingress**. Deliberately not summed back into `_reach_half`.
-- the namespace is carried as a **sixth `add_row` field** and printed per distinct namespace.
-  Verified independently of the round: all six `deploy/*/kustomization.yaml` namespaces equal their
-  registry name, and the three infra defaults match `49-psa-check.sh`'s triple exactly.
-- **the table is byte-unchanged**, measured not asserted: the whole no-probe render diffs
-  parent-vs-tip to a **single temp-path line**.
-- the kubectl remedy carries its **precondition** — this report prints `cluster : not reachable` in
-  renders where a row can still read `no backend`, because the ingress answers from its own LB and
-  does not need our kubeconfig.
-- `silent` was the **FIFTH** producer value with no reader-facing definition, while the legend's own
-  comment listed it among those "explained".
-- **8 new assertions RED-proven against the parent** in a worktree; controls pass on both sides.
+| **a round's own prescribed fix** | rounds 5, 6, 7 and 8 each refuted the fix for the round before. The NO_PROXY rules alone took three rounds (dot entries, IP suffix, `127.1` is NOT loopback to Go). |
+| **kubectl's "refused" text** | a dead proxy prints the SAME terse `The connection to the server H:P was refused` naming the CLUSTER. Never read it as the cluster's refusal without checking which proxy Go used. |
+| **test stubs with an unrealistic stderr shape** | the v9 terse refused string was missed because stubs printed `dial tcp … connection refused`, which real kubectl does not. Copy strings from a real kubectl run. |
+| **`check-env-coverage` after reading a new env var** | failed `static-check` THREE times this session (`HTTPS_PROXY`, `NO_PROXY`, `HTTP_PROXY`). Run it in the staging tree before committing. |
+| **an unexplained "y" in the prompt** | this session merged #1252 on a "y" that was the user answering a Claude Code survey. The merge was within RULE ZERO-0; the reading was wrong. |
 
 ### NOT done — next units, in order
 
-1. **Round 7's findings** (the implementation round on this diff) — read them first.
-2. **B728** — `09-harbor-auth-check.sh:53` says *"Checked: AUTHENTICATION, and RBAC push permission
-   (silent above = you have it)"*, but `harbor_auth_report` returns **0** in at least four
-   materially different states, three of which probed **nothing**, and the **403 arm never calls
-   `harbor_push_report` at all**. An idea round on the verdict-publishing design was out at the time
-   of writing. ⚠️ Its `rc` must NOT change — the gate is documented to exit 0 on an unconfigured box.
-3. **B721 still-open** — the classifier extraction. ⚠️ **Order is load-bearing:** fix
-   `_harbor_ca_args` FIRST (https + no CA + not insecure ⇒ system trust) and RED-prove
-   `noca + 401` is non-zero in **both** entry points before switching any caller. Two live gates
-   (`24-lab-preflight.sh:207`, `09-harbor-auth-check.sh:43`) already use the REPORTER as a VERDICT,
-   which `lib/harbor.sh:233` forbids in writing.
-4. ~~D1~~ **MEASURED AND REFUTED — filed as B732, do NOT build the derived legend.** Driven with a
-   `kubectl` stub returning Forbidden on the node query, the SSH row's markers
-   (`<not allowed to read addresses>`, `<forbidden>`) are BOTH explained — by `_ssh_header_line`
-   above the table and by two named sentences below it, which give the CAUSE, not just the word. A
-   derived legend would duplicate a stronger explanation. Residual named in the row: only the
-   FORBIDDEN arm was driven.
-5. **B719** · untouched: **B484**, **B498**, **B565**, **B523**, **B716** stages 2–3.
+1. **VKS/SSO row** — `<not set — vsphere method only>` sits beside the vcf CLI row. Two rewordings
+   were refuted; left for the owner's decision.
+2. **Partial-state sentences are fixture-verified only** (Harbor-dependency, still-starting,
+   at-least-partly-up). No live render on the final commit — capture one during the next lab start.
+3. **B728** — `09-harbor-auth-check.sh:53` claims RBAC push permission was checked while
+   `harbor_auth_report` returns 0 in states that probed nothing, and the 403 arm never calls
+   `harbor_push_report`. ⚠️ Its `rc` must NOT change — documented to exit 0 on an unconfigured box.
+4. **B721 still-open** — classifier extraction. ⚠️ Order is load-bearing: fix `_harbor_ca_args`
+   FIRST and RED-prove `noca + 401` non-zero in BOTH entry points before switching any caller.
+5. **B719** · untouched: **B484**, **B498**, **B565**, **B523**, **B716** stages 2–3. (B732: do NOT
+   build the derived SSH legend — measured and refuted.)
 
 ⚠️ **`static-check-fast` — what runs on a push — contains neither `lint` nor `test-scripts`**, so a
 green PR check does NOT mean `static-check` passed (B574). Run it locally, on a tree you are not
-editing: it takes ~10 minutes and its tree-stability guard VOIDS the run if you edit mid-flight.
+editing (~10 min; its tree-stability guard VOIDS the run if you edit mid-flight).
 
 ### Lab
 
-**Not contacted this session.** Every measurement here is a fixture, a loopback listener and a stub
-`getent`/`kubectl`. The last live reading (this morning) was `12 of 12` serving with
-`verify-ingress` rc=0; Harbor's PodVMs **FLAPPED** for ~10 minutes after a restart, so a
-point-in-time "Harbor is serving" expires within a minute.
+**Contacted, read-only.** Powered off at session start, then `make lab-start` (nested-vsphere-lab).
+That target waits for Supervisor READY and guest Machines, NOT for Supervisor Services or workloads,
+and does NOT renew this repo's `secrets/supervisor.kubeconfig`. Measured: Harbor stayed CONFIGURING
+~31 min after it returned and every guest pod was ImagePullBackOff until then; `make creds` reached
+**12 of 12 serving** ~35 min after return, and still read 12 of 12 on the merged code (2026-09-15).
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
