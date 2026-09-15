@@ -9686,7 +9686,30 @@ matched-its-own-comment trap structurally rather than with a fragile comment-str
 **Grade:** `measured` (idea-round, GNU sed 4.9 / gawk 5.2.1; the `APP_DOMAIN` and B528 claims
 re-verified against the tree here).
 
-## 🔴 B728 — `harbor-auth-check` prints "silent above = you have it" when it probed NOTHING
+## ✅ B728 — RESOLVED: `harbor-auth-check` no longer prints "silent above = you have it" when it probed NOTHING
+
+**✅ RESOLVED (this session).** Two idea-round adversaries (vks-adversary + adversary-security-secrets)
+REFUTED the first design (key `09-harbor-auth-check.sh:53` on `harbor_auth_verdict`): calling the verdict
+re-runs the auth GET — a SECOND probe that can TOCTOU-contradict the "Harbor accepts ... http 200" line
+`harbor_auth_report` printed two lines above — and its 3-value string cannot tell a 403 robot (push NOT
+probed) from a 200/412 (push probed), the exact distinction this row is about. It also breaks the existing
+gate test (a missing `harbor_auth_verdict` in the stub dies rc=127 under `set -euo pipefail`).
+
+Shipped their fix A: line 53 no longer SUMMARISES state — it defers the accepted-vs-unchecked distinction
+to the per-state ok/PROBLEM line `harbor_auth_report` already prints from its SINGLE probe, drops the
+"silent above = you have it" reassurance, and states the 403-push honesty. No re-probe, no verdict call,
+no `harbor.sh` touch, exit code unchanged (no tenant false-block, RULE ZERO-B). `test-harbor-auth-gate.sh`
+pins it (clean summary must NOT contain "you have it"/"silent above"); RED-proven by reintroducing the
+phrase → 3 cases fail.
+
+**Deferred residual (post-B721).** The crisp PER-STATE summary this row originally envisioned — line 53
+keyed on the http code so it can say "push probed for your 200" vs "not for your 403" — needs
+`harbor_auth_report` to PUBLISH its code from that single probe (mirror the `harbor_last_code`/
+`HARBOR_CODE_FILE` pattern). That is a `harbor.sh` edit and must sequence AFTER B721's ordered refactor of
+the same file; both adversaries flagged the merge-order hazard. The false-reassurance DEFECT is closed now;
+the per-state nicety waits.
+
+--- original filing ---
 
 **MEASURED 2026-09-10** by an implementation-round adversary, and it is the reassuring direction.
 

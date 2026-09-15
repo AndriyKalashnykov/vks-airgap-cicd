@@ -45,13 +45,19 @@ if harbor_auth_report; then
   # was nothing to probe" — conflating a VERIFIED credential with a gate that checked NOTHING, which
   # is the reassuring direction. `harbor_auth_report` prints which of the two happened; this line
   # must not paper over it. And neither state is a statement about PUSH — see the header.
-  log_info "Harbor auth gate: no rejection to report (see the line above for whether a credential was actually probed)."
-  # ⚠️ UPDATED WITH harbor_push_report, AND STILL NOT A PUSH PROMISE. It now checks RBAC push
-  # permission too -- but RBAC is not the whole chain: read-only mode, per-project quota and
-  # IMMUTABLE TAG RULES can each refuse a push that RBAC allows, and an idea round listed further
-  # middlewares it did not enumerate. Only a real push proves push; say exactly that.
-  log_info "  Checked: AUTHENTICATION, and RBAC push permission (silent above = you have it)."
-  log_info "  NOT checked: read-only mode, quota, immutable tag rules — only a real push proves push."
+  log_info "Harbor auth gate: no rejection to report (see the line above, if any, for whether a credential was actually probed)."
+  # ⚠️ B728: this line must NOT summarize state. It prints in the ACCEPTED arm AND in every
+  # "nothing was probed" arm (harbor_auth_report returns 0 for no-URL / placeholder-password /
+  # no-CA / inconclusive too), so the old "silent above = you have it" was a reassuring LIE there.
+  # The per-state truth is the ok/PROBLEM line ABOVE, from report's SINGLE probe. This defers to it
+  # and never re-probes. Two adversary rounds refuted keying it on harbor_auth_verdict: that re-runs
+  # the GET (a second probe that can contradict the line above), and its 3-value string cannot tell
+  # a 403 robot (push NOT probed here) from a 200/412 (push probed). A per-state summary keyed on the
+  # http code needs harbor_auth_report to PUBLISH it (a harbor.sh touch) — deferred behind B721.
+  log_info "  This says ONLY what the line above says, if any — a credential was accepted, or NOTHING was probed."
+  log_info "  It does not prove PUSH: push RBAC is probed only when the line above shows http 200/412"
+  log_info "  (a 403 robot is authenticated but NOT push-probed here); read-only mode, quota and"
+  log_info "  immutable-tag rules can each refuse a push RBAC allows — only 'make mirror' proves push."
   exit 0
 fi
 

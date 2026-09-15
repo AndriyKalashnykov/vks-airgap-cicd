@@ -26,6 +26,17 @@ ck(){ if [ "$2" = "$3" ]; then p=$((p+1)); printf '  ok    %s\n' "$1"; else f=$(
 rc=0; STUB_RC=0 bash "$T/09-harbor-auth-check.sh" >/dev/null 2>&1 || rc=$?
 ck "clean report -> exit 0" "$rc" "0"
 
+# B728: the clean-report SUMMARY must not RE-ASSURE about a state it never probed. harbor_auth_report
+# returns 0 for "nothing was probed" too (no URL / placeholder password / no CA / inconclusive), so the
+# success line must DEFER to the line above and never claim "you have it" / "silent above". Positive
+# control: replacing these two log_info lines with the old `Checked: ... (silent above = you have it)`
+# drives 3 of these RED (reassure + silent-above + defer); merely ADDING it alongside drives 2.
+out0=$(STUB_RC=0 bash "$T/09-harbor-auth-check.sh" 2>&1)
+ck "clean summary does NOT reassure ('you have it')" "$(printf '%s' "$out0" | grep -c 'you have it')" "0"
+ck "clean summary drops 'silent above'"              "$(printf '%s' "$out0" | grep -c 'silent above')" "0"
+ck "clean summary defers to the line above"          "$(printf '%s' "$out0" | grep -c 'ONLY what the line above says')" "1"
+ck "clean summary keeps the push hedge"              "$(printf '%s' "$out0" | grep -c 'proves push')" "1"
+
 # RED: reporter fails -> non-zero AND names the fix
 rc=0; out=$(STUB_RC=1 bash "$T/09-harbor-auth-check.sh" 2>&1) || rc=$?
 ck "failing report -> non-zero"            "$rc" "1"
