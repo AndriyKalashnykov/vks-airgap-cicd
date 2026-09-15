@@ -3014,7 +3014,7 @@ echo "The connection to the server 10.1.2.3:6443 was refused - did you specify t
 INGRESS_PROBE_PORT=${_ip}
 " "$_getent_no_test" KUBECONFIG=@T@/kc HTTPS_PROXY=http://127.0.0.1:1)"
   case "$_pr_out" in
-    *'a proxy is configured'*) ok "proxy-refused: a refusal under a configured proxy is not reported as the cluster refusing" ;;
+    *'a proxy is configured for this address'*) ok "proxy-refused: a refusal under a configured proxy is not reported as the cluster refusing" ;;
     *) bad "proxy-refused: a refusal under a configured proxy is reported as definitive" "a dead local proxy emits the same terse string" ;;
   esac
   if [ "$(printf '%s\n' "$_pr_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
@@ -3038,6 +3038,56 @@ INGRESS_PROBE_PORT=${_ip}
     ok "net-unreachable: no local route + one refused ingress is not the lab-off signature"
   else
     bad "net-unreachable: a local routing failure fired the lab-off headline" "it was not asked"
+  fi
+
+
+  # (1m) PROXY SET BUT NOT USED (round 6, ran-it with a CONNECT-counting proxy: 0 connections):
+  #      loopback is never proxied, and a NO_PROXY match bypasses it — the refusal is the cluster's.
+  _plb_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "The connection to the server 127.0.0.1:1 was refused - did you specify the right host or port?" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc HTTPS_PROXY=http://127.0.0.1:1)"
+  case "$_plb_out" in
+    *'cluster      : not answering'*) ok "proxy-bypass-loopback: a loopback refusal is the cluster's even with HTTPS_PROXY set" ;;
+    *) bad "proxy-bypass-loopback: a loopback refusal is blamed on a proxy Go never uses for loopback" "skip the proxy guard for loopback hosts" ;;
+  esac
+  _pnp_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "The connection to the server 10.1.2.3:6443 was refused - did you specify the right host or port?" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc HTTPS_PROXY=http://127.0.0.1:1 NO_PROXY=10.1.2.3)"
+  case "$_pnp_out" in
+    *'cluster      : not answering'*) ok "proxy-bypass-no_proxy: a refusal for a NO_PROXY host is the cluster's" ;;
+    *) bad "proxy-bypass-no_proxy: a refusal for a NO_PROXY host is blamed on the proxy" "honour NO_PROXY like Go does" ;;
+  esac
+
+  # (1n) a PROXY IN THE KUBECONFIG (round 6, ran-it): a dead proxy-url prints the same terse string naming
+  #      the CLUSTER, with no proxy env at all — so not definitive, and not the lab-off signature on one endpoint.
+  _pu_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; *config*view*) echo http://127.0.0.1:2; exit 0 ;; esac
+echo "The connection to the server 10.1.2.3:6443 was refused - did you specify the right host or port?" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  case "$_pu_out" in
+    *'through a proxy (proxy-url)'*) ok "proxy-url: a refusal through a kubeconfig proxy-url is not reported as the cluster refusing" ;;
+    *) bad "proxy-url: a refusal through a kubeconfig proxy-url is reported as definitive" "read clusters[0].cluster.proxy-url" ;;
+  esac
+  if [ "$(printf '%s\n' "$_pu_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+    ok "proxy-url: a proxy-url-ambiguous refusal + one refused ingress is not the lab-off signature"
+  else
+    bad "proxy-url: a proxy-url-ambiguous refusal fired the lab-off headline" "it may be the proxy, not the cluster"
+  fi
+
+  # (5) the ArgoCD login bullet: the ADDRESS first. fetch-argocd-ca refuses a bare IP the cert does not carry.
+  _argo_bul="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh" | grep -F -A2 'argocd login / write' | tr '\n' ' ')"
+  if [[ "$_argo_bul" == *"ARGOCD_SERVER"*"fetch-argocd-ca"*"ARGOCD_CA_FILE"* ]]; then
+    ok "argocd-login-order: ARGOCD_SERVER is set before fetch-argocd-ca, and ARGOCD_CA_FILE after it"
+  else
+    bad "argocd-login-order: the steps are out of order (fetch-argocd-ca refuses a bare IP)" "set ARGOCD_SERVER first, then fetch, then ARGOCD_CA_FILE"
   fi
 
   # (1i) a 403 as system:anonymous accepted NO credential.

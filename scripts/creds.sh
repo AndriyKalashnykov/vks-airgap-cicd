@@ -859,8 +859,30 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
             _cluster_state=notasked; _cluster_notasked_why=noroute
           elif [[ "$_reach_txt" == *"connection refused"* || "$_reach_txt" == *"was refused - did you specify the right host or port"* \
                || "$_reach_txt" == *"no route to host"* || "$_reach_txt" == *"host is down"* ]]; then
-            if [ -n "${HTTPS_PROXY:-}${https_proxy:-}" ]; then
-              _cluster="UNDETERMINED: the connection was refused, but a proxy is configured (HTTPS_PROXY), so it may be the proxy, not the cluster"
+            # A proxy makes the terse refusal ambiguous ONLY if it was actually USED for THIS address.
+            # (round 6, ran-it, real kubectl + a CONNECT-counting proxy) A kubeconfig `proxy-url` is used for
+            # EVERY host and overrides the env; an env HTTPS_PROXY is never used for loopback or a NO_PROXY
+            # match (0 proxy connections in both). Host parsed from kubectl's own text; unparsed -> cautious.
+            # CIDR entries in NO_PROXY are NOT evaluated (they keep the cautious reading). `config view` never dials.
+            _px_used=0; _px_src=""
+            _px_url="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl config view --minify -o jsonpath='{.clusters[0].cluster.proxy-url}' </dev/null 2>/dev/null || true)"
+            if [ -n "$_px_url" ]; then
+              _px_used=1; _px_src="the kubeconfig routes it through a proxy (proxy-url)"
+            elif [ -n "${HTTPS_PROXY:-}${https_proxy:-}" ]; then
+              _px_used=1; _px_src="a proxy is configured for this address (HTTPS_PROXY)"
+              _px_host=""
+              _px_re='(the server|dial tcp) \[?([^] ]+)\]?:[0-9]+'
+              if [[ $_reach_txt =~ $_px_re ]]; then _px_host="${BASH_REMATCH[2]}"; fi
+              case "$_px_host" in localhost|127.*|::1) _px_used=0 ;; esac
+              IFS=, read -r -a _np_list <<< "${NO_PROXY:-${no_proxy:-}}"
+              for _np_e in "${_np_list[@]}"; do
+                _np_e="${_np_e// /}"; _np_e="${_np_e#.}"
+                if [ -z "$_np_e" ] || [ -z "$_px_host" ]; then continue; fi
+                if [ "$_np_e" = '*' ] || [ "$_px_host" = "$_np_e" ] || [[ "$_px_host" == *".$_np_e" ]]; then _px_used=0; fi
+              done
+            fi
+            if [ "$_px_used" = 1 ]; then
+              _cluster="UNDETERMINED: the connection failed (refused or no route), and ${_px_src}, so it may be the proxy rather than the cluster"
               _cluster_state=unknown
             else
               _cluster="not answering — the connection was refused or had no route"
@@ -3087,7 +3109,8 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
     # produces ARGOCD_CA_FILE. `.env.example` documenting it does not discharge RULE ZERO-B --
     # this report is the surface the operator is looking at when `argocd login` fails.
     printf '    - ArgoCD, argocd login / write — needs a NAME the cert carries, plus ARGOCD_CA_FILE:\n'
-    printf '      make fetch-argocd-ca, then set ARGOCD_CA_FILE and ARGOCD_SERVER=<a name the cert carries> in .env\n'
+    printf '      set ARGOCD_SERVER=<a name the cert carries, resolvable here> in .env FIRST,\n'
+    printf '      then make fetch-argocd-ca (it refuses a bare IP), then set ARGOCD_CA_FILE in .env\n'
   fi
 fi
 
