@@ -3011,7 +3011,10 @@ if [ "${_reach_total:-0}" -gt 0 ]; then
       printf '             genuinely be down, but this run did not prove it. Re-run to confirm.\n'
     fi
   elif [ "${_reach_ok}" -eq "${_reach_total}" ]; then
-    printf '  reachable: %s of %s — everything probed is serving.\n' "$_reach_ok" "$_reach_total"
+    # (2026-09-15, owner) NOTHING when every probed row serves. "reachable: 12 of 12 — everything
+    # probed is serving." restated the column the reader had just read and asked nothing of them.
+    # The summary exists for the rows that are NOT serving: below, it counts them and says where to look.
+    :
   else
     # The middle bands are what needed naming, and each sends the reader somewhere DIFFERENT:
     #   answered but served nothing -> the route is rendered, the backend is not up (run the

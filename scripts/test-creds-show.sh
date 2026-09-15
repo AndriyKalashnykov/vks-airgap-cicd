@@ -4220,6 +4220,50 @@ while True:
           "creds.sh must clear \$_route_dead at start — the EXIT trap does not run on SIGKILL" ;;
     *)  ok "stale-sentinel: a leftover sentinel does NOT poison the next run" ;;
   esac
+
+  # ── ALL SERVING: no summary line that only repeats the Reachable column (2026-09-15, owner) ──────
+  # `_reach_probe 0`: one listener serves every probed ingress row, Harbor unset (not probed).
+  # `_reach_probe 1`: Harbor pointed at the same plain listener, whose probe reads silent — a PARTIAL
+  # state, the positive control that the summary still prints when something is not serving.
+  _reach_probe() {
+    local t p lp out
+    trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    python3 -m http.server "$p" --bind 127.0.0.1 >/dev/null 2>&1 &
+    lp=$!
+    sleep 1
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    chmod +x "$t/bin/getent"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\n' "$p" > "$t/.env"
+    if [ "$1" = 1 ]; then printf 'HARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" >> "$t/.env"; fi
+    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" TMPDIR="$t" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    kill "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _ra_all="$(_reach_probe 0)"
+  _ra_part="$(_reach_probe 1)"
+  # CONTROL: at least one probed ingress row, and every one of them reads serving.
+  _ra_rows="$(grep -E '^  (Gitea|Tekton|headlamp) ' <<< "$_ra_all" || true)"
+  if [ -n "$_ra_rows" ] && ! grep -qvE ' serving$' <<< "$_ra_rows"; then
+    ok "all-serving: every probed ingress row reads serving (the case is live)"
+  else
+    bad "all-serving: the fixture did not serve every probed row — it cannot discriminate" \
+        "fix the fixture, not the product"
+  fi
+  if grep -qE '^  reachable: ' <<< "$_ra_all"; then
+    bad "all-serving: the report still prints a reachable summary that only repeats the column"
+  else
+    ok "all-serving: no reachable summary when everything probed is serving"
+  fi
+  if grep -qE '^  reachable: [0-9]+ of [0-9]+ serving, ' <<< "$_ra_part"; then
+    ok "all-serving: a partial state still prints the reachable summary (positive control)"
+  else
+    bad "all-serving: a partial state lost its reachable summary"
+  fi
   # CONTROL: the first request really did fail, or this case is testing a healthy listener.
   # ⚠️ SCOPED TO THE INGRESS ROWS. A bare `grep -c 'silent'` over the WHOLE report matched three
   # things that are not an ingress row: Harbor's cell (deliberately pointed at a dead port), ArgoCD's
