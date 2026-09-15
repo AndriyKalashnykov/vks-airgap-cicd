@@ -673,6 +673,15 @@ else
     # This cell now names OUR cap as the cause, so ArgoCD must stop contributing to a note that
     # blames the overlay. Withdraw it here, beside the correction, rather than in the note.
     _pw_unset_argo=0
+  elif [ "${_sup_expiry_probe%% *}" = EXPIRED ]; then
+    # (2026-09-15) NOT GATED ON THE STATE OVERLAY. This was the first arm of the `_have_sink` case
+    # below, so a Supervisor kubeconfig with NO overlay -- a real tenant state -- kept `_unset_pw`'s
+    # "<generated at install — see note>" and the note "those passwords do not exist yet" over a read
+    # that had failed on the expired token, and the banner never named ArgoCD. Reuses the
+    # `_sup_expiry_probe` read at the top of this file (one read, one verdict). `_argo_pw_expired` is
+    # the only observable that proves THIS arm ran; `sup-unread: argocd` reports it.
+    argo_pw="<not read>"; _argo_pw_expired=1
+    _pw_unset_argo=0
   elif [ "$_have_sink" = 1 ]; then
     # ⚠️ WITHDRAW HERE TOO. Every arm below REPLACES the cell with a "could not read" explanation,
     # so none of them leaves an "unset" claim standing — and a note blaming the overlay would then
@@ -690,10 +699,7 @@ else
     # One read, one verdict.
     _ap_exp="$_sup_expiry_probe"
     case "$_ap_exp" in
-      # The remedy is per-VALUE, so it aggregates into the Context block rather than into the
-      # cell. `_argo_pw_expired` is also the only observable that proves THIS dispatch site ran --
-      # test-creds-show.sh's site2 row exists to reach it, and every cell now renders identically.
-      EXPIRED*) argo_pw="<not read>"; _argo_pw_expired=1 ;;
+      # EXPIRED never reaches here: the arm above handles it before the overlay test.
       # A LIVE token that the Supervisor rejects is rotated/revoked, not expired — and waiting
       # cannot fix that, so do not send the reader into `argocd-password`'s wait.
       VALID*)   argo_pw="<not read — the Supervisor token is still valid (${_ap_exp#VALID }); if it is being REJECTED the credential was rotated — ask whoever owns the lab>" ;;
@@ -1160,6 +1166,43 @@ case "$(_reach_class "$_reach_harbor_cell"):$(_reach_class "$_reach_argocd_cell"
     fi ;;
 esac
 [ "${CREDS_TOKEN:-0}" = "1" ] && printf 'lab-off: %s\n' "$_pre_off"
+# ── WHICH Supervisor reads this run ATTEMPTS (owner 2026-09-15 + idea round, ran-it) ────────────────
+# The banner used to say "values that depend on it could not be read" whenever the token was expired —
+# MEASURED FALSE with ARGOCD_AUTH_TOKEN set / an admin Harbor user / no VKS_NAMESPACE, and under
+# CREDS_NO_PROBE=1, where zero Supervisor reads happen. The reader then renewed an SSO token for
+# nothing. These predicates MIRROR the gates of the reads below; the Harbor block calls its own.
+#   Harbor web UI admin : robot HARBOR_USERNAME, a Supervisor kubeconfig, probes on   (the robot block)
+#   ArgoCD password     : `_argo_pw_expired=1`, set by its EXPIRED arm above
+#   guest node SSH      : probes on, VKS_NAMESPACE set, a Supervisor kubeconfig FILE  (the SSH block)
+# A POINTER at `<not read>` cells is NOT an option: that marker also means "not probed" (F5, and ran-it).
+_sup_reads_harbor_web() {
+  harbor_username_is_robot "${HARBOR_USERNAME:-}" || return 1
+  [ "$_no_probe_snapshot" != 1 ] || return 1
+  [ -n "$(supervisor_kubeconfig 2>/dev/null || true)" ]
+}
+_sup_reads_ssh() {
+  local _k
+  [ "$_no_probe_snapshot" != 1 ] || return 1
+  [ -n "${VKS_NAMESPACE:-}" ] || return 1
+  _k="$(supervisor_kubeconfig 2>/dev/null || true)"
+  [ -n "$_k" ] && [ -f "$_k" ]
+}
+# Computed BEFORE the powered-off block: its renew step is gated on this list too. It used to print
+# whenever the token had expired, including when nothing in this report needed the token.
+_sup_unread=""; _sup_unread_tok=""
+if [ "${_SUP_DEAD:-0}" = 1 ]; then
+  if _sup_reads_harbor_web; then _sup_unread="the Harbor web UI admin password"; _sup_unread_tok="harbor-web"; fi
+  if [ "${_argo_pw_expired:-0}" = 1 ]; then
+    _sup_unread="${_sup_unread:+${_sup_unread}, }the ArgoCD password"; _sup_unread_tok="${_sup_unread_tok} argocd"
+  fi
+  if _sup_reads_ssh; then
+    _sup_unread="${_sup_unread:+${_sup_unread}, }the guest node SSH address and password"; _sup_unread_tok="${_sup_unread_tok} ssh"
+  fi
+fi
+# A machine token per value, so the tests assert WHICH values were named rather than prose.
+if [ "${CREDS_TOKEN:-0}" = 1 ]; then
+  for _su in $_sup_unread_tok; do printf 'sup-unread: %s\n' "$_su"; done
+fi
 if [ "$_pre_off" = 1 ]; then
   # Cells explaining WHY a value was not read are noise when nothing answered. Key on the FAILURE
   # CODE, never on the cell text: a revealed secret can look like anything.
@@ -1205,9 +1248,12 @@ if [ "$_pre_off" = 1 ]; then
   printf '           started, wait and re-run make creds: its services come up after the cluster.\n'
   printf '        2. Otherwise the lab is off: if you run it, start it; if not, ask whoever runs it.\n'
   _step=3
-  if [ "${_SUP_DEAD:-0}" = 1 ]; then
+  # Only when this report needed the token: the same `_sup_unread` list the banner prints. An expired
+  # token that nothing here reads is not a step.
+  if [ -n "$_sup_unread" ]; then
     _rh="$(_renew_how)"
-    printf '        %s. Once it answers, renew the Supervisor token (it expired %s):\n' "$_step" "${_SUP_DEAD_AT:-?}"
+    printf '        %s. Once it answers, renew the Supervisor token (it expired %s); this report needs it\n' "$_step" "${_SUP_DEAD_AT:-?}"
+    printf '           for %s:\n' "$_sup_unread"
     printf '             %s\n' "${_rh#renew: }"
     printf '           Three failed logins lock the vCenter account PERMANENTLY — do not retry blind.\n'
     _step=4
@@ -1215,15 +1261,16 @@ if [ "$_pre_off" = 1 ]; then
   printf '        %s. Re-run: make creds\n' "$_step"
   printf '      Every command below needs the lab answering.\n'
 fi
-if [ "${_SUP_DEAD:-0}" = 1 ] && [ "$_pre_off" != 1 ]; then
+if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
   # F5: the old headline said "every <not read> below needs it" and MEASURED to ZERO referents in
   # a reachable state, while nine unrelated `<not read — …>` variants compete for the reader's eye.
-  # State the fact, do not send them hunting for a marker.
+  # So the banner NAMES the values instead of pointing at a marker.
   # ⚠️ THE CODES WRAP THE WHOLE LINE, never a fragment: test-creds-show matches the literal
   # substring 'Supervisor token EXPIRED', and a code inserted mid-phrase would break that match
   # on a tty while passing when piped -- green in CI, broken for the human.
-  printf '\n  %s\u26a0\ufe0f  Supervisor token EXPIRED %s — values that depend on it could not be read.%s\n' \
+  printf '\n  %s\u26a0\ufe0f  Supervisor token EXPIRED %s — so this report could not read:%s\n' \
     "${_BOLD}${_RED}" "${_SUP_DEAD_AT:-?}" "${_RST}"
+  printf '     %s.\n' "$_sup_unread"
   # BEFORE the command, never after: it is the reason NOT to run it yet.
   if [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; then
     printf '     FIRST: the recorded ingress did not answer either — check the lab is UP before spending\n'
@@ -1241,9 +1288,10 @@ if [ "${_SUP_DEAD:-0}" = 1 ] && [ "$_pre_off" != 1 ]; then
   # which the same banner already said. Numbering the two steps made the DEPENDENCY honest but left
   # the redundancy in place.
   printf '     %s\n' "$(_renew_how)"
-  if [ "${_argo_pw_expired:-0}" = 1 ]; then
-    printf '     then re-run make creds — the ArgoCD row is read BY this report, not by a second command.\n'
-  fi
+  # (2026-09-15) "— the ArgoCD row is read BY this report, not by a second command" was internal
+  # detail with nothing to act on. It was also the tests' only proof the ArgoCD EXPIRED arm ran; that
+  # proof is now the `sup-unread: argocd` token above.
+  printf '     then re-run make creds.\n'
 fi
 printf '\n  Context\n'
 case "$_prov" in
@@ -2181,7 +2229,7 @@ if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
   elif [ "$_no_probe_snapshot" = 1 ]; then
     _h_admin_why="not probed (CREDS_NO_PROBE=1)"
   fi
-  if [ -n "$_h_sup" ] && [ "$_no_probe_snapshot" != 1 ]; then
+  if _sup_reads_harbor_web; then   # the SAME predicate that puts it in `_sup_unread`
     _h_err="$(mktemp)"; _h_ns="${HARBOR_SERVICE_NAMESPACE:-}"
     # `|| true` IS LOAD-BEARING, and its absence killed the WHOLE report. MEASURED 2026-09-07:
     # without it a failing kubectl makes the pipeline non-zero, and because the substitution is the
@@ -2728,9 +2776,11 @@ fi
 # are true whether or not the lab is up — withholding them removed a tenant's only pointer (ran-it).
 _h_foot=0
 if [ -n "${_h_admin_why:-}" ]; then _h_foot=1; fi
-if [ "${_pre_off:-0}" = 1 ]; then
-  case "${_h_admin_why:-}" in *"Supervisor token expired"*) _h_foot=0 ;; esac
-fi
+# (2026-09-15) THE TOKEN-EXPIRED ARM PRINTS NOTHING, in every state: the banner -- or, when nothing
+# answered, step 3 of the powered-off block -- names this password, its cause and the renew (both
+# print `_sup_unread`, which lists it via `_sup_reads_harbor_web`); after renewal THIS report reads it, so
+# "make harbor-admin-password will not produce it either" had nothing to add there.
+case "${_h_admin_why:-}" in *"Supervisor token expired"*) _h_foot=0 ;; esac
 if [ "$_h_foot" = 1 ]; then
   case "${_h_admin_why}" in
     # "see the banner above" pointed ~40 lines up. Name the cause here; the NEXT line already
@@ -2742,7 +2792,9 @@ if [ "$_h_foot" = 1 ]; then
   # (SC2016), and they are pure decoration in terminal output.
   # WHY it refuses -- replacing a robot with admin is a privilege downgrade -- lives in
   # 28-harbor-admin-password.sh, where anyone changing that behaviour will read it.
-  printf '    make harbor-admin-password will not produce it either: yours is a robot and it refuses.\n'
+  # ⚠️ NOT "it refuses": in the `accepted` branch (a working robot, the healthy Step-9 state)
+  # 28-harbor-admin-password.sh exits 0 and leaves the robot alone. True of all three robot branches:
+  printf '    make harbor-admin-password will not produce it either: it never replaces a robot credential with admin.\n'
 fi
 if [ "${_argo_initial_note:-0}" = 1 ]; then
   case "${_argo_state}" in
@@ -3875,14 +3927,16 @@ _ssh_header_line() {   # <answered> <rc> <state> <never-asked> <answered-but-unr
     # arms below stay, because each separates a lab fact from a fault on this box.
     :
   elif [ "${2:-1}" -eq 119 ]; then
-    printf '    guest node SSH: NOT probed.\n'
+    # (2026-09-15) nothing: the token banner names the SSH address and password it could not read.
+    :
   elif [ "${4:-0}" = 1 ]; then
     printf '    guest node SSH: NOT probed — this box'"'"'s kube config named no reachable target. That is\n'
     printf '                    not a lab fact — see the note below.\n'
   elif [ -n "${3:-}" ]; then
     printf '    guest node SSH: asked, and NOTHING answered. That is not a lab fact — see the note below.\n'
   else
-    printf '    guest node SSH: NOT probed.\n'
+    # (2026-09-15) nothing: "Guest-node SSH password NOT read: not probed (<why>)" below gives the reason.
+    :
   fi
 }
 _ssh_header_line "${_ssh_answered:-0}" "${_ssh_vrc:-1}" "${_ssh_ep_state:-}" "${_ssh_never_asked:-0}" "${_ssh_unreadable:-0}"
