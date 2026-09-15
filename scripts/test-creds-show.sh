@@ -1119,6 +1119,8 @@ fi
 #
 # Both directions, because each fails differently:
 #   set   -> the values must APPEAR (a section that drops them IS the original defect)
+#   (EXEMPTION, 2026-09-15: the `kubectl vsphere` ROW is deliberately hidden outside the vsphere method
+#    unless VKS_PASSWORD is set — its only readers are that arm; the SECTION rule below still holds.)
 #   unset -> the section must still RENDER (one that vanishes when empty leaves the reader with no
 #            idea the values exist — which is how they stayed missing for so long)
 out="$(render_with_env '
@@ -1147,15 +1149,15 @@ fi
 # NEVER VERIFIED: this printer must not authenticate to vCenter — 3 failed binds lock the SSO account
 # PERMANENTLY. Harbor's penalty is a ~1.5s per-principal sleep and Gitea has none, so "we verify
 # Harbor" is not an argument for touching this one. Guards the file against a future convenience.
-# ---- STATE 9b: the VKS / SSO password cell must not INVENT A CHORE (idea round, 2026-09-05) ----
-# MEASURED on a live 9.1 lab: VKS_USERNAME == VCENTER_USERNAME (same account), VCENTER_PASSWORD and
-# VCF_CLI_VSPHERE_PASSWORD set, VKS_PASSWORD unset — and unset is CORRECT (.env.example:1761,
-# "vsphere method only"). The row rendered a bare `<not set>` between two rows showing a value for
-# that same account, so it lied BY CONTRAST: the operator reads a missing credential they do not owe.
+# ---- STATE 9b: the Supervisor login rows must not INVENT A CHORE (owner decision 2026-09-15) ----
+# BEFORE: `VKS / SSO | https://sup | user | <not set — vsphere method only>` directly above
+# `vcf CLI | (the VKS / SSO account) | user | <password>` — one account, one row "not set", the next with
+# a value. NOW: `vcf CLI` always renders and carries the Supervisor host (the bare form `--endpoint`
+# takes); the `kubectl vsphere` row renders only when VKS_PASSWORD is set or VKS_AUTH_METHOD=vsphere.
 #
-# ⚠️ CASE (ii) IS THE RED-PROOF, NOT CASE (i). A blanket "not needed" would pass (i) and be FALSE
-# under the vsphere method, where the operator genuinely does owe VKS_PASSWORD. Only (ii) catches
-# that over-correction — which is why the fix states a fact about the VARIABLE, not about the method.
+# ⚠️ CASE (ii) IS STILL THE RED-PROOF OF OVER-CORRECTION: hiding the row everywhere would pass (i) and
+# be FALSE under the vsphere method, where the operator genuinely does owe VKS_PASSWORD.
+# ⚠️ ROW-ANCHORED greps (`^  <label> `): an unanchored absence check also passes on an empty or renamed render.
 _ss_vcf="$(render_with_env '
 SUPERVISOR_HOST=10.0.0.9
 VKS_USERNAME=administrator@vsphere.local
@@ -1163,15 +1165,20 @@ VKS_AUTH_METHOD=vcf
 VCF_CLI_VSPHERE_PASSWORD=vcf-secret
 ')"
 # Vacuity guard FIRST: every assertion below is a grep over $out, so an empty render passes them all.
-if printf '%s' "$_ss_vcf" | grep -q 'Lab access'; then
-  ok "VKS/SSO (i) vcf: the Lab access section rendered at all (vacuity guard)"
+if printf '%s' "$_ss_vcf" | grep -q 'Lab access' && printf '%s\n' "$_ss_vcf" | grep -qE '^  vCenter '; then
+  ok "login rows (i) vcf: the Lab access section and its vCenter row rendered (vacuity guard)"
 else
-  bad "VKS/SSO (i) vcf: nothing rendered" "the cases below would pass vacuously on empty output"
+  bad "login rows (i) vcf: nothing rendered" "the cases below would pass vacuously on empty output"
 fi
-if printf '%s' "$_ss_vcf" | grep -qE 'VKS / SSO.*<not set>[[:space:]]*$'; then
-  bad "VKS/SSO (i) vcf: cell is a bare <not set>" "invents a chore: unset is CORRECT under the vcf method"
+if printf '%s\n' "$_ss_vcf" | grep -qE '^  vcf CLI +10\.0\.0\.9 +administrator@vsphere\.local '; then
+  ok "login rows (i) vcf: the vcf CLI row carries the BARE Supervisor host and the account"
 else
-  ok "VKS/SSO (i) vcf: cell is not a bare <not set>"
+  bad "login rows (i) vcf: the Supervisor host is not on the vcf CLI row (or carries a scheme)" "vcf context create --endpoint takes the bare SUPERVISOR_HOST"
+fi
+if printf '%s\n' "$_ss_vcf" | grep -qE '^  (VKS / SSO|kubectl vsphere) '; then
+  bad "login rows (i) vcf: a vsphere-login row rendered under the vcf method" "nothing reads VKS_PASSWORD outside the vsphere arm"
+else
+  ok "login rows (i) vcf: no vsphere-login row under the vcf method"
 fi
 # (ii) vsphere + unset: the operator DOES owe it here, so the obligation must stay visible.
 # ⚠️ THE FIXTURE MUST SATISFY EVERY EARLIER REQUIREMENT. _vks_login_requires' vsphere arm is ordered
@@ -1188,10 +1195,10 @@ VKS_CLUSTER_NAME=demo-cluster
 VKS_USERNAME=administrator@vsphere.local
 VKS_AUTH_METHOD=vsphere
 ')"
-if printf '%s' "$_ss_vsp" | grep -q 'VKS_PASSWORD'; then
-  ok "VKS/SSO (ii) vsphere+unset: VKS_PASSWORD is still named as a requirement"
+if printf '%s' "$_ss_vsp" | grep -q 'VKS_PASSWORD' && printf '%s\n' "$_ss_vsp" | grep -qE '^  kubectl vsphere +10\.0\.0\.9 .*<not set>'; then
+  ok "login rows (ii) vsphere+unset: the kubectl vsphere row shows <not set> and VKS_PASSWORD is named"
 else
-  bad "VKS/SSO (ii) vsphere+unset: the obligation vanished" "under vsphere the operator DOES owe VKS_PASSWORD; a blanket 'not needed' is FALSE here"
+  bad "login rows (ii) vsphere+unset: the obligation vanished" "under vsphere the operator DOES owe VKS_PASSWORD; hiding the row is FALSE here"
 fi
 # (iii) vsphere + set: the normal path must be unbroken — the value reaches the cell.
 _ss_set="$(render_with_env '
@@ -1200,10 +1207,23 @@ VKS_USERNAME=administrator@vsphere.local
 VKS_AUTH_METHOD=vsphere
 VKS_PASSWORD=vks-secret
 ')"
-if printf '%s' "$_ss_set" | grep -qE 'VKS / SSO.*(vks-secret|<hidden)'; then
-  ok "VKS/SSO (iii) vsphere+set: the value renders (masked or revealed)"
+if printf '%s\n' "$_ss_set" | grep -qE '^  kubectl vsphere .*(vks-secret|<hidden)'; then
+  ok "login rows (iii) vsphere+set: the value renders (masked or revealed)"
 else
-  bad "VKS/SSO (iii) vsphere+set: the value did not render" "the marker swallowed a real credential"
+  bad "login rows (iii) vsphere+set: the value did not render" "the row swallowed a real credential"
+fi
+# (v) VKS_PASSWORD SET under a NON-vsphere method: someone set it (e.g. for a manual kubectl vsphere
+# login), so the row must still show it — the visibility rule's SECOND arm.
+_ss_kc="$(render_with_env '
+SUPERVISOR_HOST=10.0.0.9
+VKS_USERNAME=administrator@vsphere.local
+VKS_AUTH_METHOD=kubeconfig
+VKS_PASSWORD=vks-secret
+')"
+if printf '%s\n' "$_ss_kc" | grep -qE '^  kubectl vsphere +10\.0\.0\.9 .*(vks-secret|<hidden)'; then
+  ok "login rows (v) kubeconfig+VKS_PASSWORD set: the kubectl vsphere row still renders it"
+else
+  bad "login rows (v) kubeconfig+VKS_PASSWORD set: a set credential was hidden" "the row shows whenever VKS_PASSWORD is set"
 fi
 # (iv) VKS_AUTH_METHOD UNSET — the SHIPPED DEFAULT (.env.example:1192 ships it COMMENTED), and the
 # state a method-keyed marker would render as gibberish (`<not needed: VKS_AUTH_METHOD=>`).
@@ -1212,9 +1232,14 @@ SUPERVISOR_HOST=10.0.0.9
 VKS_USERNAME=administrator@vsphere.local
 ')"
 if printf '%s' "$_ss_dflt" | grep -qE 'VKS_AUTH_METHOD=[[:space:]>]'; then
-  bad "VKS/SSO (iv) method unset: gibberish marker" "a method-keyed cell renders an empty value in the SHIPPED default state"
+  bad "login rows (iv) method unset: gibberish marker" "a method-keyed cell renders an empty value in the SHIPPED default state"
 else
-  ok "VKS/SSO (iv) method unset: no gibberish marker in the shipped default state"
+  ok "login rows (iv) method unset: no gibberish marker in the shipped default state"
+fi
+if printf '%s\n' "$_ss_dflt" | grep -qE '^  vcf CLI ' && ! printf '%s\n' "$_ss_dflt" | grep -qE '^  (VKS / SSO|kubectl vsphere) '; then
+  ok "login rows (iv) method unset: vcf CLI row only, no vsphere-login row"
+else
+  bad "login rows (iv) method unset: wrong rows in the shipped default state" "vcf CLI always; kubectl vsphere only with VKS_PASSWORD or the vsphere method"
 fi
 
 # ── B202 F6: the ATOMIC-PAIR guard, as an ASSERTION rather than a comment ───────────────────────
@@ -1987,12 +2012,16 @@ VKS_PASSWORD=p
 VKS_CLUSTER=c
 VKS_NAMESPACE=n' || true)"
 _119_bare="$(_sso_render creds "$(_jwt 1000000000)" 'VKS_STATE_KIND=1' || true)"
-case "$_119" in
-  *"guest node SSH  <not read>"*) ok "119 arm: a dead Supervisor token renders <not read> (B717)" ;;
-  *) bad "119 arm: the guest-node-SSH row did NOT reach the 119 classification. Either the probe did
+# ⚠️ COLUMN-WIDTH-TOLERANT: the label column is as wide as the longest label present, so a fixture that
+# sets VKS_PASSWORD (adding the 15-char `kubectl vsphere` row) widens it. A literal two-space gap
+# failed that way on 2026-09-15 against a correct product.
+if printf '%s\n' "$_119" | grep -qE '^  guest node SSH +<not read>'; then
+  ok "119 arm: a dead Supervisor token renders <not read> (B717)"
+else
+  bad "119 arm: the guest-node-SSH row did NOT reach the 119 classification. Either the probe did
       not start (VKS_* unset?) or B717's arm regressed. This cell exists because the arm previously
-      had NO fixture at all." ;;
-esac
+      had NO fixture at all."
+fi
 case "$_119_bare" in
   *"<not probed>"*) ok "  ...and WITHOUT the VKS_* vars it says <not probed>, not <not read>" ;;
   *) bad "  the no-VKS_* render should say <not probed> — if it now says <not read>, the report is

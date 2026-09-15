@@ -7587,6 +7587,9 @@ today it is 8.
 **Not started.** Needs its own idea round: the per-cell right answer differs by row, and the vcf CLI
 row's endpoint cell is a literal that must not gain a marker at all.
 
+⚠️ **Constraint changed 2026-09-15:** the vcf CLI row's endpoint cell is no longer the literal
+`(the VKS / SSO account)`. It now carries the bare `SUPERVISOR_HOST`, or `<not set>` (see B546).
+
 ## B537 — ✅ SHIPPED (#1135) — `make kind-down` no longer deletes flow-agnostic credentials
 
 **Closed 2026-09-07.** Both deletions refuted independently: `gitea-ci-token` was a FOSSIL (the
@@ -8082,6 +8085,12 @@ it was satisfied by the empty string an undefined function returns. A green that
 worse than three loud false FAILs.
 
 ## B546 — ⛔ REFUTED, NOT A DEFECT: the `VKS / SSO ... <not set — vsphere method only>` row
+
+⚠️ **SUPERSEDED 2026-09-15 by an owner decision (option A).** The row was not wrong, but the owner found
+the pair confusing and chose to change it. `vcf CLI` now always renders and carries the bare Supervisor
+host; the vsphere-login row is labelled `kubectl vsphere` and renders only when `VKS_PASSWORD` is set or
+`VKS_AUTH_METHOD=vsphere`. Neither refuted remedy below was re-entered: each row still shows only its own
+variable, and nothing prints the method's value. An idea round cleared it with changes before implementing.
 
 Recorded because it has now been "discovered" twice and the obvious fix is dangerous.
 
