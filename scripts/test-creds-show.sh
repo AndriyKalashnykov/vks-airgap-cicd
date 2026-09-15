@@ -145,9 +145,13 @@ export KUBECONFIG="/nonexistent/test-creds-show-sandbox.kubeconfig"
 # and did not cover the selectors that decide the Harbor and ArgoCD rows.
 # VKS_*/SUPERVISOR_HOST/VCF_CLI_VSPHERE_PASSWORD too (impl round 2026-09-15, measured): the Lab access row
 # visibility keys on them, so an operator who exported their .env got 3 FALSE failures against a correct product.
+# HARBOR_USERNAME/VKS_NAMESPACE/VKS_CLUSTER_NAME/ARGOCD_ADMIN_PASSWORD/GITEA_ADMIN_PASSWORD too (impl round
+# 2026-09-15, measured): all five are snapshot-protected, and the token-banner fixtures key on the first four
+# (robot vs admin, SSH read, ArgoCD read) — an exported VKS_NAMESPACE alone gave 3 false FAILs.
 unset HARBOR_URL HARBOR_PASSWORD HARBOR_INSECURE HARBOR_CA_FILE \
       ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_CA_FILE INGRESS_CONTROLLER INGRESS_LB_IP \
-      VKS_PASSWORD VKS_AUTH_METHOD VKS_USERNAME SUPERVISOR_HOST VCF_CLI_VSPHERE_PASSWORD
+      VKS_PASSWORD VKS_AUTH_METHOD VKS_USERNAME SUPERVISOR_HOST VCF_CLI_VSPHERE_PASSWORD \
+      HARBOR_USERNAME VKS_NAMESPACE VKS_CLUSTER_NAME ARGOCD_ADMIN_PASSWORD GITEA_ADMIN_PASSWORD
 export ARGOCD_KUBECONFIG="$KUBECONFIG"
 
 render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; SKIP_DOTENV=1 CREDS_TOKEN=1 ./scripts/creds.sh 2>/dev/null; }
