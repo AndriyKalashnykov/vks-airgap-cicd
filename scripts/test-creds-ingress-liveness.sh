@@ -108,6 +108,11 @@ if grep -qF 're-run the ingress install' <<< "$(grep -A6 -F "$_WARN" <<< "$out")
 else
   ok "accept-then-RST: no reinstall escalation before the table (Harbor's own row decides that)"
 fi
+if grep -qF 'ask whoever runs the lab' <<< "$(grep -A7 -F "$_WARN" <<< "$out")"; then
+  ok "accept-then-RST: the paragraph has a stopping condition (it prints where the after-table arm cannot)"
+else
+  bad "accept-then-RST: the paragraph loops 're-run in a few minutes' with no stopping condition"
+fi
 if grep -qF "$_WARN" <<< "$out"; then
   ok "accept-then-RST: the routeless-gateway warning appears"
 else

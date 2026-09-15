@@ -843,16 +843,29 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
           # ALLOW-LIST, most specific first (round 4, ran-it): the class also holds DNS failures and a
           # dead LOCAL proxy, where nothing reached the cluster; a deny-list with a DEFINITIVE default
           # blamed the cluster for both. Unplaced text is `unknown`, which needs two silent endpoints.
-          if [[ "$_reach_txt" == *"lookup "* ]]; then
+          # (round 5, ran-it with REAL kubectl) `proxyconnect` FIRST: an unresolvable proxy also says `lookup `
+          # and was blamed on the cluster's DNS. `network is unreachable` is ENETUNREACH — no route on THIS
+          # box, nothing left it. And kubectl's refused form is the TERSE "…was refused - did you specify…",
+          # which a dead LOCAL proxy also produces while naming the CLUSTER address — so a refusal is
+          # definitive only when no proxy is configured.
+          if [[ "$_reach_txt" == *"proxyconnect"* ]]; then
+            _cluster="not asked — the connection failed at this machine's proxy (nothing reached the cluster)"
+            _cluster_state=notasked; _cluster_notasked_why=proxy
+          elif [[ "$_reach_txt" == *"lookup "* ]]; then
             _cluster="not asked — its address could not be looked up on this machine (nothing was dialled)"
             _cluster_state=notasked; _cluster_notasked_why=dns
-          elif [[ "$_reach_txt" == *"proxyconnect"* ]]; then
-            _cluster="not asked — this machine's proxy refused the connection (nothing reached the cluster)"
-            _cluster_state=notasked; _cluster_notasked_why=proxy
-          elif [[ "$_reach_txt" == *"connection refused"* || "$_reach_txt" == *"no route to host"* \
-               || "$_reach_txt" == *"network is unreachable"* || "$_reach_txt" == *"host is down"* ]]; then
-            _cluster="not answering — the connection was refused or had no route"
-            _cluster_state=noanswer
+          elif [[ "$_reach_txt" == *"network is unreachable"* ]]; then
+            _cluster="not asked — this machine has no route to the cluster address (nothing left this box)"
+            _cluster_state=notasked; _cluster_notasked_why=noroute
+          elif [[ "$_reach_txt" == *"connection refused"* || "$_reach_txt" == *"was refused - did you specify the right host or port"* \
+               || "$_reach_txt" == *"no route to host"* || "$_reach_txt" == *"host is down"* ]]; then
+            if [ -n "${HTTPS_PROXY:-}${https_proxy:-}" ]; then
+              _cluster="UNDETERMINED: the connection was refused, but a proxy is configured (HTTPS_PROXY), so it may be the proxy, not the cluster"
+              _cluster_state=unknown
+            else
+              _cluster="not answering — the connection was refused or had no route"
+              _cluster_state=noanswer
+            fi
           elif [[ "$_reach_txt" == *"context deadline exceeded"* || "$_reach_txt" == *"Client.Timeout exceeded"* \
                || "$_reach_txt" == *"i/o timeout"* || "$_reach_txt" == *"TLS handshake timeout"* ]]; then
             _cluster="UNDETERMINED: kubectl's own request timed out (that alone does not mean it is down)"
@@ -886,8 +899,13 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
         NO_KUBE_TARGET)
           # load_env always exports a default KUBECONFIG path, and kubectl reads a MISSING file as an empty
           # config and dials localhost:8080 — so "no current target" usually means "the file is not there".
-          if [ ! -s "${KUBECONFIG%%:*}" ]; then
-            _cluster="not asked — KUBECONFIG (${KUBECONFIG%%:*}) does not exist or is empty"
+          _kc_any=0
+          IFS=: read -r -a _kc_list <<< "${KUBECONFIG}"
+          for _kc in "${_kc_list[@]}"; do
+            if [ -n "$_kc" ] && [ -s "$_kc" ]; then _kc_any=1; fi
+          done
+          if [ "$_kc_any" = 0 ]; then
+            _cluster="not asked — no file named by KUBECONFIG (${KUBECONFIG}) exists with content"
             _cluster_notasked_why=nofile
           else
             _cluster="not asked — the kubeconfig has no current context"
@@ -1094,7 +1112,8 @@ if [ "$_pre_off" = 1 ]; then
         nokubectl) _cclause=' (kubectl is not installed, so the cluster was not asked)' ;;
         unset)     _cclause=' (KUBECONFIG is not set, so the cluster was not asked)' ;;
         dns)       _cclause=" (the cluster's address could not be looked up on this machine, so it was not asked)" ;;
-        proxy)     _cclause=" (this machine's proxy refused the connection, so the cluster was not asked)" ;;
+        proxy)     _cclause=" (the connection failed at this machine's proxy, so the cluster was not asked)" ;;
+        noroute)   _cclause=' (this machine has no route to the cluster address, so it was not asked)' ;;
         nofile)    _cclause=' (there is no kubeconfig file at KUBECONFIG, so the cluster was not asked)' ;;
         *)         _cclause=' (this report had no usable kubeconfig to ask the cluster)' ;;
       esac ;;
@@ -1405,7 +1424,8 @@ elif [ -n "${INGRESS_LB_IP:-}" ]; then
     echo "      ${CREDS_ROUTE_TIMEOUT_SECONDS:-${CREDS_PROBE_TIMEOUT_SECONDS:-2}}s. That is a gateway with no routes attached, an ingress still"
     echo "      starting (a fresh LoadBalancer can take 5-60s to wire its data path), pods that cannot"
     echo "      start (their images come from a registry that is not answering), or TLS on port ${INGRESS_PROBE_PORT:-80}."
-    echo "      The line below is correct IF this is your current ingress. Re-run 'make creds' in a few minutes."
+    echo "      The line below is correct IF this is your current ingress. Re-run 'make creds' in a few minutes;"
+    echo "      if it persists across re-runs, ask whoever runs the lab."
     echo
   fi
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
@@ -2251,6 +2271,7 @@ _reach_dns=0
 # remedies can be separated; they are deliberately NOT summed back into `_reach_half`.
 _reach_5xx=0
 _reach_404=0
+_ing_serving=0
 _backend_ns=""
 _dns_stale=0
 _dns_absent=0
@@ -2284,7 +2305,8 @@ while IFS=$'\t' read -r c1 c2 c3 c4 c5 c6 _rest; do
   # rendered sentence in three states while the suite went 136 -> 136.
   case "$(_reach_class "$c5")" in
     skip)     : ;;
-    serving)  _reach_total=$((_reach_total + 1)); _reach_ok=$((_reach_ok + 1)) ;;
+    serving)  _reach_total=$((_reach_total + 1)); _reach_ok=$((_reach_ok + 1))
+              if [ -n "${c6:-}" ]; then _ing_serving=$((_ing_serving + 1)); fi ;;
     answered) _reach_total=$((_reach_total + 1)); _reach_half=$((_reach_half + 1)) ;;
     dns)      _reach_total=$((_reach_total + 1)); _reach_dns=$((_reach_dns + 1)) ;;
     silent)   _reach_total=$((_reach_total + 1)) ;;
@@ -2796,6 +2818,10 @@ if [ "${_reach_total:-0}" -gt 0 ]; then
       printf '             so the lab is at least partly up. Its services are either still starting\n'
       printf '             (re-run make creds in a few minutes) or at addresses from an earlier install;\n'
       printf '             nothing here can tell which.\n'
+      if [ "${_reach_harbor_cell:-}" = silent ]; then
+        printf '             Harbor is among them, and new pods pull their images from it: if Harbor stays\n'
+        printf '             silent across re-runs, ask whoever runs the lab.\n'
+      fi
     else
       printf '  reachable: 0 of %s — NOTHING answered on this run, of the addresses this report could\n' "$_reach_total"
       printf '             probe. Consistent with the lab being OFF; this report cannot tell "off" from\n'
@@ -2838,17 +2864,32 @@ if [ "${_reach_total:-0}" -gt 0 ]; then
     # The cluster answered, so the silent rows are not a powered-off lab. Right after `lab-start` they
     # are services still starting (it waits for neither); after a rebuild they may be stale addresses.
     if [ "${_cluster_up:-0}" = 1 ] && [ "$_sil" -gt 0 ]; then
-      if [ "${_reach_harbor_cell:-}" = silent ]; then
-        # MEASURED live (round 4): with Harbor silent every guest pod was ImagePullBackOff on it — the
-        # other silent rows follow from this one, so name it rather than leave the reader to re-run forever.
-        printf '             Harbor is not answering, and this repo'"'"'s installs pull their images from it (the\n'
-        printf '             ingress'"'"'s included), so nothing behind the ingress can start until it does.\n'
-        printf '             Re-run make creds in a few minutes; if Harbor stays silent, ask whoever runs the lab.\n'
+      # The reinstall is ours to run only when we installed the ingress (B517): never for an attach-mode
+      # tenant (istio-existing installs nothing), never over a REFUSED overlay (another cluster's values).
+      _reinstall=1
+      if [ "${INGRESS_CONTROLLER:-istio}" = istio-existing ] || [ "${_sink_refused:-0}" = 1 ]; then _reinstall=0; fi
+      if [ "${_reach_harbor_cell:-}" = silent ] && [ "${_ing_serving:-0}" -eq 0 ]; then
+        # MEASURED live (round 4): with Harbor silent every guest pod was ImagePullBackOff on it. GATED on
+        # nothing behind the ingress serving (round 5, ran-it): already-running pods keep serving through a
+        # Harbor flap, and "nothing can start" three lines under serving rows contradicted itself.
+        # The ingress itself pulls from our Harbor only when WE installed it (istio, traefik); an attach-mode
+        # tenant's gateway image comes from the platform's mesh hub.
+        case "${INGRESS_CONTROLLER:-istio}" in
+          istio|traefik) _hdeps='the ingress and the apps and tools behind it' ;;
+          *)             _hdeps='the apps and tools behind the ingress' ;;
+        esac
+        printf '             Harbor is not answering, and new pods for %s pull their\n' "$_hdeps"
+        printf '             images from it, so they cannot start until it does. Re-run make creds in a few\n'
+        printf '             minutes; if Harbor stays silent, ask whoever runs the lab.\n'
       else
         printf '             %s, so the silent rows are most likely still starting: re-run make creds\n' "$_cl_ans"
         printf '             in a few minutes. If they stay silent across re-runs, the lab is not finishing its\n'
         printf '             start, the addresses are from an earlier install, or this machine cannot reach them:\n'
-        printf '             re-run the ingress install only then, or ask whoever runs the lab.\n'
+        if [ "$_reinstall" = 1 ]; then
+          printf '             re-run the ingress install only then, or ask whoever runs the lab.\n'
+        else
+          printf '             ask whoever runs the lab.\n'
+        fi
       fi
     fi
     # ⚠️ GATED ON THE BUCKET THAT JUSTIFIES IT, not merely on "nothing is serving". A round
@@ -3046,7 +3087,7 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
     # produces ARGOCD_CA_FILE. `.env.example` documenting it does not discharge RULE ZERO-B --
     # this report is the surface the operator is looking at when `argocd login` fails.
     printf '    - ArgoCD, argocd login / write — needs a NAME the cert carries, plus ARGOCD_CA_FILE:\n'
-    printf '      make fetch-argocd-ca, then set it in .env\n'
+    printf '      make fetch-argocd-ca, then set ARGOCD_CA_FILE and ARGOCD_SERVER=<a name the cert carries> in .env\n'
   fi
 fi
 

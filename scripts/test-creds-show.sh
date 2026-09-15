@@ -2836,7 +2836,9 @@ while True:
     printf '%s' "$envb" > "$t/.env"
     local a args=()
     for a in "$@"; do args+=("${a//@T@/$t}"); done   # `@T@` = this fixture's own directory
-    out="$( cd "$t" && env "${args[@]}" PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+    # proxies CLEARED by default: a refusal is judged against the proxy environment, and the box running
+    # the suite must not decide these verdicts. A case that needs a proxy passes one in its args.
+    out="$( cd "$t" && env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy "${args[@]}" PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
               CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
     printf '%s' "$out"
     rm -rf "$t"
@@ -2853,7 +2855,7 @@ printf "127.0.0.1 %s\n" "$2"
   #     is only one probe, so the cluster's silence is what earns the headline here.
   _na_out="$(_lab_fixture '#!/bin/sh
 case "$*" in *current-context*) echo ctx; exit 0 ;; esac
-echo "Unable to connect to the server: dial tcp 192.0.2.1:6443: connect: connection refused" >&2; exit 1
+echo "The connection to the server 192.0.2.1:6443 was refused - did you specify the right host or port?" >&2; exit 1
 ' "INGRESS_LB_IP=127.0.0.1
 INGRESS_PROBE_PORT=${_ip}
 HARBOR_URL=harbor.lab.test
@@ -2974,13 +2976,13 @@ INGRESS_PROBE_PORT=${_ip}
   fi
   _px_out="$(_lab_fixture '#!/bin/sh
 case "$*" in *current-context*) echo ctx; exit 0 ;; esac
-echo "Unable to connect to the server: proxyconnect tcp: dial tcp 127.0.0.1:3128: connect: connection refused" >&2; exit 1
+echo "Unable to connect to the server: proxyconnect tcp: dial tcp: lookup proxy.nonexistent-zz.invalid on 127.0.0.53:53: no such host" >&2; exit 1
 ' "INGRESS_LB_IP=127.0.0.1
 INGRESS_PROBE_PORT=${_ip}
 " "$_getent_no_test" KUBECONFIG=@T@/kc)"
   case "$_px_out" in
-    *"this machine's proxy refused the connection"*) ok "proxy: a refused LOCAL proxy is blamed on the proxy, not the cluster" ;;
-    *) bad "proxy: a refused local proxy is reported as the cluster refusing" "match 'proxyconnect' before 'connection refused'" ;;
+    *"failed at this machine's proxy"*) ok "proxy: an unresolvable LOCAL proxy is blamed on the proxy, not the cluster's DNS" ;;
+    *) bad "proxy: an unresolvable local proxy is reported as a cluster lookup failure" "match 'proxyconnect' before 'lookup '" ;;
   esac
   if [ "$(printf '%s\n' "$_px_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
     ok "proxy: a dead local proxy + one refused ingress is not the lab-off signature"
@@ -3001,6 +3003,41 @@ INGRESS_PROBE_PORT=${_ip}
     ok "dns-resolver-refused: a refused LOCAL resolver is a lookup failure, not a refused cluster"
   else
     bad "dns-resolver-refused: a refused local resolver was read as the cluster refusing" "match 'lookup ' before 'connection refused'"
+  fi
+
+
+  # (1k) REAL kubectl's refused form + a CONFIGURED PROXY: the identical terse string, so not definitive.
+  _pr_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "The connection to the server 10.1.2.3:6443 was refused - did you specify the right host or port?" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc HTTPS_PROXY=http://127.0.0.1:1)"
+  case "$_pr_out" in
+    *'a proxy is configured'*) ok "proxy-refused: a refusal under a configured proxy is not reported as the cluster refusing" ;;
+    *) bad "proxy-refused: a refusal under a configured proxy is reported as definitive" "a dead local proxy emits the same terse string" ;;
+  esac
+  if [ "$(printf '%s\n' "$_pr_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+    ok "proxy-refused: a proxy-ambiguous refusal + one refused ingress is not the lab-off signature"
+  else
+    bad "proxy-refused: a proxy-ambiguous refusal fired the lab-off headline" "it may be the proxy, not the cluster"
+  fi
+
+  # (1l) ENETUNREACH: no route on THIS box; nothing left it.
+  _nu_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; esac
+echo "Unable to connect to the server: dial tcp [2001:db8::1]:6443: connect: network is unreachable" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  case "$_nu_out" in
+    *'no route to the cluster address'*) ok "net-unreachable: a local routing failure is not reported as the cluster not answering" ;;
+    *) bad "net-unreachable: ENETUNREACH is reported as the cluster not answering" "nothing left this box" ;;
+  esac
+  if [ "$(printf '%s\n' "$_nu_out" | grep -c '^lab-off: 0$')" -eq 1 ]; then
+    ok "net-unreachable: no local route + one refused ingress is not the lab-off signature"
+  else
+    bad "net-unreachable: a local routing failure fired the lab-off headline" "it was not asked"
   fi
 
   # (1i) a 403 as system:anonymous accepted NO credential.
@@ -3123,7 +3160,7 @@ ARGOCD_SERVER=127.0.0.1:${_lst_port}
   if [ "$(printf '%s\n' "$_ss_out" | grep -E '^  ArgoCD ' | grep -c 'serving$')" -ge 1 ]; then
     ok "up+starting: ArgoCD serves while the ingress is silent (the case is live)"
     case "$_ss_out" in
-      *'the silent rows are most likely still starting'*) ok "up+starting: the silent rows are explained, with a stopping condition" ;;
+      *'the silent rows are most likely still starting'*'re-run the ingress install only then'*) ok "up+starting: the silent rows are explained, with a stopping condition and the (default-controller) reinstall" ;;
       *) bad "up+starting: silent rows under a cluster that answered are left unexplained" "say they are still starting or at a stale address" ;;
     esac
   else
@@ -3163,6 +3200,77 @@ HARBOR_INSECURE=1
     bad "harbor-silent: the fixture did not produce silent Harbor + serving ArgoCD — the case is vacuous" "fix the fixture, not the product"
   fi
 
+
+  # (4c) HARBOR SILENT BUT THE ROWS BEHIND THE INGRESS SERVE (round 5, ran-it): running pods keep serving
+  #      through a Harbor flap, so "nothing behind the ingress can start" must NOT print here.
+  _hsrv_pf="$(mktemp)"
+  python3 -c '
+import http.server, socketserver, time, threading
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.send_header("Content-Length","2"); self.end_headers(); self.wfile.write(b"ok")
+    def log_message(self, *a): pass
+socketserver.ThreadingTCPServer.allow_reuse_address = True
+srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), H)
+print(srv.server_address[1], flush=True)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+time.sleep(90)
+' > "$_hsrv_pf" &
+  _hsrv_pid=$!
+  for _w in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do [ -s "$_hsrv_pf" ] && break; sleep 0.2; done
+  _hsrv_port="$(head -1 "$_hsrv_pf")"
+  _hf_out="$(_lab_fixture '#!/bin/sh
+case "$*" in
+  *current-context*) echo stub-ctx ;;
+  *version*) exit 0 ;;
+esac
+exit 0
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_hsrv_port}
+HARBOR_URL=127.0.0.1:$(_closed_port)
+HARBOR_PASSWORD=x
+HARBOR_INSECURE=1
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  kill "$_hsrv_pid" 2>/dev/null; rm -f "$_hsrv_pf"
+  if [ "$(printf '%s\n' "$_hf_out" | grep -E '^  Gitea ' | grep -c 'serving$')" -ge 1 ] \
+     && [ "$(printf '%s\n' "$_hf_out" | grep -E '^  Harbor \(registry\)' | grep -c 'silent$')" -ge 1 ]; then
+    ok "harbor-flap: Harbor is silent while the rows behind the ingress serve (the case is live)"
+    case "$_hf_out" in
+      *'Harbor is not answering'*) bad "harbor-flap: 'Harbor is not answering … cannot start' prints under serving ingress rows" "gate the dependency on nothing behind the ingress serving" ;;
+      *) ok "harbor-flap: the Harbor dependency sentence is withheld while the ingress rows serve" ;;
+    esac
+  else
+    bad "harbor-flap: the fixture did not produce serving ingress rows with a silent Harbor — the case is vacuous" "fix the fixture, not the product"
+  fi
+
+  # (4d) ATTACH-MODE TENANT (istio-existing): never prescribe re-running an ingress install we never ran (B517).
+  _at_pf="$(mktemp)"
+  python3 -c 'import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(("127.0.0.1",0));s.listen(8);print(s.getsockname()[1],flush=True);time.sleep(60)' > "$_at_pf" &
+  _at_pid=$!
+  for _w in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do [ -s "$_at_pf" ] && break; sleep 0.2; done
+  _at_port="$(head -1 "$_at_pf")"
+  _at_out="$(_lab_fixture '#!/bin/sh
+case "$*" in
+  *current-context*) echo stub-ctx ;;
+  *version*) exit 0 ;;
+esac
+exit 0
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+INGRESS_CONTROLLER=istio-existing
+ARGOCD_SERVER=127.0.0.1:${_at_port}
+" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  kill "$_at_pid" 2>/dev/null; rm -f "$_at_pf"
+  if [ "$(printf '%s' "$_at_out" | grep -c 'the silent rows are most likely still starting')" -ge 1 ]; then
+    ok "attach-tenant: the still-starting arm is reached for an istio-existing tenant (the case is live)"
+    case "$_at_out" in
+      *'re-run the ingress install'*) bad "attach-tenant: an istio-existing tenant is told to re-run an ingress install it never ran" "B517: guard the reinstall on INGRESS_CONTROLLER" ;;
+      *) ok "attach-tenant: no ingress reinstall is prescribed to an istio-existing tenant" ;;
+    esac
+  else
+    bad "attach-tenant: the still-starting arm was not reached — the case is vacuous" "fix the fixture, not the product"
+  fi
+
   # A REACHABLE cluster with every recorded service address silent is NOT a powered-off lab — it is
   # stale addresses from an earlier install. "The lab looks OFF — start it" would be false (ran-it).
   _off_probe_cluster_up() {
@@ -3196,7 +3304,7 @@ HARBOR_INSECURE=1
       *) ok "cluster-up+silent: never says the lab looks OFF" ;;
     esac
     case "$_up_out" in
-      *'at least partly up'*) ok "cluster-up+silent: says the lab is at least partly up, without guessing why" ;;
+      *'at least partly up'*'Harbor is among them'*) ok "cluster-up+silent: says the lab is at least partly up, and names the silent Harbor with a stopping condition" ;;
       *) bad "cluster-up+silent: does not say the lab is at least partly up" "0 answered + cluster answered = partly up; say so" ;;
     esac
     case "$_up_out" in
