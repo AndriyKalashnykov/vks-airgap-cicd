@@ -166,7 +166,7 @@ echo
 _klog() { printf 'E0907 15:15:51.244598 %7s memcache.go:265] "Unhandled Error" err="couldn'"'"'t get current server API group list: Get \\"https://192.0.2.99:6443/api?timeout=3s\\": context deadline exceeded"' "$1"; }
 
 # THE RED-PROOF. Before the fix this was UNAUTHORIZED, whose remedy is `make vks-login` — one of
-# THREE vCenter SSO attempts before PERMANENT lockout, spent on a cluster that is merely off.
+# a failed vCenter SSO login toward a lockout, spent on a cluster that is merely off.
 t UNKNOWN "$(_klog 401)"
 # Controls: neighbouring pids must be unchanged, so a future "fix" cannot pass by flattening the arm.
 t UNKNOWN "$(_klog 2667264)"

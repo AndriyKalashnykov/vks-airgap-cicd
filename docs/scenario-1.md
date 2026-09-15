@@ -67,7 +67,7 @@ Steps 1 and 2, where each one is listed with the exact `.env` key it goes in:
 | vCenter FQDN | `VCENTER_HOST` | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA). **Your jump box must resolve it** — check: `getent hosts vcsa.env1.lab.test` |
 | your SSO user | `VKS_USERNAME` **and** `VCENTER_USERNAME` | `administrator@vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups. **Two keys, one value** — Steps 3 and 4/5 read different ones. |
 | your SSO domain | `VKS_SSO_DOMAIN` | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups, the *Domain* dropdown. Needed only if `VKS_USERNAME` is bare (no `@`) or unset. |
-| your SSO password | `VCF_CLI_VSPHERE_PASSWORD` **and** `VCENTER_PASSWORD` | — | for that login. **Two keys, one value**, and **both in single quotes** — see Step 1, where an unquoted password is silently mangled against an account that locks out after 3 attempts. |
+| your SSO password | `VCF_CLI_VSPHERE_PASSWORD` **and** `VCENTER_PASSWORD` | — | for that login. **Two keys, one value**, and **both in single quotes** — see Step 1, where an unquoted password is silently mangled against an account repeated failed logins can lock. |
 
 ### Download the Broadcom artifacts
 
@@ -137,7 +137,7 @@ it uses.
 
 ⚠️ **Passwords go in SINGLE quotes** — `VCF_CLI_VSPHERE_PASSWORD='your password'`, an embedded `'`
 escaped as `'\''`. Bare, a `$` or space is silently mangled, so the value changes every run and each
-retry burns one of **3 attempts before the account locks out permanently**. You see `HTTP 401` while
+retry burns a failed login, and **repeated failures can lock the account**. You see `HTTP 401` while
 `.env` looks correct.
 
 ⚠️ **Put `VCF_CLI_SRC_DIR` in `./.env`, not on a command line.** Steps 4 and 5 silently fall back to
@@ -1147,7 +1147,7 @@ make creds-show
 **Expect:** a `Lab access` section listing `vCenter` and `vcf CLI` — the values YOU supplied in `.env`, with the Supervisor host on the vcf CLI row — and a `guest node SSH` row whose password is read LIVE from the Supervisor, with the username `vmware-system-user`.
 (A separate kubectl vsphere row appears only if VKS_PASSWORD is set or VKS_AUTH_METHOD is vsphere — the legacy login, which this walk does not use.)
 **Expect:** the `guest node SSH` row shows the secret name it read (a `-ssh-password` secret) when it succeeds, or a short token such as `<forbidden>` / `<no kubeconfig>` when it could not ask — never a blank that would read as *this cluster has none*.
-**Expect:** a warning that vCenter SSO locks the account `PERMANENTLY after 3 failed attempts`, and that if one of these SSO passwords is rejected you stop and get the correct value rather than retry.
+**Expect:** a warning that vCenter SSO `can lock an account after repeated failed logins`, and that if one of these SSO passwords is rejected you stop and get the correct value rather than retry.
 
 The ArgoCD row is the exception if you changed that password in Step 5: it can only show the
 generated one, or say it cannot read it. Yours is in your password manager.

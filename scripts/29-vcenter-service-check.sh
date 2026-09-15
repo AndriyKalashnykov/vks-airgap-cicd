@@ -81,8 +81,8 @@ fi
 
 # ⚠️ SECRETS NEVER IN ARGV, and NEVER extracted with `cut`. MEASURED 2026-09-05: an agent read
 # VCENTER_PASSWORD with `grep | cut -d= -f2-`, which kept the surrounding SINGLE QUOTES from .env
-# and produced an HTTP 401 — burning one of only THREE vCenter SSO attempts before a PERMANENT
-# lockout. `load_env`'s `set -a` sourcing strips them correctly; `cut` does not.
+# and produced an HTTP 401 — a failed vCenter SSO login (repeated failed logins can lock the
+# account). `load_env`'s `set -a` sourcing strips them correctly; `cut` does not.
 # The credential goes into a curl -K config under umask 077, so it never reaches a command line.
 _esc() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; printf '%s' "$s"; }
 CFG="$(mktemp)"; SESSCFG="$(mktemp)"; BODY="$(mktemp)"
@@ -90,14 +90,14 @@ trap 'rm -f "$CFG" "$SESSCFG" "$BODY"' EXIT
 ( umask 077; printf 'user = "%s:%s"\ninsecure\nsilent\n' \
     "$(_esc "$VCENTER_USERNAME")" "$(_esc "$VCENTER_PASSWORD")" > "$CFG" )
 
-# ⚠️ ONE authentication for the whole run. vCenter SSO locks the account PERMANENTLY after 3
-# failed attempts, so this script authenticates ONCE and reuses the session for every probe.
+# ⚠️ ONE authentication for the whole run. Repeated failed logins can lock a vCenter SSO account,
+# so this script authenticates ONCE and reuses the session for every probe.
 SESSION="$(curl -sSk -K "$CFG" --max-time "$VC_TIMEOUT" -X POST \
              "https://${VCENTER_HOST}/api/session" 2>/dev/null | tr -d '"' || true)"
 if [ -z "$SESSION" ]; then
   log_error "vcenter-service-check: could not open a vCenter session against ${VCENTER_HOST}."
-  log_error "  STOPPING RATHER THAN RETRYING. vCenter SSO locks the account PERMANENTLY after 3"
-  log_error "  failed attempts; a retry loop here would spend them. Confirm VCENTER_PASSWORD with"
+  log_error "  STOPPING RATHER THAN RETRYING. Repeated failed logins can lock a vCenter SSO account"
+  log_error "  (default: 5 in 3 minutes); a retry loop here would spend them. Confirm VCENTER_PASSWORD with"
   log_error "  whoever owns the lab before running this again."
   exit 2
 fi

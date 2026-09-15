@@ -343,7 +343,7 @@ if command -v kubectl >/dev/null 2>&1; then
     esac
     # ⚠️ THE SSO COMMAND APPEARS ON EXACTLY ONE ARM BELOW: EXPIRED, where the token's own `exp`
     # makes the cause a FACT. Everywhere else there is deliberately NO command — the obvious remedy
-    # performs a vSphere SSO bind and vCenter locks out PERMANENTLY after 3 failures, so it must
+    # performs a vSphere SSO bind and repeated failed binds can lock the account, so it must
     # never be prescribed for a state this cannot decide. Keep this arm-for-arm identical to
     # creds.sh's `_rejected_why`; a round found the two copies DISAGREEING on the undecidable arm.
     if [ "$_ap_sup_cls" = UNAUTHORIZED ]; then
@@ -351,7 +351,7 @@ if command -v kubectl >/dev/null 2>&1; then
       # as Unauthorized. `_ap_exp` was read once, above.
       case "$_ap_exp" in
         # ONE sentence, from lib/os.sh — NOT a hand-written copy. A round measured the two copies
-        # DISAGREEING on the undecidable arm, and "locks out PERMANENTLY" missing from this file's
+        # DISAGREEING on the undecidable arm, and the lockout clause missing from this file's
         # arms entirely: the clause that is the whole REASON the command is withheld.
         # ⚠️ DELIBERATELY SILENT. The ERROR block below now LEADS with this expiry and gives the two
         # ordered steps; warning here as well printed the same fact twice, three lines apart. The
@@ -423,8 +423,8 @@ fi
 # RECOMPUTED ONLY WHEN UNSET, AND ONLY BEHIND THE SAME `UNAUTHORIZED` GATE. Dropping that gate
 # would blame a NotFound / timeout / crash on an expiry that merely HAPPENS to be true -- the
 # exact conflation creds.sh's rc=124 arm was fixed for the same day. `kube_token_expiry` is
-# OFFLINE (it reads the JWT's own exp), so this costs none of the THREE vCenter SSO attempts
-# before permanent lockout. `_ap_err` is created at :154 with an EXIT trap, so it is still alive.
+# OFFLINE (it reads the JWT's own exp), so this costs no vCenter SSO login attempts
+# (repeated failed logins can lock the account). `_ap_err` is created at :154 with an EXIT trap, so it is still alive.
 # ── THE EXIT CODE CARRIES THE CAUSE (2026-09-15). creds.sh is this code's only consumer and keys on
 # it, never on the text below, so the cause is decided HERE, once, from the Supervisor's own answer:
 #   5  the Supervisor REJECTED an EXPIRED token            -> renewing is the fix (the SSO command)
@@ -433,7 +433,7 @@ fi
 #   7  the read failed for any other reason (bad cert, 503, Forbidden, a dead guest...)
 #   3  ABSENT: every attempt said NotFound, or nothing could be tried
 # 3 USED TO COVER ALL OF THEM, so the parent could only guess from the token, and a leftover expired
-# kubeconfig on an unreachable Supervisor was rendered as "renew" (one of THREE SSO attempts).
+# kubeconfig on an unreachable Supervisor was rendered as "renew" (a failed SSO login).
 _ap_code=3
 if [ "${_ap_exp%% *}" = EXPIRED ]; then _ap_code=5
 elif [ "$_ap_sup_cls" = UNREACHABLE ]; then _ap_code=6

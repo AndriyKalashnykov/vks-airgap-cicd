@@ -18,7 +18,7 @@
 # deterministically, needs no retry knowledge, and does not vary with the fault.
 #
 # 🔴 AND IT IS THE SSO GUARANTEE. rc=124 must NEVER reach the UNAUTHORIZED arm, whose remedy names a
-# vSphere SSO bind — and vCenter locks out PERMANENTLY after THREE failures. Keying on the exit code
+# vSphere SSO bind — and repeated failed binds can lock the account. Keying on the exit code
 # guarantees that whatever the fault happens to write to stderr; no string-matching model can.
 #
 # The timeout here is REAL: the kubectl stub sleeps past the budget. Nothing simulates an rc.
@@ -104,7 +104,7 @@ if ! grep -q 'make vks-login' <<< "$_ctl_out"; then
       timeout therefore measures nothing at all."
 elif grep -q 'make vks-login' <<< "$_out"; then
   bad "an expired budget produced a report naming make vks-login. That remedy performs a vSphere
-      SSO bind and vCenter locks out PERMANENTLY after THREE failures -- it must never be
+      SSO bind and repeated failed binds can lock the account -- it must never be
       prescribed for a state we could not even ask about."
 else
   ok "an expired budget names no SSO command (and the control proves it CAN be printed)"
@@ -147,7 +147,7 @@ case "$_tok" in
     ok "_kube_classify reports an expired budget as ours, not as a class the server told us" ;;
   '<auth failed>')
     bad "an expired budget was mapped to AUTH FAILED. The server said nothing at all, and that arm's
-      remedy is a vSphere SSO bind — vCenter counts it toward a PERMANENT 3-strike lockout. This is
+      remedy is a vSphere SSO bind — vCenter counts it toward the SSO lockout policy. This is
       the exact outcome the exit-code discriminator exists to make impossible." ;;
   '')
     bad "no _kube_classify token appeared at all -- this case never reached it, so the SSO-critical

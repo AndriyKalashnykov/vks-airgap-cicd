@@ -182,7 +182,11 @@ VCENTER_PASSWORD -> make vks-login -> secrets/supervisor.kubeconfig
 ⚠️ **Harbor is a SUPERVISOR Service.** The guest kubeconfig has NO harbor namespace, so
 `kubectl -n harbor ...` against the guest is always empty — that is not "Harbor is missing".
 
-⚠️ **vCenter SSO LOCKS OUT PERMANENTLY AFTER 3 FAILED ATTEMPTS.** Never guess, never retry blind. If
+⚠️ **NEVER GUESS A vCenter PASSWORD, NEVER RETRY A REJECTED ONE BLIND.** Repeated failed logins can lock a
+vCenter SSO account (default 5 in 3 min, auto-unlock 5 min — MEASURED 2026-09-15 on 9.1.0.0300 and 9.1-doc;
+`administrator@vsphere.local` is exempt by default, but a hardened/third-party lab or the 9.1.1.0 opt-in can
+remove that, so treat every SSO password as lockable). The old "PERMANENTLY after 3" was the APPLIANCE-root
+faillock number, not SSO (B733, docs/vks-services/vcenter-sso.md). If
 `VCENTER_PASSWORD` is absent from `.env`, STOP and ask the operator — do not spend an attempt.
 
 #### THREE HARBOR "AUTH CHECKS" THAT DO NOT DISCRIMINATE — measured 2026-08-22
