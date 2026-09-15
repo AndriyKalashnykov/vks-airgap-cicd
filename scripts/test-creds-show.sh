@@ -2199,11 +2199,11 @@ if grep -qF 'argocd login 10.0.0.9 --insecure' <<< "$_ac_disc" \
 else
   bad "argocd-cli (b) discovered marker: the recipe printed, or the CLI line is missing" "make argocd-address rewrites ARGOCD_SERVER while the marker is discovered"
 fi
-if printf '%s' "$_ac_ca" | grep -qF 'ARGOCD_CA_FILE is set, but no CA can verify this IP' \
+if printf '%s' "$_ac_ca" | grep -qF 'ARGOCD_CA_FILE is set; if the cert does not carry this IP' \
    && ! printf '%s' "$_ac_ca" | grep -qF 'to verify instead'; then
-  ok "argocd-cli (c) CA set: says no CA can verify the IP, no recipe"
+  ok "argocd-cli (c) CA set, unprobed: a CONDITIONAL sentence, no recipe"
 else
-  bad "argocd-cli (c) CA set: the CA-cannot-verify-an-IP sentence is missing" "verifying paths fail at an IP whatever the CA"
+  bad "argocd-cli (c) CA set, unprobed: the conditional CA sentence is missing" "unprobed must not assert the CA is useless"
 fi
 if printf '%s' "$_ac_grant$_ac_disc$_ac_ca" | grep -qE 'browse only|curl --insecure|a NAME the cert carries'; then
   bad "argocd-cli: the dropped bullets are back ('browse only' / curl --insecure / 'a NAME the cert carries')"
@@ -2227,8 +2227,8 @@ fi
 # ══ THE HARBOR CA BULLET settles its own "if" by probing (idea round F4, 2026-09-15) ═══════════════
 # A stub `openssl` decides what `ca_verifies_endpoint` sees; stub `getent`/`curl` make Harbor's row
 # `serving`. Only the verdict line's text is asserted per rc.
-_hca_render() {  # <s_client output text> ; echoes the creds render
-  local t out
+_hca_render() {  # <s_client output text> [no-probe 0|1] [x509 rc] ; echoes the creds render
+  local t out np="${2:-0}" xrc="${3:-0}"
   trap 'rm -rf "${t:-}"' EXIT INT TERM
   t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin" "$t/secrets"
   printf 'dummy\n' > "$t/secrets/harbor-ca.crt"
@@ -2237,11 +2237,11 @@ _hca_render() {  # <s_client output text> ; echoes the creds render
   printf '#!/bin/sh\nprintf "10.0.0.1 %%s\\n" "$2"\n' > "$t/bin/getent"
   printf '#!/bin/sh\nprintf 200\n' > "$t/bin/curl"
   # shellcheck disable=SC2016
-  { printf '#!/bin/sh\ncase "$1" in x509) exit 0 ;; s_client) cat <<"OUT"\n'; printf '%s\n' "$1"; printf 'OUT\nexit 0 ;; esac\nexit 0\n'; } > "$t/bin/openssl"
+  { printf '#!/bin/sh\ncase "$1" in x509) exit %s ;; s_client) cat <<"OUT"\n' "$xrc"; printf '%s\n' "$1"; printf 'OUT\nexit 0 ;; esac\nexit 0\n'; } > "$t/bin/openssl"
   chmod +x "$t/bin/getent" "$t/bin/curl" "$t/bin/openssl"
   printf 'HARBOR_URL=harbor.lab.example\nHARBOR_PASSWORD=x\nHARBOR_CA_FILE=./secrets/harbor-ca.crt\n' > "$t/.env"
   out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
-            CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+            CREDS_NO_PROBE="$np" CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
   rm -rf "$t"
   printf '%s' "$out"
 }
@@ -2277,6 +2277,97 @@ if printf '%s' "$_hca_ok$_hca_bad$_hca_name" | grep -qF 'if that CA is the one t
   bad "harbor-ca: the hedge printed although the probe settled it"
 else
   ok "harbor-ca: no 'if that CA is the one that signed it' hedge once the probe has settled it"
+fi
+# (impl round F-A, measured: deleting the hedge left the suite GREEN) the hedge must be PRESENT where the
+# probe cannot settle it, and rc 5 needs its own line.
+_hca_np="$(_hca_render 'CONNECTED(00000003)
+Verify return code: 0 (ok)' 1)"
+_hca_unreach="$(_hca_render 'connect: Connection refused')"
+_hca_unread="$(_hca_render 'CONNECTED(00000003)
+Verify return code: 0 (ok)' 0 1)"
+if grep -qF 'if that CA is the one that signed it' <<< "$_hca_np"; then
+  ok "harbor-ca no-probe: the conditional hedge prints when nothing may be probed"
+else
+  bad "harbor-ca no-probe: the hedge is missing although the probe could not run" "unsettled must stay conditional, not silent"
+fi
+if grep -qF 'if that CA is the one that signed it' <<< "$_hca_unreach"; then
+  ok "harbor-ca rc=2 (could not connect): the conditional hedge prints"
+else
+  bad "harbor-ca rc=2: the hedge is missing although the probe could not connect"
+fi
+if grep -qF 'is not a readable certificate' <<< "$_hca_unread" && grep -qF 'make fetch-harbor-ca' <<< "$_hca_unread"; then
+  ok "harbor-ca rc=5: says the CA file is not a readable certificate and names make fetch-harbor-ca"
+else
+  bad "harbor-ca rc=5: the unreadable-CA verdict is missing"
+fi
+if grep -qF 'make fetch-harbor-ca lists them' <<< "$_hca_name"; then
+  ok "harbor-ca rc=3: points at the command that lists the names the cert carries"
+else
+  bad "harbor-ca rc=3: names no way to find the name the cert carries"
+fi
+
+# ══ ArgoCD: plaintext LB, CA probe, port, and the address read from the cluster (impl round) ═══════
+# O1: ARGOCD_INSECURE=1 (the mode e2e-kind-both runs) -> http row, no TLS marker, no TLS login line.
+_ac_plain="$(render_with_env 'ARGOCD_INSECURE=1
+' 'ARGOCD_LB_IP=10.0.0.2
+')"
+if grep -qE '^  ArgoCD +http://10\.0\.0\.2 ' <<< "$_ac_plain" && ! grep -qE 'ArgoCD +http://[^ ]+ \(untrusted cert\)|argocd login' <<< "$_ac_plain"; then
+  ok "argocd plaintext LB: no (untrusted cert) marker and no TLS login line"
+else
+  bad "argocd plaintext LB: a TLS marker or login line printed for an http:// ArgoCD" "gate the ArgoCD LB marker on https"
+fi
+# F-C: a port. Host alone into /etc/hosts; the final login keeps the port.
+_ac_port="$(render_with_env 'ARGOCD_SERVER=https://10.0.0.9:8443
+' '')"
+if grep -qF 'argocd login 10.0.0.9:8443 --insecure' <<< "$_ac_port" \
+   && grep -qF 'map one of them to 10.0.0.9 in /etc/hosts' <<< "$_ac_port" \
+   && grep -qF 'argocd login <that name>:8443 --server-crt' <<< "$_ac_port"; then
+  ok "argocd port: host alone in the /etc/hosts step, port kept in both login lines"
+else
+  bad "argocd port: the recipe put host:port into /etc/hosts or dropped the port" "split host and port"
+fi
+# F-B: ARGOCD_CA_FILE is PROBED. A live listener makes ArgoCD's row serving; stub openssl decides the verdict.
+_aca_render() {  # <s_client output text> ; echoes the creds render
+  local t p lp out
+  trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+  t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin" "$t/secrets"
+  printf 'dummy\n' > "$t/secrets/argocd-ca.crt"
+  p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+  python3 -m http.server "$p" --bind 127.0.0.1 >/dev/null 2>&1 &
+  lp=$!
+  sleep 1
+  # shellcheck disable=SC2016
+  { printf '#!/bin/sh\ncase "$1" in x509) exit 0 ;; s_client) cat <<"OUT"\n'; printf '%s\n' "$1"; printf 'OUT\nexit 0 ;; esac\nexit 0\n'; } > "$t/bin/openssl"
+  chmod +x "$t/bin/openssl"
+  printf 'ARGOCD_SERVER=https://127.0.0.1:%s\nARGOCD_CA_FILE=./secrets/argocd-ca.crt\n' "$p" > "$t/.env"
+  out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+            CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+  kill "$lp" 2>/dev/null || true
+  wait "$lp" 2>/dev/null || true
+  rm -rf "$t"
+  printf '%s' "$out"
+}
+if command -v python3 >/dev/null 2>&1; then
+  _aca_ok="$(_aca_render 'CONNECTED(00000003)
+Verify return code: 0 (ok)')"
+  _aca_name="$(_aca_render 'CONNECTED(00000003)
+IP address mismatch
+Verify return code: 64 (IP address mismatch)')"
+  if grep -qE '^  ArgoCD .*serving$' <<< "$_aca_ok"; then
+    ok "argocd-ca: the fixture made ArgoCD's row serving (the case is live)"
+  else
+    bad "argocd-ca: ArgoCD's row is not serving in the fixture" "fix the listener, not the product"
+  fi
+  if grep -qE 'argocd login 127\.0\.0\.1:[0-9]+ --server-crt ' <<< "$_aca_ok" && ! grep -qF -- '--insecure' <<< "$_aca_ok"; then
+    ok "argocd-ca rc=0: a CA that verifies gets --server-crt, never --insecure"
+  else
+    bad "argocd-ca rc=0: a verifying CA was downgraded to --insecure" "probe ARGOCD_CA_FILE before calling it useless"
+  fi
+  if grep -qF 'ARGOCD_CA_FILE does not verify this IP' <<< "$_aca_name" && grep -qF -- '--insecure' <<< "$_aca_name"; then
+    ok "argocd-ca rc=3: says the CA does not verify this IP, with the --insecure line"
+  else
+    bad "argocd-ca rc=3: the does-not-verify-this-IP verdict is missing"
+  fi
 fi
 
 # ══ THE /etc/hosts ADVICE BLOCK ═══════════════════════════════════════════════════════════════════
@@ -3367,6 +3458,24 @@ INGRESS_PROBE_PORT=${_ip}
       *) bad "proxy-scheme [$_sch]: an HTTP_PROXY-routed refusal is reported as definitive" "lowercase the scheme; a non-https/http scheme counts either proxy" ;;
     esac
   done
+
+  # (1r) ARGOCD address READ FROM THE CLUSTER (impl round F-D): it is in neither ARGOCD_SERVER nor
+  #      ARGOCD_LB_IP, and `make fetch-argocd-ca` needs one of them — so the recipe must say to set it first.
+  _ac_disc_ip="$(_lab_fixture '#!/bin/sh
+case "$*" in
+  *current-context*) echo ctx; exit 0 ;;
+  *"get svc -A"*) printf argocd; exit 0 ;;
+  *"get svc argocd-server"*) printf 10.0.0.9; exit 0 ;;
+esac
+exit 1
+' "" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  if grep -qF 'first set ARGOCD_SERVER=10.0.0.9 in .env' <<< "$_ac_disc_ip"; then
+    ok "argocd-cluster-read: the recipe first says to set ARGOCD_SERVER to the address it read"
+  elif ! grep -qF 'argocd login 10.0.0.9' <<< "$_ac_disc_ip"; then
+    bad "argocd-cluster-read: the fixture did not reach the discovered-address branch" "fix the kubectl stub, not the product"
+  else
+    bad "argocd-cluster-read: the recipe starts with make fetch-argocd-ca, which cannot run without ARGOCD_SERVER"
+  fi
 
   # (5) the ArgoCD verify recipe, in runnable order: fetch-argocd-ca first (at an IP it REFUSES and LISTS the
   #     cert's names), then ARGOCD_SERVER=<that name>, then fetch again + ARGOCD_CA_FILE, then --server-crt.

@@ -3,7 +3,8 @@
 <br>
 
 Run **`make creds-show`** — it self-resolves the kubeconfig and prints the URLs, logins, and (when an
-ingress is installed) the one-time `/etc/hosts` line for the `*.vks.local` hosts. **Which URLs are
+ingress is installed and the `*.vks.local` names do not yet resolve to it on this machine) the
+`/etc/hosts` line to add. **Which URLs are
 correct depends on the context** — Harbor and ArgoCD are *ours* in KinD but the *lab's* on a real
 VKS cluster:
 

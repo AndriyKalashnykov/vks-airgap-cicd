@@ -134,7 +134,7 @@ port="$(listen ok)"; out="$(render 127.0.0.1 "$port")"; _kill_srv
 if grep -qF "$_URL" <<< "$out" && ! grep -qF "$_WARN" <<< "$out"; then
   ok "healthy 404 at the bare IP: URL rows, no warning (404 is ALIVE -- no vhost was named)"
 else
-  bad "healthy 404: expected the hint and NO warning. Without this case the warning could fire
+  bad "healthy 404: expected the URL rows and NO warning. Without this case the warning could fire
       unconditionally and cases 1-2 would both still pass."
 fi
 
@@ -153,7 +153,7 @@ port="$(listen slow)"; out="$(render 127.0.0.1 "$port")"; _kill_srv
 if grep -qF "$_URL" <<< "$out"; then
   ok "slow (5s) ingress: the URL rows survive -- a timeout must not read as a dead LB"
 else
-  bad "slow ingress: the hint was suppressed. A cold-start or loaded ingress now blanks the
+  bad "slow ingress: the URL rows were lost. A cold-start or loaded ingress now blanks the
       operator's only actionable line AND every Reachable cell."
 fi
 
@@ -167,7 +167,7 @@ rm -rf "$_stub"
 if grep -qF "$_URL" <<< "$out"; then
   ok "no curl on PATH: the URL rows survive (/dev/tcp is a bash builtin and needs nothing)"
 else
-  bad "no curl: the hint was suppressed. curl is an UNDECLARED dependency of this report -- there
+  bad "no curl: the URL rows were lost. curl is an UNDECLARED dependency of this report -- there
       is no require_cmd curl anywhere in creds.sh -- so a bare jump box would lose the line."
 fi
 # ⚠️ AND IT MUST NOT WARN. Case 5 originally asserted only that the HINT prints, so it never tested
