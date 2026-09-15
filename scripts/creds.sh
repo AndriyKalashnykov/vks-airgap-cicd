@@ -867,12 +867,16 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
             _px_used=0; _px_src=""
             # ONE `config view` (never dials): the kubeconfig proxy-url, and the server URL whose SCHEME picks the
             # env proxy. (round 8, ran-it) Go uses HTTP_PROXY for an http:// API server and HTTPS_PROXY for
-            # https://; an unknown scheme is read as https, kubectl's default.
+            # https://, and lowercases the scheme. (round 9, ran-it) A SCHEME-LESS server was sent over http
+            # through HTTP_PROXY, so any scheme that is not plainly https/http counts EITHER variable (cautious).
             _px_view="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl config view --minify -o jsonpath='{.clusters[0].cluster.proxy-url}|{.clusters[0].cluster.server}' </dev/null 2>/dev/null || true)"
             _px_url="${_px_view%%|*}"; _px_srv=""
             if [[ "$_px_view" == *"|"* ]]; then _px_srv="${_px_view#*|}"; fi
-            _px_env="${HTTPS_PROXY:-${https_proxy:-}}"; _px_envname=HTTPS_PROXY
-            if [[ "$_px_srv" == http://* ]]; then _px_env="${HTTP_PROXY:-${http_proxy:-}}"; _px_envname=HTTP_PROXY; fi
+            _px_scheme="${_px_srv,,}"
+            if [[ "$_px_scheme" == https://* ]]; then _px_env="${HTTPS_PROXY:-${https_proxy:-}}"; _px_envname=HTTPS_PROXY
+            elif [[ "$_px_scheme" == http://* ]]; then _px_env="${HTTP_PROXY:-${http_proxy:-}}"; _px_envname=HTTP_PROXY
+            else _px_env="${HTTPS_PROXY:-${https_proxy:-}}${HTTP_PROXY:-${http_proxy:-}}"; _px_envname="HTTPS_PROXY or HTTP_PROXY"
+            fi
             if [ -n "$_px_url" ]; then
               _px_used=1; _px_src="the kubeconfig routes it through a proxy (proxy-url)"
             elif [ -n "$_px_env" ]; then

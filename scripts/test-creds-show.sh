@@ -3135,6 +3135,21 @@ INGRESS_PROBE_PORT=${_ip}
     *) bad "proxy-scheme control: HTTPS_PROXY was treated as proxying an http:// server" "Go ignores HTTPS_PROXY for http://" ;;
   esac
 
+  # (1q) SCHEME READ LIKE GO (round 9, ran-it): Go lowercases the scheme, and sent a SCHEME-LESS server over
+  #      http through HTTP_PROXY — both were reported as the cluster refusing under HTTP_PROXY alone.
+  for _sch in 'HTTP://10.1.2.3:6443' '10.1.2.3:6443'; do
+    _sch_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; *config*view*) echo "|'"$_sch"'"; exit 0 ;; esac
+echo "The connection to the server 10.1.2.3:6443 was refused - did you specify the right host or port?" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc HTTP_PROXY=http://127.0.0.1:1)"
+    case "$_sch_out" in
+      *'a proxy is configured for this address'*) ok "proxy-scheme [$_sch]: an HTTP_PROXY-routed refusal stays undetermined" ;;
+      *) bad "proxy-scheme [$_sch]: an HTTP_PROXY-routed refusal is reported as definitive" "lowercase the scheme; a non-https/http scheme counts either proxy" ;;
+    esac
+  done
+
   # (5) the ArgoCD login bullet: the ADDRESS first. fetch-argocd-ca refuses a bare IP the cert does not carry.
   _argo_bul="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh" | grep -F -A2 'argocd login / write' | tr '\n' ' ')"
   if [[ "$_argo_bul" == *"ARGOCD_SERVER"*"fetch-argocd-ca"*"ARGOCD_CA_FILE"* ]]; then
