@@ -2191,6 +2191,7 @@ _ac_render() {  # _ac_render <creds|argocd-password> <token> <sup-stderr> <guest
   printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME=admin\nHARBOR_PASSWORD=x\nGITEA_ADMIN_PASSWORD=x\n" > "$t/.env"
   if [ -n "$extra" ]; then printf '%s\n' "$extra" >> "$t/.env"; fi
   : > "$t/kc"; printf 'apiVersion: v1\nkind: Config\n' > "$t/sup"
+  if [ -n "${_AC_SINK:-}" ]; then printf '%s\n' "$_AC_SINK" > "$t/.env.state"; fi
   printf '%s\n' "$sm" > "$t/msg-sup"; printf '%s\n' "$gm" > "$t/msg-guest"
   # shellcheck disable=SC2016
   { printf '#!/bin/sh\ncase "$*" in\n'
@@ -2263,6 +2264,37 @@ for _acw in 0 1; do
   _ac_code "VALID 401/ns-NotFound" 8 "$(_jwt 9999999999)" "$_AC_401" "$_AC_NSNF" "$_acw"
 done
 _ac_code "absent: NotFound everywhere" 3 "$(_jwt 9999999999)" "$_AC_SNF" "$_AC_NSNF" 0
+# kubectl NOISE beside a NotFound is still ABSENT (impl round, measured): a klog discovery error and a
+# deprecation Warning used to flip exit 3 to 7 and the creds cell to "see why".
+_AC_KLOG="E0915 11:26:00.016131  123456 memcache.go:287] couldn't get resource list for metrics.k8s.io/v1beta1: the server is currently unable to handle the request"
+_AC_WARN='Warning: v1 ComponentStatus is deprecated in v1.19+'
+_ac_code "absent + klog/Warning noise" 3 "$(_jwt 9999999999)" "$_AC_KLOG"$'\n'"$_AC_SNF" "$_AC_WARN"$'\n'"$_AC_NSNF" 0
+_ac_kn="$(_ac_render creds "$(_jwt 9999999999)" "$_AC_KLOG"$'\n'"$_AC_SNF" "$_AC_WARN"$'\n'"$_AC_NSNF")"
+if grep -qF 'see why' <<< "$(grep -E '^  ArgoCD ' <<< "$_ac_kn" || true)"; then
+  bad "cause codes: creds absent + klog noise renders 'see why' — kubectl noise is read as a failed read"
+else
+  ok "cause codes: creds absent + klog noise is not rendered as a failed read"
+fi
+# The remaining creds arms, each by its own cell text (a deleted arm must go RED).
+_ac_creds "absent + overlay -> (it waits)" "$(_AC_SINK='VKS_STATE_KIND=1' _ac_render creds "$(_jwt 9999999999)" "$_AC_SNF" "$_AC_NSNF")" no 'run: make argocd-password (it waits)'
+_ac_creds "VALID 401 -> rejected: rotated, revoked" "$(_ac_render creds "$(_jwt 9999999999)" "$_AC_401" "$_AC_NSNF")" no 'is being REJECTED: rotated, revoked'
+_ac_creds "no-expiry 401 -> rejected, see why" "$(_ac_render creds notajwt "$_AC_401" "$_AC_NSNF")" no 'rejected this kubeconfig; run: make argocd-password to see why'
+# The CHILD's wording per code: a failed read is not "genuinely gone", and the quoted kubectl line is its
+# summary, not the klog line in front of it (both measured live against the lab).
+_ac_g="$(_ac_render argocd-password "$_ac_exp" "$_AC_X509" "$_AC_NSNF" "" "--wait 0")"
+if grep -qF 'genuinely gone' <<< "$_ac_g"; then
+  bad "cause codes: argocd-password exit 7 still says the secret may be 'genuinely gone'"
+elif grep -qF 'the read failed: Unable to connect to the server: tls' <<< "$_ac_g"; then
+  ok "cause codes: argocd-password exit 7 names the failure, not 'genuinely gone'"
+else
+  bad "cause codes: argocd-password exit 7 does not quote the x509 failure"
+fi
+_ac_e="$(_ac_render argocd-password "$_ac_exp" 'E0915 11:26:00.016131  123456 memcache.go:265] "Unhandled Error" err="dial tcp 127.0.0.1:1: connect: connection refused"'$'\n'"$_AC_REF" "$_AC_REF" "" "--wait 0")"
+if grep -qF "kubectl said: $_AC_REF" <<< "$_ac_e"; then
+  ok "cause codes: argocd-password exit 6 quotes kubectl's summary line, not the klog line"
+else
+  bad "cause codes: argocd-password exit 6 quotes the wrong kubectl line"
+fi
 # C's HEADLINE: the guest refusal used to shadow the Supervisor's 401, so the EXPIRED headline vanished.
 if grep -qF 'the Supervisor token EXPIRED' <<< "$(_ac_render argocd-password "$_ac_exp" "$_AC_401" "$_AC_REF" "" "--wait 0")"; then
   ok "cause codes: argocd-password C 401/refused leads with the EXPIRED headline"

@@ -140,31 +140,40 @@ _candidates() {
 # said 401, guest said refused" read as UNREACHABLE and the EXPIRED headline never printed. The cause
 # of a Supervisor read is decided from the Supervisor's own answer. Each attempt writes to a per-call
 # file that is then APPENDED synchronously — no process substitution, so no ordering question.
+# ⚠️ ARGS 3 AND 4 ARE ALLOCATED BY THE CALLER: a per-attempt stderr file, and a file that records each
+# attempt that FAILED rather than found the secret ABSENT. A mktemp made HERE lives in the `$( )`
+# subshell, and creds.sh's `timeout` kills that subshell before its `rm` runs — measured, one leaked
+# file per capped run. The caller's EXIT trap removes caller-owned files.
+# ABSENT IS DECIDED PER ATTEMPT: an attempt with a NotFound line is absent, whatever else kubectl
+# printed around it. Deciding from "any non-NotFound line in the combined file" turned an ordinary
+# NotFound into a failure the moment kubectl added a klog `E0915 …` or a `Warning:` line (measured).
 _read_secret() {
-  local kc enc errf="${1:-/dev/null}" supf="${2:-/dev/null}" sup one
+  local kc enc errf="${1:-/dev/null}" supf="${2:-/dev/null}" one="${3:-/dev/null}" failf="${4:-/dev/null}" sup
   : > "$errf" 2>/dev/null || true
   : > "$supf" 2>/dev/null || true
+  : > "$failf" 2>/dev/null || true
   sup="$(supervisor_kubeconfig 2>/dev/null || true)"
-  one="$(mktemp)"
   while IFS= read -r kc; do
     [ -n "$kc" ] && [ -f "$kc" ] || continue
     # BOUNDED, and stdin CLOSED — see the timing note below.
     if enc="$(KUBECONFIG="$kc" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl --request-timeout=5s \
                 -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret \
                 -o jsonpath='{.data.password}' </dev/null 2>"$one")" && [ -n "$enc" ]; then
-      rm -f "$one"; printf '%s\t%s' "$kc" "$enc"; return 0
+      printf '%s\t%s' "$kc" "$enc"; return 0
     fi
     cat "$one" >> "$errf" 2>/dev/null || true
     if [ -n "$sup" ] && [ "$kc" = "$sup" ]; then cat "$one" >> "$supf" 2>/dev/null || true; fi
+    if [ -s "$one" ] && ! grep -q 'Error from server (NotFound)' "$one" 2>/dev/null; then
+      printf '%s\n' "$kc" >> "$failf" 2>/dev/null || true
+    fi
   done < <(_candidates)
-  rm -f "$one"
   return 1
 }
 
 # The read's stderr, kept for the WAIT decision below. A file, not a variable, because _read_secret
 # runs inside `$( )` — see its header. Removed on exit; an operator never sees or needs it.
-_ap_err="$(mktemp)"; _ap_sup_err="$(mktemp)"
-trap 'rm -f "$_ap_err" "$_ap_sup_err"' EXIT
+_ap_err="$(mktemp)"; _ap_sup_err="$(mktemp)"; _ap_one="$(mktemp)"; _ap_fail="$(mktemp)"
+trap 'rm -f "$_ap_err" "$_ap_sup_err" "$_ap_one" "$_ap_fail"' EXIT
 # Set BEFORE the kubectl gate: with no kubectl the block below never runs, and the exit code reads them.
 _ap_sup_cls=""; _ap_exp=""
 
@@ -253,7 +262,7 @@ if command -v kubectl >/dev/null 2>&1; then
   # 6s-delayed stdin for the full 6,004 ms, which on a terminal is an indefinite hang.
   # A report that hangs is worse than one that says <not set>: the operator Ctrl-Cs and never sees
   # the Context block explaining why the value is stale.
-  if ans="$(_read_secret "$_ap_err" "$_ap_sup_err")" && [ -n "$ans" ]; then
+  if ans="$(_read_secret "$_ap_err" "$_ap_sup_err" "$_ap_one" "$_ap_fail")" && [ -n "$ans" ]; then
     _split_answer "$ans"; enc="$ENC"
     log_info "read argocd-initial-admin-secret from ns/${ARGOCD_NAMESPACE} via ${ANSWERED_KC}"
     if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
@@ -338,7 +347,7 @@ if command -v kubectl >/dev/null 2>&1; then
     _w=0
     while [ "$_w" -lt "$_wait" ]; do
       sleep 15; _w=$((_w + 15))
-      if ans="$(_read_secret "$_ap_err" "$_ap_sup_err")" && [ -n "$ans" ]; then
+      if ans="$(_read_secret "$_ap_err" "$_ap_sup_err" "$_ap_one" "$_ap_fail")" && [ -n "$ans" ]; then
         _split_answer "$ans"; enc="$ENC"
         log_info "read argocd-initial-admin-secret from ns/${ARGOCD_NAMESPACE} via ${ANSWERED_KC} (after ${_w}s)"
         _st="$(_password_state "$ANSWERED_KC")"
@@ -404,12 +413,19 @@ fi
 # 3 USED TO COVER ALL OF THEM, so the parent could only guess from the token, and a leftover expired
 # kubeconfig on an unreachable Supervisor was rendered as "renew" (one of THREE SSO attempts).
 _ap_code=3
-_ap_other="$(grep -vE '^[[:space:]]*$|Error from server \(NotFound\)' "$_ap_err" 2>/dev/null || true)"
 if [ "${_ap_exp%% *}" = EXPIRED ]; then _ap_code=5
 elif [ "$_ap_sup_cls" = UNREACHABLE ]; then _ap_code=6
 elif [ "$_ap_sup_cls" = UNAUTHORIZED ]; then _ap_code=8
-elif [ -n "$_ap_other" ]; then _ap_code=7
+elif [ -s "$_ap_fail" ]; then _ap_code=7
 fi
+# kubectl's own summary is its LAST readable line; klog lines (`E0915 11:26:00.016131 …`) come first
+# and were what the operator got quoted (measured live on a refused port). Arg 2 drops more lines.
+_ap_line() {  # _ap_line <file> [extra ERE to drop]
+  local l
+  l="$(grep -vE "^[[:space:]]*\$|^[IWE][0-9]{4} ${2:+|$2}" "$1" 2>/dev/null | tail -1 || true)"
+  if [ -z "$l" ]; then l="$(grep -vE '^[[:space:]]*$' "$1" 2>/dev/null | tail -1 || true)"; fi
+  printf '%s' "$l"
+}
 case "$_ap_code" in
   5)
     log_error "Cannot read ArgoCD's password: the Supervisor token EXPIRED at ${_ap_exp#EXPIRED }."
@@ -421,13 +437,21 @@ case "$_ap_code" in
     # NOT "did not answer": UNREACHABLE also covers a DNS, proxy or no-route failure on THIS machine.
     # No SSO command — a vCenter bind against an endpoint that cannot be reached helps nothing.
     log_error "Cannot read ArgoCD's password: the Supervisor could not be reached from this machine."
-    log_error "  kubectl said: $(grep -m1 -vE '^[[:space:]]*$' "$_ap_sup_err" 2>/dev/null || true)"
+    log_error "  kubectl said: $(_ap_line "$_ap_sup_err")"
     log_error "  Check this machine's route, DNS and proxy to it, then re-run: make argocd-password"
     ;;
+  8)
+    # No SSO command: a rejected token that has NOT expired is not something renewing is known to fix.
+    log_error "Cannot read ArgoCD's password: the Supervisor REJECTED this kubeconfig, and its token has not"
+    log_error "  expired (or carries no readable expiry): rotated, revoked, or issued by a Supervisor since rebuilt."
+    log_error "  kubectl said: $(_ap_line "$_ap_sup_err")"
+    ;;
+  7)
+    # NOT the "genuinely gone" text below: the read FAILED, so nothing is known about the secret.
+    log_error "Cannot read ArgoCD's password: the read failed: $(_ap_line "$_ap_err" 'Error from server \(NotFound\)')"
+    log_error "  Looked for argocd-initial-admin-secret in ns/${ARGOCD_NAMESPACE} via: $(_candidates | tr '\n' ' ')"
+    ;;
   *)
-    if [ "$_ap_code" != 3 ]; then
-      log_error "Cannot read ArgoCD's password: the read failed: $(printf '%s\n' "$_ap_other" | head -1)"
-    fi
     log_error "No ArgoCD 'admin' password is available locally for this context."
     log_error "  Looked for argocd-initial-admin-secret in ns/${ARGOCD_NAMESPACE} via: $(_candidates | tr '\n' ' ')"
     log_error "  • real VKS: the secret is created by the ArgoCD instance. If it is genuinely gone,"

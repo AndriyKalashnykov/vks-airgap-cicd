@@ -701,7 +701,9 @@ else
     case "$_sup_expiry_probe" in
       # A LIVE token that the Supervisor rejects is rotated/revoked, not expired — and waiting
       # cannot fix that, so do not send the reader into `argocd-password`'s wait.
-      VALID*) argo_pw="<not read — the Supervisor token is still valid (${_sup_expiry_probe#VALID }); it is being REJECTED, so the credential was rotated — ask whoever owns the lab>" ;;
+      # NOT "rotated — ask whoever owns the lab": a stale kubeconfig from a Supervisor that has since
+      # been rebuilt is rejected the same way, and a scenario-1 admin IS the lab owner.
+      VALID*) argo_pw="<not read — the Supervisor token is still valid (${_sup_expiry_probe#VALID }) but is being REJECTED: rotated, revoked, or issued by a Supervisor since rebuilt>" ;;
       *)      argo_pw="<not read — the Supervisor rejected this kubeconfig; run: make argocd-password to see why>" ;;
     esac
     _pw_unset_argo=0
