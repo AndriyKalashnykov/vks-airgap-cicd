@@ -151,7 +151,7 @@ export KUBECONFIG="/nonexistent/test-creds-show-sandbox.kubeconfig"
 unset HARBOR_URL HARBOR_PASSWORD HARBOR_INSECURE HARBOR_CA_FILE \
       ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_CA_FILE INGRESS_CONTROLLER INGRESS_LB_IP \
       VKS_PASSWORD VKS_AUTH_METHOD VKS_USERNAME SUPERVISOR_HOST VCF_CLI_VSPHERE_PASSWORD \
-      HARBOR_USERNAME VKS_NAMESPACE VKS_CLUSTER_NAME ARGOCD_ADMIN_PASSWORD GITEA_ADMIN_PASSWORD
+      HARBOR_USERNAME VKS_NAMESPACE VKS_CLUSTER_NAME ARGOCD_ADMIN_PASSWORD GITEA_ADMIN_PASSWORD ARGOCD_NAMESPACE
 export ARGOCD_KUBECONFIG="$KUBECONFIG"
 
 render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; SKIP_DOTENV=1 CREDS_TOKEN=1 ./scripts/creds.sh 2>/dev/null; }
@@ -2188,20 +2188,24 @@ _ac_render() {  # _ac_render <creds|argocd-password> <token> <sup-stderr> <guest
   # admin Harbor + no VKS_NAMESPACE: ArgoCD is the ONLY possible Supervisor reader, so the banner and
   # `make vks-login` can come from nowhere else. Gitea/Harbor passwords set: the "do not exist yet"
   # note can only be armed by ArgoCD (positive control below).
-  printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME=admin\nHARBOR_PASSWORD=x\nGITEA_ADMIN_PASSWORD=x\n" > "$t/.env"
+  # ARGOCD_NAMESPACE pinned: absent now requires a NotFound naming THIS namespace, and the canned strings say cicd.
+  printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME=admin\nHARBOR_PASSWORD=x\nGITEA_ADMIN_PASSWORD=x\nARGOCD_NAMESPACE=cicd\n" > "$t/.env"
   if [ -n "$extra" ]; then printf '%s\n' "$extra" >> "$t/.env"; fi
   : > "$t/kc"; printf 'apiVersion: v1\nkind: Config\n' > "$t/sup"
   if [ -n "${_AC_SINK:-}" ]; then printf '%s\n' "$_AC_SINK" > "$t/.env.state"; fi
-  printf '%s\n' "$sm" > "$t/msg-sup"; printf '%s\n' "$gm" > "$t/msg-guest"
+  # An EMPTY message writes an EMPTY file, so a silent kubectl failure can be expressed.
+  if [ -n "$sm" ]; then printf '%s\n' "$sm" > "$t/msg-sup"; else : > "$t/msg-sup"; fi
+  printf '%s\n' "$gm" > "$t/msg-guest"
   # shellcheck disable=SC2016
   { printf '#!/bin/sh\ncase "$*" in\n'
     printf '  *user.token*) printf %%s %s; exit 0 ;;\n' "'$tok'"
     printf '  *current-context*) echo stub-ctx; exit 0 ;;\n'
     printf '  *version*) exit 0 ;;\n'
-    printf '  *"get ns"*|*"get secret"*) case "${KUBECONFIG:-}" in */sup) cat "%s/msg-sup" >&2 ;; *) cat "%s/msg-guest" >&2 ;; esac; exit 1 ;;\n' "$t" "$t"
+    printf '  *"get ns"*|*"get secret"*) case "${KUBECONFIG:-}" in */sup) cat "%s/msg-sup" >&2; if [ -f "%s/sleep-sup" ]; then sleep 5; fi ;; *) cat "%s/msg-guest" >&2 ;; esac; exit 1 ;;\n' "$t" "$t" "$t"
     printf 'esac\nexit 0\n'; } > "$t/bin/kubectl"
   printf '#!/bin/sh\nexit 1\n' > "$t/bin/curl"; cp "$t/bin/curl" "$t/bin/getent"
   chmod +x "$t/bin/kubectl" "$t/bin/curl" "$t/bin/getent"
+  if [ "${_AC_SUP_SLEEP:-0}" = 1 ]; then : > "$t/sleep-sup"; fi
   if [ "${_AC_T126:-0}" = 1 ]; then
     real="$(command -v timeout)"
     # shellcheck disable=SC2016
@@ -2211,7 +2215,7 @@ _ac_render() {  # _ac_render <creds|argocd-password> <token> <sup-stderr> <guest
   # shellcheck disable=SC2086
   out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
       KUBECONFIG="$t/kc" VKS_SUPERVISOR_KUBECONFIG="$t/sup" CREDS_TOKEN=1 \
-      VKS_LAB_STATE_DIR="$t/no-lab" \
+      VKS_LAB_STATE_DIR="$t/no-lab" CREDS_K8S_TIMEOUT="${_AC_K8S_TIMEOUT:-10}" \
       "${_CREDS_REPO}/scripts/${which}.sh" $args 2>&1 )" || rc=$?
   rm -rf "$t"
   printf '%s\nac-rc: %s\n' "$out" "$rc"
@@ -2270,7 +2274,10 @@ _AC_KLOG="E0915 11:26:00.016131  123456 memcache.go:287] couldn't get resource l
 _AC_WARN='Warning: v1 ComponentStatus is deprecated in v1.19+'
 _ac_code "absent + klog/Warning noise" 3 "$(_jwt 9999999999)" "$_AC_KLOG"$'\n'"$_AC_SNF" "$_AC_WARN"$'\n'"$_AC_NSNF" 0
 _ac_kn="$(_ac_render creds "$(_jwt 9999999999)" "$_AC_KLOG"$'\n'"$_AC_SNF" "$_AC_WARN"$'\n'"$_AC_NSNF")"
-if grep -qF 'see why' <<< "$(grep -E '^  ArgoCD ' <<< "$_ac_kn" || true)"; then
+_ac_kn_row="$(grep -E '^  ArgoCD ' <<< "$_ac_kn" || true)"
+if [ -z "$_ac_kn_row" ]; then
+  bad "cause codes: creds absent + klog noise rendered no ArgoCD row — the case is vacuous"
+elif grep -qF 'see why' <<< "$_ac_kn_row"; then
   bad "cause codes: creds absent + klog noise renders 'see why' — kubectl noise is read as a failed read"
 else
   ok "cause codes: creds absent + klog noise is not rendered as a failed read"
@@ -2290,10 +2297,31 @@ else
   bad "cause codes: argocd-password exit 7 does not quote the x509 failure"
 fi
 _ac_e="$(_ac_render argocd-password "$_ac_exp" 'E0915 11:26:00.016131  123456 memcache.go:265] "Unhandled Error" err="dial tcp 127.0.0.1:1: connect: connection refused"'$'\n'"$_AC_REF" "$_AC_REF" "" "--wait 0")"
-if grep -qF "kubectl said: $_AC_REF" <<< "$_ac_e"; then
+if grep -qF "the read ended with: $_AC_REF" <<< "$_ac_e"; then
   ok "cause codes: argocd-password exit 6 quotes kubectl's summary line, not the klog line"
 else
   bad "cause codes: argocd-password exit 6 quotes the wrong kubectl line"
+fi
+# Follow-up round (measured): exit 7 must quote the FAILED attempt, not a Warning an ABSENT attempt printed
+# after it, and must say which candidate answered absent.
+_ac_w="$(_ac_render argocd-password "$_ac_exp" "$_AC_X509" "$_AC_WARN"$'\n'"$_AC_NSNF" "" "--wait 0")"
+if grep -qF 'the read failed: Unable to connect to the server: tls' <<< "$_ac_w" && grep -qF 'absent via:' <<< "$_ac_w"; then
+  ok "cause codes: argocd-password exit 7 quotes the failed attempt and names the absent one"
+else
+  bad "cause codes: argocd-password exit 7 quoted the wrong attempt, or did not name the absent candidate"
+fi
+# A non-Kubernetes endpoint's 404 is NOT absent: only a NotFound about THIS secret or THIS namespace is.
+_ac_code "404 from a non-Kubernetes endpoint" 7 "$(_jwt 9999999999)" 'Error from server (NotFound): the server could not find the requested resource' "$_AC_NSNF" 0
+# A Supervisor read killed by the INNER timeout prints nothing; it must read as unreachable, not absent.
+_AC_SUP_SLEEP=1 _AC_K8S_TIMEOUT=1 _ac_code "Supervisor killed silently by the inner timeout" 6 "$(_jwt 9999999999)" "" "$_AC_NSNF" 0
+# ...but a Supervisor that ANSWERED and then stalled keeps its own words: not "could not be reached".
+_AC_SUP_SLEEP=1 _AC_K8S_TIMEOUT=1 _ac_code "Supervisor answered 503 then stalled" 7 "$(_jwt 9999999999)" "$_AC_KLOG" "$_AC_NSNF" 0
+# A failure that printed NOTHING must not quote a blank.
+_ac_s="$(_ac_render argocd-password "$(_jwt 9999999999)" "" "$_AC_NSNF" "" "--wait 0")"
+if grep -qF 'the read failed: kubectl exited 1 with no message' <<< "$_ac_s"; then
+  ok "cause codes: argocd-password a silent failed read says kubectl exited with no message"
+else
+  bad "cause codes: argocd-password a silent failed read quotes a blank (or is not exit 7)"
 fi
 # C's HEADLINE: the guest refusal used to shadow the Supervisor's 401, so the EXPIRED headline vanished.
 if grep -qF 'the Supervisor token EXPIRED' <<< "$(_ac_render argocd-password "$_ac_exp" "$_AC_401" "$_AC_REF" "" "--wait 0")"; then
