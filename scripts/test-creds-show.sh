@@ -3067,7 +3067,7 @@ INGRESS_PROBE_PORT=${_ip}
   # (1n) a PROXY IN THE KUBECONFIG (round 6, ran-it): a dead proxy-url prints the same terse string naming
   #      the CLUSTER, with no proxy env at all — so not definitive, and not the lab-off signature on one endpoint.
   _pu_out="$(_lab_fixture '#!/bin/sh
-case "$*" in *current-context*) echo ctx; exit 0 ;; *config*view*) echo http://127.0.0.1:2; exit 0 ;; esac
+case "$*" in *current-context*) echo ctx; exit 0 ;; *config*view*) echo "http://127.0.0.1:2|https://10.1.2.3:6443"; exit 0 ;; esac
 echo "The connection to the server 10.1.2.3:6443 was refused - did you specify the right host or port?" >&2; exit 1
 ' "INGRESS_LB_IP=127.0.0.1
 INGRESS_PROBE_PORT=${_ip}
@@ -3086,7 +3086,7 @@ INGRESS_PROBE_PORT=${_ip}
   # (1o) GO'S NO_PROXY EDGES (round 7, ran-it against real kubectl + a CONNECT-logging proxy): each of these
   #      WAS proxied by Go, so a refusal is NOT definitive. A leading-dot entry covers subdomains only; an
   #      IP host is never suffix-matched; "127.<name>" is a hostname, not loopback.
-  for _edge in 'lab.test|.lab.test' '10.0.0.29|0.0.29' '127.lab.test|'; do
+  for _edge in 'lab.test|.lab.test' '10.0.0.29|0.0.29' '127.lab.test|' '127.1|' '127.0.0.01|' 'api.lab.test|api. lab.test'; do
     _eh="${_edge%%|*}"; _en="${_edge#*|}"
     _edge_out="$(_lab_fixture '#!/bin/sh
 case "$*" in *current-context*) echo ctx; exit 0 ;; esac
@@ -3109,6 +3109,30 @@ INGRESS_PROBE_PORT=${_ip}
   case "$_sub_out" in
     *'cluster      : not answering'*) ok "proxy-edge [api.lab.test / NO_PROXY=.lab.test]: a subdomain of a dot entry bypasses (control)" ;;
     *) bad "proxy-edge control: a subdomain of a dot entry is not bypassed" "dot entry must still cover subdomains" ;;
+  esac
+
+
+  # (1p) SCHEME PICKS THE PROXY (round 8, ran-it): an http:// API server is proxied by HTTP_PROXY, and Go ignores
+  #      HTTPS_PROXY for it — so the first case is ambiguous and the second is the cluster's own refusal.
+  _hp_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; *config*view*) echo "|http://10.1.2.3:6443"; exit 0 ;; esac
+echo "The connection to the server 10.1.2.3:6443 was refused - did you specify the right host or port?" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc HTTP_PROXY=http://127.0.0.1:1)"
+  case "$_hp_out" in
+    *'a proxy is configured for this address (HTTP_PROXY)'*) ok "proxy-scheme: an http:// server under HTTP_PROXY is not reported as the cluster refusing" ;;
+    *) bad "proxy-scheme: an http:// server's refusal under HTTP_PROXY is reported as definitive" "Go proxies http:// through HTTP_PROXY" ;;
+  esac
+  _hs_out="$(_lab_fixture '#!/bin/sh
+case "$*" in *current-context*) echo ctx; exit 0 ;; *config*view*) echo "|http://10.1.2.3:6443"; exit 0 ;; esac
+echo "The connection to the server 10.1.2.3:6443 was refused - did you specify the right host or port?" >&2; exit 1
+' "INGRESS_LB_IP=127.0.0.1
+INGRESS_PROBE_PORT=${_ip}
+" "$_getent_no_test" KUBECONFIG=@T@/kc HTTPS_PROXY=http://127.0.0.1:1)"
+  case "$_hs_out" in
+    *'cluster      : not answering'*) ok "proxy-scheme: HTTPS_PROXY alone does not make an http:// server's refusal ambiguous (control)" ;;
+    *) bad "proxy-scheme control: HTTPS_PROXY was treated as proxying an http:// server" "Go ignores HTTPS_PROXY for http://" ;;
   esac
 
   # (5) the ArgoCD login bullet: the ADDRESS first. fetch-argocd-ca refuses a bare IP the cert does not carry.

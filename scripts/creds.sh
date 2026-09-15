@@ -865,27 +865,41 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
             # match (0 proxy connections in both). Host parsed from kubectl's own text; unparsed -> cautious.
             # CIDR entries in NO_PROXY are NOT evaluated (they keep the cautious reading). `config view` never dials.
             _px_used=0; _px_src=""
-            _px_url="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl config view --minify -o jsonpath='{.clusters[0].cluster.proxy-url}' </dev/null 2>/dev/null || true)"
+            # ONE `config view` (never dials): the kubeconfig proxy-url, and the server URL whose SCHEME picks the
+            # env proxy. (round 8, ran-it) Go uses HTTP_PROXY for an http:// API server and HTTPS_PROXY for
+            # https://; an unknown scheme is read as https, kubectl's default.
+            _px_view="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl config view --minify -o jsonpath='{.clusters[0].cluster.proxy-url}|{.clusters[0].cluster.server}' </dev/null 2>/dev/null || true)"
+            _px_url="${_px_view%%|*}"; _px_srv=""
+            if [[ "$_px_view" == *"|"* ]]; then _px_srv="${_px_view#*|}"; fi
+            _px_env="${HTTPS_PROXY:-${https_proxy:-}}"; _px_envname=HTTPS_PROXY
+            if [[ "$_px_srv" == http://* ]]; then _px_env="${HTTP_PROXY:-${http_proxy:-}}"; _px_envname=HTTP_PROXY; fi
             if [ -n "$_px_url" ]; then
               _px_used=1; _px_src="the kubeconfig routes it through a proxy (proxy-url)"
-            elif [ -n "${HTTPS_PROXY:-}${https_proxy:-}" ]; then
-              _px_used=1; _px_src="a proxy is configured for this address (HTTPS_PROXY)"
+            elif [ -n "$_px_env" ]; then
+              _px_used=1; _px_src="a proxy is configured for this address (${_px_envname})"
               _px_host=""
               _px_re='(the server|dial tcp) \[?([^] ]+)\]?:[0-9]+'
               if [[ $_reach_txt =~ $_px_re ]]; then _px_host="${BASH_REMATCH[2]}"; fi
-              # (round 7, ran-it) Go's rules, and only the ones that make a bypass CERTAIN: an IP host is
-              # never suffix-matched and is loopback only as a real 127.x/::1 literal; a leading-dot entry
-              # covers SUBDOMAINS ONLY (".lab.test" still proxies "lab.test"). Anything else Go might
-              # bypass (ports, CIDRs, case, "*.x") keeps the cautious reading. if/elif, not `case`: this
-              # sits inside a classify_kube_failure consumer (check-classifier-consumers stops at `esac`).
+              # (rounds 7-8, ran-it against real kubectl/go1.26.5 + a CONNECT-logging proxy) Go's rules, and ONLY
+              # the ones that make a bypass CERTAIN: an IP host is never suffix-matched; loopback is a CANONICAL
+              # 127.x.x.x or ::1 (Go PROXIES 127.1, 127.0.0.01, 127.0.0.1.); a leading-dot entry covers SUBDOMAINS
+              # ONLY; entries are trimmed at the ENDS only; an IPv6 zone host (%) is never treated as bypassed.
+              # Anything else Go might bypass (ports, CIDRs, case, "*.x") keeps the cautious reading. if/elif,
+              # not `case`: this sits inside a classify_kube_failure consumer (the gate stops at `esac`).
               _px_ip=0
               if [[ "$_px_host" == *:* || "$_px_host" =~ ^[0-9.]+$ ]]; then _px_ip=1; fi
-              if [ "$_px_host" = localhost ] || [ "$_px_host" = ::1 ]; then _px_used=0
-              elif [ "$_px_ip" = 1 ] && [[ "$_px_host" == 127.* ]]; then _px_used=0; fi
-              IFS=, read -r -a _np_list <<< "${NO_PROXY:-${no_proxy:-}}"
+              _px_o='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+              _px_lo="^127\\.${_px_o}\\.${_px_o}\\.${_px_o}\$"
+              if [[ "$_px_host" == *%* ]]; then :
+              elif [ "$_px_host" = localhost ] || [ "$_px_host" = ::1 ]; then _px_used=0
+              elif [[ "$_px_host" =~ $_px_lo ]]; then _px_used=0; fi
+              # a newline inside NO_PROXY must not end the list early (`read` stops at one): make it an
+              # in-entry character, which only ever makes an entry match LESS.
+              _np_all="${NO_PROXY:-${no_proxy:-}}"; _np_all="${_np_all//$'\n'/$'\001'}"
+              IFS=, read -r -a _np_list <<< "$_np_all"
               for _np_e in "${_np_list[@]}"; do
-                _np_e="${_np_e//[[:space:]]/}"
-                if [ -z "$_np_e" ] || [ -z "$_px_host" ]; then continue; fi
+                _np_e="${_np_e#"${_np_e%%[![:space:]]*}"}"; _np_e="${_np_e%"${_np_e##*[![:space:]]}"}"
+                if [ -z "$_np_e" ] || [ -z "$_px_host" ] || [[ "$_px_host" == *%* ]]; then continue; fi
                 if [ "$_np_e" = '*' ]; then _px_used=0
                 elif [ "$_px_ip" = 1 ]; then
                   if [ "$_px_host" = "$_np_e" ]; then _px_used=0; fi
