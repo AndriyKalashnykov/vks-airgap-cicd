@@ -758,6 +758,13 @@ if [ -n "${ARGOCD_AUTH_TOKEN:-}" ]; then
 else
   argo_user="${ARGOCD_USERNAME:-admin}"
 fi
+# WHETHER `make argocd-auth-check` tests the credential in THIS row. From FLAGS, never from the cell:
+# `_mask` renders a real password as `<hidden: …>` on every piped run. It logs in as `admin` only
+# (lib/argocd.sh), dies UNSET without ARGOCD_SERVER (KinD publishes only ARGOCD_LB_IP), and is an
+# ADMIN test, so not for a token reader.
+_argo_recheck=0
+if [ -z "${ARGOCD_AUTH_TOKEN:-}" ] && [ "${_argo_rc:-1}" = 0 ] && [ "${_argo_noprobe:-0}" != 1 ] \
+   && [ "$argo_user" = admin ] && [ -n "${ARGOCD_SERVER:-}" ]; then _argo_recheck=1; fi
 
 # --- CONTEXT: where do these values COME FROM? ----------------------------------------
 #
@@ -1386,7 +1393,7 @@ case "$_prov" in
                 # ⚠️ ONE LINE. The break here was arbitrary: joined it is 133 chars, in a report whose
                 # table is 140 wide and which already prints a 202-char /etc/hosts line (measured).
                 # Wrapping a sentence that fits makes the reader reassemble it for no reason.
-                printf '    values below : your .env + install-time discovery. Reachable is probed live, and the headlamp token is MINTED fresh on every run.\n'
+                printf '    values below : your .env, install-time discovery, and live reads from the cluster. Reachable is probed live.\n'
                 # ⚠️ CUT 2026-09-10: "Nothing records which cluster they came from — normal for a
                 # real lab." The operator asked what it was FOR, twice, and it has no answer: it is
                 # UNACTIONABLE BY CONSTRUCTION. If nothing recorded the cluster, no command can
@@ -1436,10 +1443,10 @@ case "$_prov" in
                 _rc_in_context=1   # this arm's finding carries its own register; do not print a second one
               fi ;;
   *)          if [ "$_env_populated" = 1 ]; then
-                # ⚠️ NOT ALL OF THEM: Reachable is probed live and the headlamp token is minted
-                # fresh every run, so a blanket "the values you supplied" is false about exactly
-                # the two cells a reader acts on.
-                printf '    values below : your .env — except Reachable (probed live) and the headlamp\n'
+                # ⚠️ NOT ALL OF THEM: several cells are read live (the Harbor web UI admin, ArgoCD, the
+                # guest node SSH password, the headlamp token), so a blanket "the values you supplied"
+                # is false. (2026-09-15: the headlamp-only clause was cut; it named one of four.)
+                printf '    values below : your .env and live reads from the cluster. Reachable is probed live.\n'
                 # ⚠️ SAME TARGET SWAP AS THE STORED ARM ABOVE, for the same reason: this register
                 # offers a re-check of the CREDENTIALS printed below, and `env-validate` cannot
                 # judge a robot's push right at all (B715). The stamped-MISMATCH arm above keeps
@@ -1447,7 +1454,6 @@ case "$_prov" in
                 # another cluster, where the broad format+KUBECONFIG+reachability check is the
                 # right one and push RBAC is not the question.
                 # (the re-check register moved under "Nothing here is auth-tested.", 2026-09-15)
-                printf '                   token (minted each run).\n'
               else
                 printf '    values below : PLACEHOLDERS from .env.example — nothing is installed yet\n'
                 if [ -z "${HARBOR_URL:-}" ]; then _rc_in_context=1; fi   # nothing to re-check unless Harbor is set (it can be exported, not in .env)
@@ -2344,7 +2350,9 @@ fi
 # for the Password column. The provenance is NOT dropped: the flag survives and the footnote states
 # it in full, where it costs no width.
 _argo_initial_note=0
-if [ "${_argo_initial:-0}" = 1 ] && [ -n "$argo_pw" ]; then _argo_initial_note=1; fi
+# NOT for an ARGOCD_AUTH_TOKEN reader: argocd-password.sh still ran and set the state, but that row shows
+# the token, so a note about "the password above" describes a value the table does not show.
+if [ "${_argo_initial:-0}" = 1 ] && [ -n "$argo_pw" ] && [ -z "${ARGOCD_AUTH_TOKEN:-}" ]; then _argo_initial_note=1; fi
 if [ -z "$_reach_argocd_cell" ]; then _reach_argocd_cell="$(_reach_argocd)"; fi
 add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"   "$_reach_argocd_cell"
 # CAPTURE INTO VARIABLES FIRST -- do NOT inline these `$( )` into add_row's ARGUMENTS.
@@ -2833,8 +2841,10 @@ if [ "$_h_foot" = 1 ]; then
 fi
 if [ "${_argo_initial_note:-0}" = 1 ]; then
   case "${_argo_state}" in
-    CURRENT)
-      printf '\n  ArgoCD: this password is CURRENT — it has not been changed since the instance was created.\n' ;;
+    # (2026-09-15, owner) NOTHING for CURRENT: it only confirmed the value above is still in force and
+    # asked nothing of the reader; the re-check line names the command that settles it. STALE and
+    # "cannot tell" change what the reader does, so they keep their lines.
+    CURRENT) : ;;
     STALE)
       printf '\n  ArgoCD: the password above is DEAD — it was changed%s. The current one cannot be\n' \
         "${_argo_changed_at:+ at ${_argo_changed_at}}"
@@ -2878,8 +2888,14 @@ printf '\n  Reachable = the address answered — NOT that the credential works. 
 # none when the stamped-MISMATCH arm printed its own, none in the PLACEHOLDERS arm unless HARBOR_URL is set.
 # Unlike before, it also prints in the DISCOVERED arm — those credentials are equally untested.
 if [ "${_pre_off:-0}" != 1 ] && [ "${_rc_in_context:-0}" != 1 ]; then
-  if [ -n "${HARBOR_URL:-}" ]; then
-    printf '  re-check: make harbor-auth-check   (tests the Harbor login; this table does not)\n'
+  # (2026-09-15, owner) EVERY login a target can try, not only Harbor's. "tries … or says why it could
+  # not", not "tests": harbor-auth-check returns without a probe on a placeholder password or with no
+  # CA, and argocd-auth-check skips when its kubeconfig is missing (idea round F6).
+  _rc_tgts=""
+  if [ -n "${HARBOR_URL:-}" ]; then _rc_tgts="make harbor-auth-check"; fi
+  if [ "${_argo_recheck:-0}" = 1 ]; then _rc_tgts="${_rc_tgts:+${_rc_tgts} · }make argocd-auth-check"; fi
+  if [ -n "$_rc_tgts" ]; then
+    printf '  re-check: %s   (each tries that login, or says why it could not; this table does not)\n' "$_rc_tgts"
   else
     printf '  re-check: make env-validate   (tests the configured credentials; this table does not)\n'
   fi
@@ -4056,10 +4072,6 @@ if [ -z "${VCENTER_HOST:-}" ] && [ -z "${VCENTER_USERNAME:-}" ] && [ -z "${VCENT
     printf '     not set them yet.\n'
 fi
 
-# ⚠️ SCOPED TO vCENTER, because unscoped it is FALSE: this report makes authenticated Kubernetes
-# API calls and MINTS a credential (`kubectl create token` for the headlamp row). The consequence
-# was always sound -- it never binds to vCenter SSO -- but "never authenticates" reads as "makes no
-# authenticated calls at all".
 # ⚠️ NOT DERIVED, and it no longer pretends to be (impl round, MED). The previous version looped over
 # a HARDCODED 7-element literal counting its own elements — MEASURED: injecting an 8th row still
 # printed 7. It tracked neither the rows, nor .env.example, nor the scenario docs, and reading as
@@ -4104,6 +4116,12 @@ fi
 
 echo
 
-printf '  ⚠️ vCenter SSO locks out PERMANENTLY after 3 failed attempts. This report never\n'   # the `echo` above is the separator; a leading \n here made a double blank
-printf '     authenticates TO vCENTER, so nothing here spends one. If a value is rejected: STOP,\n'
-printf '     ask the lab owner.\n'
+# (2026-09-15, owner + idea round F2/F3) Dropped "This report never authenticates TO vCENTER": a
+# statement about the report, nothing to act on. The three rows that bind to the SSO account are
+# named (Harbor web UI, guest node SSH, Gitea and ArgoCD admin are local accounts). "Ask the lab
+# owner" was wrong for a scenario-1 admin; "check the value" was wrong for a tenant, whose only way
+# to check is a login, i.e. an attempt. Keep `PERMANENTLY after 3 failed attempts` on ONE line:
+# docs/scenario-1.md Step 13 backticks it as an Expect literal.
+printf '  ⚠️ vCenter SSO locks out PERMANENTLY after 3 failed attempts. If the vCenter, vcf CLI or\n'   # the `echo` above is the separator; a leading \n here made a double blank
+printf '     kubectl vsphere password is rejected, STOP — do not retry or guess; get the correct value\n'
+printf '     from your own records, or from whoever gave it to you.\n'
