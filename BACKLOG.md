@@ -9744,6 +9744,39 @@ tree 2026-09-10).
 
 ## 🔴 B729 — three findings left OPEN from the coherence round, and the class denominator is FIVE
 
+**▶ #1 SHIPPED (this session); #2 SPLIT; #3 deferred with a finalized design.** Two idea-round
+adversaries (bash-git-cli + security-secrets) reviewed all three.
+
+- **#1 (wrong DNS host) — DONE, adversary-cleared both.** The row's "6th `add_row` argument" was
+  STALE: the 6th positional is the namespace (`c6`, consumed at creds.sh:2479/2491/2492). Shipped as
+  the **7th** positional instead — `add_row` writes it UNCONDITIONALLY (empty on the 5-arg rows so
+  the field count is stable), the four ingress rows pass their `*_HOST`, the DNS arms use
+  `${c7:-$(_row_host "$c2")}`, and the apps row reuses the captured `$_host` (dropping a redundant
+  `app_host` call). Byte-neutral render (mechanics adversary reproduced all three read loops).
+  Pinned by `scripts/test-creds-dns-advice-host.sh` (full render, loopback listener for `_ing_live`,
+  getent-fail → `no DNS here`, divergent `GITEA_URL`); RED-proven (revert the arm → `gitea.vks.local`
+  vanishes from the output).
+
+- **#2 (unused route discriminator) — SPLIT to a follow-up.** Both adversaries: it needs a
+  `_reach_ingress` REWORK, not a bolt-on — the route verdict is trapped in the `$( )` subshell and
+  `no DNS here` returns at :1728 BEFORE the route probe runs. Bundling a control-flow change to the
+  file's most bug-prone producer with #1/#3 inflates blast radius. Do it as its own PR: probe the
+  route even when DNS fails (the probe is IP+Host, DNS-independent) and return a combined verdict.
+
+- **#3 (credential TAB-rewrite) — deferred; design FINALIZED, do NOT implement as the row states.**
+  Both adversaries REFUTED "append the RAW value to the footnote": a raw TAB still renders as
+  ambiguous whitespace and a raw NEWLINE splits the footnote consumer into a phantom row (the exact
+  class the strip closes). Correct design when it ships: `printf '%q'` the value (unambiguous,
+  carries no raw separator so the scalar footnote can't split, identity for the clean long-JWT
+  values already footnoted), **labeled** as shell-quoted (RULE ZERO-V: `$'ab\tcd'` is right pasted
+  into a shell, WRONG bytes in a web field), gated on `_reveal=1`, detection `_is_marker==0 AND
+  has-separator` scoped to field 4 only, `_long_notes` init MOVED before the first `add_row`
+  (else the :2423 init wipes it), and the `test-creds-show.sh:3004` structural gate updated + RED-proven.
+  Both rank it LOWEST-value/HIGHEST-risk: generated passwords are alnum; only a base64-DECODED
+  real-lab admin or SSH password (creds.sh:2336/3761, printed under SHOW_SECRETS=1) can reach it.
+
+--- original filing ---
+
 An impl-round on #1250 measured these and I did not fold them in; each needs more than a wording
 change and the session was long enough already.
 
