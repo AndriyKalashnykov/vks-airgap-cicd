@@ -198,7 +198,7 @@ env_populate() {
       # never runs, and env_check passes GREEN on a real-lab .env missing both. They then reach
       # `make vks-login`, which HARD-DIES on VKS_CONTEXT_NAME (30-vks-login.sh's :? die-set), and
       # fixing that alone drops them onto the interactive password path against an account that
-      # locks out PERMANENTLY after 3 attempts.
+      # repeated failed logins can lock.
       # THE DOC WAS RIGHT; THIS TOOL WAS WRONG. Root cause: this block (last touched 2026-07-11)
       # and the doc table (2026-08-13) are two HAND-TYPED lists with nothing linking them.
       echo "    VKS_AUTH_METHOD      set it to vcf for a REAL LAB (Step 1). It defaults to kubeconfig, which is right for the local"
@@ -209,7 +209,7 @@ env_populate() {
       echo "    VKS_SSO_DOMAIN       vCenter > Administration > Single Sign On > Users and Groups > Domain (needed only if VKS_USERNAME is bare, with no @)"
       echo "    VCF_CLI_VSPHERE_PASSWORD  your vCenter SSO password. Put it in .env IN SINGLE QUOTES. Unquoted it is SILENTLY MANGLED - a"
       echo "                              doubled dollar becomes the shell PID, so the value DIFFERS EVERY RUN with no error, and each retry"
-      echo "                              spends a fresh attempt on an account that LOCKS OUT PERMANENTLY after 3. See scenario-1.md Step 1."
+      echo "                              spends a fresh attempt; repeated failed logins can lock the SSO account. See scenario-1.md Step 1."
   echo
   log_info "populate done — run 'make env-check' then 'make env-validate'"
 }

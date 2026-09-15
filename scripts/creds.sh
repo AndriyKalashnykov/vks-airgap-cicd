@@ -481,7 +481,7 @@ if [ "$_have_sink" = 1 ] && [ "${_VKS_STATE_SOURCED-1}" = "0" ]; then _sink_refu
 
 # `_renew_how` now lives in lib/os.sh as `supervisor_renew_how` — argocd-password.sh needs the
 # SAME sentence and cannot source creds.sh, so a hand-duplicated copy drifted (a round measured the
-# two DISAGREEING on the undecidable arm, and the "locks out PERMANENTLY" clause missing from one).
+# two DISAGREEING on the undecidable arm, and the lockout clause missing from one).
 _renew_how() { supervisor_renew_how "$@"; }
 
 # ── _pad <width> <cell> — pad to a COLUMN width, not a BYTE count ────────────────────────────────
@@ -1297,7 +1297,7 @@ if [ "$_pre_off" = 1 ]; then
     printf '        %s. Once it answers, renew the Supervisor token (it expired %s); this report needs it\n' "$_step" "${_SUP_DEAD_AT:-?}"
     printf '           for %s:\n' "$_sup_needed"
     printf '             %s\n' "${_rh#renew: }"
-    printf '           Three failed logins lock the vCenter account PERMANENTLY — do not retry blind.\n'
+    printf '           %s — do not retry blind.\n' "$(sso_lockout_note)"
     _step=4
   fi
   printf '        %s. Re-run: make creds\n' "$_step"
@@ -1316,7 +1316,7 @@ if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
   # BEFORE the command, never after: it is the reason NOT to run it yet.
   if [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; then
     printf '     FIRST: the recorded ingress did not answer either — check the lab is UP before spending\n'
-    printf '     an SSO attempt. Three failures lock the vCenter account PERMANENTLY.\n'
+    printf '     an SSO attempt — %s.\n' "$(sso_lockout_note)"
   fi
   # ⚠️ TWO DEPENDENT STEPS, NUMBERED — NOT A LIST OF ALTERNATIVES. `make argocd-password` reads the
   # SAME Supervisor token this banner has just declared dead, so offering it alongside the renew
@@ -2043,7 +2043,7 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
         # ⚠️ `classify_kube_failure` DIRECTLY, in `case` form, NOT `_kube_classify`. That wrapper is
         # defined 77 lines BELOW this point in a top-level `set -e` block (rc=127 would kill the
         # whole table), and it speaks SUPERVISOR — headlamp is a GUEST component, and its
-        # UNAUTHORIZED arm prescribes a vCenter SSO bind that locks out PERMANENTLY after 3 tries.
+        # UNAUTHORIZED arm prescribes a vCenter SSO bind, and repeated failed binds can lock the account.
         # This form is also the one `check-classifier-consumers` recognises, so the site is gated.
         case "$(classify_kube_failure "$_hl_err" 2>/dev/null || true)" in
           FORBIDDEN)
@@ -2103,7 +2103,7 @@ add_row "Harbor (registry)" "$harbor_url" "$harbor_user" "$harbor_pw" "$_reach_h
 # ── _rejected_why — say WHEN the token died, not "usually an EXPIRED token" ──────────────────────
 # kubectl reports an expired token and a revoked/rotated credential IDENTICALLY as `Unauthorized`,
 # so the classifier cannot separate them and this used to hedge. The token's own `exp` claim can,
-# offline and without spending one of the THREE vCenter SSO attempts before permanent lockout —
+# offline and without spending a vCenter SSO login attempt (repeated failed logins can lock the account) —
 # which is exactly why the hedge was the right call until kube_token_expiry existed.
 # Naming the renewal is safe ONLY on the EXPIRED branch, where the cause is a fact. Everywhere else
 # it degrades to the hedge rather than guess.
@@ -2162,7 +2162,7 @@ _kube_classify() {
   # and fault-independent and needs no retry knowledge.
   #
   # ⚠️ AND IT IS THE SSO GUARANTEE. This arm must NEVER fall through to UNAUTHORIZED, whose remedy
-  # names a vSphere SSO bind — and vCenter locks out PERMANENTLY after THREE failures. Keying on the
+  # names a vSphere SSO bind — and repeated failed binds can lock the account. Keying on the
   # exit code guarantees that regardless of what the fault happens to write to stderr, which no
   # string-matching model can promise.
   # ⚠️ 119 IS OURS AND MEANS **NOT ATTEMPTED**. `_sup_timeout` returns it when the Supervisor token
@@ -2224,12 +2224,12 @@ _kube_classify() {
     # the token's own `exp`. Every other arm names NO command at all; the one arm that must EXPLAIN
     # the absence calls `_renew_how --no-command` (exactly one call site). The obvious remedy —
     # VKS_AUTH_METHOD=vcf make vks-login — performs a vSphere SSO BIND (30-vks-login.sh:397), and
-    # vCenter locks out PERMANENTLY after 3 failures, so it must never be prescribed for a state
+    # repeated failed binds can lock the account, so it must never be prescribed for a state
     # this report cannot decide. (This comment said "DELIBERATELY NAMES NO SSO COMMAND" and was
     # falsified by the commit that added the EXPIRED arm; a round caught it.) The message costs ZERO
     # attempts; prescribing that one costs >=1 PER INVOCATION of a report people re-run, and this
     # arm cannot tell "token expired, password fine" from "password rotated" (30-vks-login.sh:582-585
-    # says so), so on the second it burns an attempt every time. vCenter locks out PERMANENTLY at 3.
+    # says so), so on the second it burns an attempt every time — repeated failed binds can lock it.
     # The NEGATIVE below is decidable and free, and it is the half that actually unblocks the reader.
     UNAUTHORIZED)        _kube_tok="<auth failed>";   _kube_state="${_p} — $(_rejected_why)" ;;
     STALE_CA)            _kube_tok="<stale CA>";      _kube_state="${_p} — the Supervisor answered but its CA does not verify (kubeconfig from a destroyed lab?)" ;;
@@ -3496,7 +3496,7 @@ fi
 # credentials, and not rows.
 #
 # ⚠️ NEVER AUTHENTICATE TO vCENTER FROM THIS PRINTER, AND NEVER REFRESH AN EXPIRED SUPERVISOR TOKEN
-# HERE. vSphere SSO locks the account PERMANENTLY after 3 failed binds (docs/matrix-standing-rules.md
+# HERE. Repeated failed binds can lock the vSphere SSO account (docs/matrix-standing-rules.md
 # §F.2, and lib/vcenter.sh:155-163 dies on the FIRST 401 for this reason). The precedent that it is
 # fine to VERIFY a credential does NOT extend to this row: Harbor's penalty is a ~1.5s per-principal
 # sleep and Gitea has none, so "we verify Harbor" is not an argument for touching vCenter.
@@ -3589,7 +3589,7 @@ _lab_add "vCenter"   "$(_lab_plain "$_vc_ep")"  "$(_lab_plain "${VCENTER_USERNAM
 #  1. "show VCF_CLI_VSPHERE_PASSWORD here instead" — WRONG SECRET UNDER THE WRONG LABEL.
 #     .env.example:1591 says the two keys are the same value "on a STANDARD lab", which is permission
 #     to differ, not identity; and the vcf CLI row one line below ALREADY shows it. An operator whose
-#     keys differ would take that value to `kubectl vsphere login` and spend one of THREE attempts
+#     keys differ would take that value to `kubectl vsphere login` and spend a failed SSO login
 #     before PERMANENT SSO lockout. Under a pipe both cells render `<hidden…>`, so the wrong-secret
 #     render is invisible in exactly the walk logs that would catch it.
 #  2. "render `<not needed: VKS_AUTH_METHOD=…>`" — has FOUR states, and the fourth is the SHIPPED
@@ -3689,8 +3689,8 @@ else
     # consumer: a report may say "I could not ask"; it may not attach a remedy, because THE REMEDY IS
     # WHAT ENCODES THE GUESS.
     #
-    # 🔴 And this particular guess has an irreversible tail: `make vks-login` spends one of THREE
-    # vCenter SSO attempts before PERMANENT lockout. Measured by a round: on a configured tenant
+    # 🔴 And this particular guess has an irreversible tail: `make vks-login` performs a vSphere SSO
+    # bind, and repeated failed binds can lock the account. Measured by a round: on a configured tenant
     # (VKS_NAMESPACE set, no Supervisor kubeconfig) this fired on EVERY `make creds`.
     #
     # ⚠️ NOT A BLANKET BAN — :1076 legitimately names it. That arm is UNAUTHORIZED: a kubeconfig that
@@ -4138,9 +4138,9 @@ echo
 # named — only those SHOWN: the kubectl vsphere row renders only with VKS_PASSWORD or the vsphere method
 # (the Harbor web UI, guest node SSH, Gitea and ArgoCD admin accounts are local, not SSO). "Ask the lab
 # owner" was wrong for a scenario-1 admin; "check the value" was wrong for a tenant, whose only way
-# to check is a login, i.e. an attempt. Keep `PERMANENTLY after 3 failed attempts` on ONE line:
+# to check is a login, i.e. an attempt. Keep the sso_lockout_note Expect literal on ONE line:
 # docs/scenario-1.md Step 13 backticks it as an Expect literal.
 _sso_rows="vCenter or vcf CLI"
 if [ "${_lab_vsphere_row:-0}" = 1 ]; then _sso_rows="vCenter, vcf CLI or kubectl vsphere"; fi
-printf '  ⚠️ vCenter SSO locks out PERMANENTLY after 3 failed attempts. If the %s password is rejected,\n' "$_sso_rows"   # the `echo` above is the separator; a leading \n here made a double blank
+printf '  ⚠️ %s. If the %s password is rejected,\n' "$(sso_lockout_note)" "$_sso_rows"   # the `echo` above is the separator; a leading \n here made a double blank
 printf '     STOP — do not retry or guess; get the correct value from your own records, or from whoever gave it to you.\n'

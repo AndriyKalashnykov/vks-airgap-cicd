@@ -117,8 +117,8 @@ for app in $_apps; do
 #       (b) auth.Login dispatches to whatever authenticator auth_mode selects, and the lock sits in
 #           FRONT of it, authenticator-agnostic. Under ldap_auth/oidc_auth each surviving attempt is
 #           a real BIND AT A DIRECTORY WE DO NOT CONTROL — on a VCF estate plausibly the same
-#           vSphere SSO that locks PERMANENTLY after 3 (matrix-standing-rules F.2, lib/vcenter.sh).
-#           mirror_retry 5 would then deliver 5 binds past a 3-strike policy.
+#           vSphere SSO, and repeated failed binds can lock it (matrix-standing-rules F.2, lib/vcenter.sh).
+#           mirror_retry 5 would then deliver repeated binds against that lockout policy.
 #       (c) the count is exactly N, not 3N: crane own retry fires only on 408/429/499/5xx
 #           (lib/mirror.sh:97), so a 401 is never retried internally.
 #     OUR install is db_auth — this repo sets auth_mode in 0 places, and the live lab unauthenticated

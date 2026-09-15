@@ -2832,8 +2832,8 @@ reachability finding — distinguish them and say which.
 ### 6. Security constraints — in force for the whole run
 
 - **Secrets never in argv.** `curl -K` config under `umask 077`, `--data @-` on stdin, or env-by-name.
-- **The vCenter SSO account LOCKS OUT AFTER 3 FAILED ATTEMPTS.** Never brute a password, never retry
-  a failed auth blind.
+- **Repeated failed logins can lock a vCenter SSO account** (default 5 in 3 min, auto-unlock 5 min; a
+  hardened lab may be stricter or permanent). Never brute a password, never retry a failed auth blind.
 - **Do not type passwords into web login forms.**
 - **`harbor-robot.env`, `gitea-ci-token`, `webhook-token` must NEVER be blanket-deleted** — they are
   the only copy in existence.
@@ -9952,7 +9952,34 @@ other `_ssh_tok` values (`<no kubeconfig>`, `<ambiguous>`, `<none>`, `<no key>`,
 sentence, that is a real gap — but it is a gap in the SENTENCE, not in the legend, and the fix is
 another arm beside the four that exist.
 
-## 🔴 B733 — "vCenter SSO locks out PERMANENTLY after 3 failed attempts" may be false for the SSO account (owner decision needed)
+## ✅ B733 — RESOLVED 2026-09-15: the "PERMANENTLY after 3" claim was false (it was the appliance-root number); corrected in every home
+
+**RESOLVED.** Validated (four research agents + a LIVE authenticated LDAPS read of the current lab) and
+corrected across 14 files in one PR, discipline preserved. The graded record is now
+`docs/vks-services/vcenter-sso.md`. Summary of the truth:
+
+- **SSO default = 5 attempts / 3 min / auto-unlock 5 min** — MEASURED live 2026-09-15 on vCenter
+  9.1.0.0300 (`vmwPasswordChangeMaxFailedAttempts 5`, `IntervalSec 180`, `AutoUnlockIntervalSec 300`)
+  AND 9.1-doc. Not 3, not permanent.
+- **`administrator@vsphere.local` is exempt by default** (three 9.1 pages); 9.1.1.0 adds an opt-in that
+  removes it, so operator output says "can lock", never "exempt".
+- **"3 / permanent" is the vCenter APPLIANCE-local root account** (PAM faillock `deny=3`), a different
+  subsystem. One KB (326186, 7.x/8.x) conflates the two.
+- `make creds` output no longer contains the false phrase (grep 0). `scripts/lib/os.sh:sso_lockout_note`
+  single-sources the fact; the CLAUDE.md rule keeps "never guess, never retry blind".
+- **Residual (impl-round adversary, accepted):** `docs/vks-services/vcenter-sso.md` uses a prose
+  `Grade`/`Source` table, NOT the `Confidence` + `[src:]` shape `check-vks-provenance` gates. Left as a
+  documented phase-2 residual (noted in the doc): the 9.1-doc rows would need full `url=` tokens not
+  fetched this session, and fabricating one to satisfy the gate is worse than the gap. Lab rows are
+  reproducible.
+- **Class completion (impl-round follow-up, this session).** The first commit missed SIX script comment
+  homes still asserting "THREE / PERMANENT" as current fact (`29-vcenter`, `argocd-password`, `lib/os.sh`
+  x2, `test-creds-show` x2) plus the live §6 "in force" standing rule above — the "fix the class, not
+  the instance" trap. Now 0 in scripts, 0 in `matrix-standing-rules.md`, 0 in `make creds` output.
+  It survives ONLY in DATED historical B-row rationales below and in this row's arc narration/grep recipe
+  — left per "append history, never rewrite it".
+
+--- original filing (2026-09-15), kept for the arc ---
 
 **Filed 2026-09-15 from the idea round on the `make creds` footer rewrite.** The footer keeps the number;
 this row exists because an adversary graded the number itself, and the owner's standing rules state it.

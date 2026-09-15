@@ -2312,8 +2312,8 @@ kube_is_notfound() {
 # the reader knows which is theirs — they know whether they minted this or were handed it.
 #
 # 🔴 `--no-command` IS A SAFETY GATE, NOT A STYLE FLAG. On the UNDECIDABLE arm the cause is NOT
-# known to be expiry, and `make vks-login` spends one of the THREE vCenter SSO attempts before
-# PERMANENT lockout. Commit 251df27 closed exactly this ("stop prescribing make vks-login for a
+# known to be expiry, and `make vks-login` performs a vSphere SSO bind, and repeated failed binds
+# can lock the account. Commit 251df27 closed exactly this ("stop prescribing make vks-login for a
 # state that is undecidable"); removing the VKS_AUTH_METHOD gate re-opened it for every reader
 # until this flag was added. A round measured the rendered footnote putting "Do not re-authenticate
 # blind" and the command FOUR WORDS APART. EXPIRED (a fact) names the command; nothing else does.
@@ -2326,6 +2326,16 @@ kube_is_notfound() {
 #   (default)     the cause is a FACT (EXPIRED)      -> name the command
 #   --ask-only    the cause is KNOWN but not expiry  -> no command, no "cannot tell"
 #   --no-command  the cause is UNDECIDABLE           -> no command, plus "cannot tell"
+# sso_lockout_note — the ONE true statement of the vCenter SSO lockout fact, single-sourced.
+# MEASURED live 2026-09-15 on vCenter 9.1.0.0300 (vmdir cn=password and lockout policy):
+# vmwPasswordChangeMaxFailedAttempts 5 / IntervalSec 180 / AutoUnlockIntervalSec 300 (auto-unlocks),
+# matching the 9.1 documented default. administrator@vsphere.local is EXEMPT by default (9.1 docs);
+# the "3 / permanent" figure is the vCenter APPLIANCE-local root account (PAM faillock), NOT SSO.
+# "can lock", not "locks": true even for the exempt admin, and for a hardened/third-party lab whose
+# policy we cannot see. Returned as a CONTIGUOUS constant — an interpolated build would break
+# check-expect-literals (see its header). See docs/vks-services/vcenter-sso.md, B733.
+sso_lockout_note() { printf 'vCenter SSO can lock an account after repeated failed logins (default: 5 in 3 minutes)'; }
+
 supervisor_renew_how() {
   # 🔴 REJECT AN UNKNOWN ARGUMENT, LOUDLY. Falling through to the command-naming branch made a
   # ONE-CHARACTER TYPO (`--nocommand`) silently prescribe a vCenter bind for an undecidable cause,
@@ -2344,8 +2354,8 @@ supervisor_renew_how() {
        return 2 ;;
   esac
   if [ "${1:-}" = --ask-only ] || [ "${1:-}" = --no-command ]; then
-    printf 'Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. Ask whoever owns the lab for a current credential.'
-    [ "${1:-}" = --no-command ] && printf ' This report cannot tell you which fix applies, and guessing costs one of those three attempts.'
+    printf 'Do not re-authenticate blind: %s. Ask whoever owns the lab for a current credential.' "$(sso_lockout_note)"
+    [ "${1:-}" = --no-command ] && printf ' This report cannot tell you which fix applies, and guessing risks locking the account.'
     return 0
   fi
   # The VKS_AUTH_METHOD prefix is load-bearing and stays: Step 6 leaves .env on `kubeconfig`, so a
@@ -2395,7 +2405,7 @@ jwt_exp_seconds() {
 # A Supervisor kubeconfig from `vcf context create` carries a vCenter OIDC JWT with a hard 10h
 # lifetime (MEASURED: iat 03:24 -> exp 13:24). The `exp` claim is readable WITHOUT touching the
 # network and WITHOUT spending a vCenter SSO attempt, which is what makes it usable here: every
-# other way of learning "is this token dead" costs a bind, and vCenter locks out PERMANENTLY at 3.
+# other way of learning "is this token dead" costs a bind, and repeated failed binds can lock the SSO account.
 #
 # It is what lets a caller say WHEN it expired instead of "usually an EXPIRED token", and it is the
 # ONLY thing that separates "expired" from "credential rotated/revoked" — kubectl reports both as
@@ -2628,8 +2638,8 @@ classify_kube_failure() {
     # klog's line format is `Lmmdd hh:mm:ss.uuuuuu <PID> file:line]` and it SPACE-PADS the pid to 7
     # (klog v2.140.0 internal/buffer/buffer.go:29 — `buf.nDigits(7, 22, Pid, ' ')`). A process whose
     # pid is exactly 401 therefore emits ` 401 ` inside ordinary klog METADATA, so an UNREACHABLE
-    # cluster classified UNAUTHORIZED — whose remedy is `make vks-login`, i.e. one of THREE vCenter
-    # SSO attempts before PERMANENT lockout, spent on a lab that is merely switched off. Measured,
+    # cluster classified UNAUTHORIZED — whose remedy is `make vks-login`, i.e. a vCenter
+    # SSO bind whose repeated failures can lock the account, spent on a lab that is merely switched off. Measured,
     # everything else byte-identical: pid 2667264 -> UNKNOWN, pid 401 -> UNAUTHORIZED, pid 4010 ->
     # UNKNOWN. Reproduced independently by two reviewers.
     #

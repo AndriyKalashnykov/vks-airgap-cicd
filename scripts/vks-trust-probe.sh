@@ -26,7 +26,7 @@
 #     node resolver may also answer from cache. What a green proves is that the node REACHED
 #     Harbor. The DNS verdict below is therefore a FAILURE classifier, never a success assertion.
 #
-# It NEVER authenticates to vCenter. vSphere SSO locks the account permanently after 3 failed binds
+# It NEVER authenticates to vCenter. Repeated failed binds can lock a vSphere SSO account
 # (docs/matrix-standing-rules.md F.2), and nothing here is worth that.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

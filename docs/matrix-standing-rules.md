@@ -190,7 +190,7 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
    FATAL: could not resolve a usable TKr — refusing to walk against a guess
    ```
 
-   ⚠️ **One attempt only.** The SSO account locks out PERMANENTLY after 3 failed attempts; never
+   ⚠️ **One attempt only.** Repeated failed logins can lock a vCenter SSO account (default 5 in 3 min, auto-unlock 5 min; a hardened lab may be stricter or permanent); never
    loop `kubectl-login`.
 
    ⚠️ **A KILLED OR FAILED RUN LEAVES A PARTIAL CELL, AND THE REMEDY IS `walk-reset` — NOT A
@@ -354,7 +354,7 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
 
 1. Secrets **never in argv** — `curl -K` config files under `umask 077`, `--data @-` on stdin, or
     env-by-name.
-2. The vCenter SSO account **locks out permanently after 3 failed attempts**. Never brute, never
+2. Repeated failed logins **can lock a vCenter SSO account** (default 5 in 3 min; a hardened lab may be stricter or permanent). Never brute, never
     retry a failed auth blind.
 3. Do **not** type passwords into web login forms.
 4. `harbor-robot.env`, `gitea-ci-token` and `webhook-token` are **never** blanket-deleted. Walk logs

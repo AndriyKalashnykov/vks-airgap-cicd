@@ -1148,13 +1148,13 @@ else
 fi
 # The lockout warning must travel WITH the row in EVERY arm — a caveat that prints only sometimes is
 # the trap rules/common/coding-style.md records.
-if printf '%s' "$out" | grep -qi 'PERMANENTLY after 3 failed'; then
-  ok "lab vars set -> the vCenter permanent-lockout warning is present"
+if printf '%s' "$out" | grep -qi 'can lock an account after repeated failed logins'; then
+  ok "lab vars set -> the vCenter SSO lockout warning is present"
 else
   bad "lab vars set -> no lockout warning" "showing a vCenter credential without it invites a retry"
 fi
-# NEVER VERIFIED: this printer must not authenticate to vCenter — 3 failed binds lock the SSO account
-# PERMANENTLY. Harbor's penalty is a ~1.5s per-principal sleep and Gitea has none, so "we verify
+# NEVER VERIFIED: this printer must not authenticate to vCenter — repeated failed binds can lock the SSO
+# account. Harbor's penalty is a ~1.5s per-principal sleep and Gitea has none, so "we verify
 # Harbor" is not an argument for touching this one. Guards the file against a future convenience.
 # ---- STATE 9b: the Supervisor login rows must not INVENT A CHORE (owner decision 2026-09-15) ----
 # BEFORE: `VKS / SSO | https://sup | user | <not set — vsphere method only>` directly above
@@ -1303,7 +1303,7 @@ else
   ok "creds.sh has no field-by-field Harbor credential read (the atomic-pair hazard stays closed)"
 fi
 if grep -qE 'vc_login|vc_api' "${_CREDS_REPO}/scripts/creds.sh"; then
-  bad "creds.sh acquired a vCenter auth call" "3 failed binds lock the SSO account PERMANENTLY; this file SHOWS, never verifies"
+  bad "creds.sh acquired a vCenter auth call" "repeated failed binds can lock the SSO account; this file SHOWS, never verifies"
 else
   ok "creds.sh still never authenticates to vCenter (no vc_login / vc_api)"
 fi
@@ -1709,8 +1709,8 @@ fi
 # pins both halves so a future fix cannot be 1-of-2 again.
 #
 # `absent` is undecidable — tenant-normal (RULE ZERO-B default) vs scenario-1-not-yet-logged-in — and
-# the remedy is what encodes the guess. `make vks-login` spends one of THREE vCenter SSO attempts
-# before PERMANENT lockout, so guessing here has an irreversible tail.
+# the remedy is what encodes the guess. `make vks-login` spends a vCenter SSO login attempt that counts toward the
+# lockout policy, so guessing here has an irreversible tail.
 # ⚠️ VKS_LAB_STATE_DIR MUST BE NEUTRALISED, and finding that out was itself the B547 defect firing
 # inside this test. Without it `supervisor_kubeconfig` falls through its candidate list to
 # ~/.local/state/nested-lab/kubeconfig — ANOTHER REPO's lab state dir, which exists on a maintainer
@@ -1728,7 +1728,7 @@ fi
 if printf '%s' "$_b548" | grep -qE 'no Supervisor kubeconfig.*run: make vks-login'; then
   bad "B548: an ABSENT Supervisor kubeconfig prescribes 'make vks-login'. It is undecidable whether
       the reader is a tenant (normal) or an operator who has not logged in, and a wrong guess spends
-      one of three vCenter SSO attempts before PERMANENT lockout."
+      a vCenter SSO login attempt toward a lockout."
 else
   ok "B548: ...and it does NOT prescribe make vks-login for an absent kubeconfig"
 fi
@@ -1800,7 +1800,7 @@ else
 fi
 
 # ── 🔴 THE SSO-LOCKOUT SAFETY PROPERTY. It regressed TWICE and the suite did not notice. ─────────
-# `make vks-login` performs a vSphere SSO BIND, and vCenter locks out PERMANENTLY after THREE
+# `make vks-login` performs a vSphere SSO BIND, and repeated failed binds can lock the account after
 # failures. So it may be named ONLY where the cause is a FACT (the token's own `exp` says EXPIRED)
 # and NEVER on a state this report cannot decide.
 #
@@ -1822,7 +1822,7 @@ else
     *)                  bad "SSO gate: the decidable remedy no longer names the command — the fix is withheld from the reader who HAS it" ;;
   esac
   case "$_sso_non" in
-    *"make vks-login"*) bad "SSO gate: the UNDECIDABLE remedy NAMES make vks-login. That spends one of THREE vCenter SSO attempts before PERMANENT lockout, for a cause this report cannot decide. Regressed twice already." ;;
+    *"make vks-login"*) bad "SSO gate: the UNDECIDABLE remedy NAMES make vks-login. That spends a vCenter SSO login attempt toward a lockout, for a cause this report cannot decide. Regressed twice already." ;;
     "")                 bad "SSO gate: the undecidable remedy rendered EMPTY — cannot tell 'no command' from 'no output'" ;;
     *)                  ok "SSO gate: the UNDECIDABLE remedy names NO SSO command" ;;
   esac
@@ -1846,8 +1846,8 @@ else
     ok "SSO gate: an unknown mode is REFUSED (a flag typo cannot silently name the command)"
   fi
   case "$_sso_non" in
-    *"locks out PERMANENTLY"*) ok "SSO gate: the undecidable remedy still states WHY there is no command" ;;
-    *)                         bad "SSO gate: the undecidable remedy dropped 'locks out PERMANENTLY' — the clause that is the whole reason the command is withheld" ;;
+    *"can lock an account after repeated failed logins"*) ok "SSO gate: the undecidable remedy still states WHY there is no command" ;;
+    *)                         bad "SSO gate: the undecidable remedy dropped the lockout clause — the whole reason the command is withheld" ;;
   esac
 
 
@@ -2018,8 +2018,8 @@ while IFS='|' read -r _sso_lbl _sso_bin _sso_sink _sso_mE _sso_mV _sso_mU; do
       ok "SSO gate: ${_sso_lbl} / ${_sso_v} names no SSO command"
     else
       bad "SSO gate: ${_sso_lbl}'s ${_sso_v} report NAMES make vks-login (${_sso_got}x). ${_sso_v} is
-      not a cause this report can decide, and a vCenter bind for it spends one of THREE attempts
-      before a PERMANENT lockout. Withhold the command on this arm."
+      not a cause this report can decide, and a vCenter bind for it spends a login attempt that counts toward the
+      lockout policy. Withhold the command on this arm."
     fi
   done
 done <<SSOROWS
@@ -2170,7 +2170,7 @@ fi
 
 # ══ argocd-password.sh's EXIT CODE CARRIES THE CAUSE, and creds.sh keys on it (2026-09-15) ══════════
 # Before: exit 3 for every failure, and creds.sh blamed the expired token for all of them — a refused
-# or unresolvable Supervisor, a bad cert, a 503 — and prescribed `make vks-login` (one of THREE SSO
+# or unresolvable Supervisor, a bad cert, a 503 — and prescribed `make vks-login` (a failed SSO
 # attempts). And the child classified BOTH candidates' stderr together, so a guest refusal SHADOWED a
 # real Supervisor 401. The stub answers `get secret` PER KUBECONFIG ($t/sup = Supervisor, $t/kc = guest)
 # with REAL kubectl strings, and appends to stderr (`>&2`, never a reopened /dev/stderr, which truncates).
@@ -2444,7 +2444,7 @@ case "$(grep -m1 're-check:' <<< "$_fl_noharbor" || true)" in
   *) bad "four lines: with no HARBOR_URL and an admin ArgoCD row, the re-check does not name argocd-auth-check alone" ;;
 esac
 # 4. The SSO footer names the SSO rows SHOWN.
-if grep -qF 'PERMANENTLY after 3 failed attempts. If the vCenter or vcf CLI password is rejected,' <<< "$_fl_cur" \
+if grep -qF 'vCenter SSO can lock an account after repeated failed logins (default: 5 in 3 minutes). If the vCenter or vcf CLI password is rejected,' <<< "$_fl_cur" \
    && grep -qF 'STOP — do not retry or guess; get the correct value from your own records, or from whoever gave it to you.' <<< "$_fl_cur" \
    && ! grep -qE 'never authenticates|ask the lab owner|kubectl vsphere password' <<< "$_fl_cur"; then
   ok "four lines: the SSO footer names the vCenter and vcf CLI rows and what to do"
