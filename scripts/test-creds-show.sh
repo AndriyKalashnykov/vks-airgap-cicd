@@ -2199,13 +2199,13 @@ if grep -qF 'argocd login 10.0.0.9 --insecure' <<< "$_ac_disc" \
 else
   bad "argocd-cli (b) discovered marker: the recipe printed, or the CLI line is missing" "make argocd-address rewrites ARGOCD_SERVER while the marker is discovered"
 fi
-if printf '%s' "$_ac_ca" | grep -qF 'ARGOCD_CA_FILE is set; if the cert does not carry this IP' \
-   && ! printf '%s' "$_ac_ca" | grep -qF 'to verify instead'; then
+if grep -qF 'ARGOCD_CA_FILE is set; if the cert does not carry this IP' <<< "$_ac_ca" \
+   && ! grep -qF 'to verify instead' <<< "$_ac_ca"; then
   ok "argocd-cli (c) CA set, unprobed: a CONDITIONAL sentence, no recipe"
 else
   bad "argocd-cli (c) CA set, unprobed: the conditional CA sentence is missing" "unprobed must not assert the CA is useless"
 fi
-if printf '%s' "$_ac_grant$_ac_disc$_ac_ca" | grep -qE 'browse only|curl --insecure|a NAME the cert carries'; then
+if grep -qE 'browse only|curl --insecure|a NAME the cert carries' <<< "$_ac_grant$_ac_disc$_ac_ca"; then
   bad "argocd-cli: the dropped bullets are back ('browse only' / curl --insecure / 'a NAME the cert carries')"
 else
   ok "argocd-cli: no 'browse only' curl bullet and no unnamed 'a NAME the cert carries' instruction"
@@ -2327,8 +2327,8 @@ else
   bad "argocd port: the recipe put host:port into /etc/hosts or dropped the port" "split host and port"
 fi
 # F-B: ARGOCD_CA_FILE is PROBED. A live listener makes ArgoCD's row serving; stub openssl decides the verdict.
-_aca_render() {  # <s_client output text> ; echoes the creds render
-  local t p lp out
+_aca_render() {  # <s_client output text> [x509 rc] ; echoes the creds render
+  local t p lp out xrc="${2:-0}"
   trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
   t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin" "$t/secrets"
   printf 'dummy\n' > "$t/secrets/argocd-ca.crt"
@@ -2337,7 +2337,7 @@ _aca_render() {  # <s_client output text> ; echoes the creds render
   lp=$!
   sleep 1
   # shellcheck disable=SC2016
-  { printf '#!/bin/sh\ncase "$1" in x509) exit 0 ;; s_client) cat <<"OUT"\n'; printf '%s\n' "$1"; printf 'OUT\nexit 0 ;; esac\nexit 0\n'; } > "$t/bin/openssl"
+  { printf '#!/bin/sh\ncase "$1" in x509) exit %s ;; s_client) cat <<"OUT"\n' "$xrc"; printf '%s\n' "$1"; printf 'OUT\nexit 0 ;; esac\nexit 0\n'; } > "$t/bin/openssl"
   chmod +x "$t/bin/openssl"
   printf 'ARGOCD_SERVER=https://127.0.0.1:%s\nARGOCD_CA_FILE=./secrets/argocd-ca.crt\n' "$p" > "$t/.env"
   out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
@@ -2367,6 +2367,22 @@ Verify return code: 64 (IP address mismatch)')"
     ok "argocd-ca rc=3: says the CA does not verify this IP, with the --insecure line"
   else
     bad "argocd-ca rc=3: the does-not-verify-this-IP verdict is missing"
+  fi
+  _aca_unread="$(_aca_render 'CONNECTED(00000003)
+Verify return code: 0 (ok)' 1)"
+  if grep -qF 'is not a readable certificate' <<< "$_aca_unread" && grep -qF 'make fetch-argocd-ca' <<< "$_aca_unread"; then
+    ok "argocd-ca rc=5: an unreadable CA file says so and names make fetch-argocd-ca"
+  else
+    bad "argocd-ca rc=5: an unreadable CA file was not reported as such"
+  fi
+  # (final round, ran-it) rc1 and rc5 used to print the rc3 reason and --insecure.
+  _aca_wrong="$(_aca_render 'CONNECTED(00000003)
+Verify return code: 21 (unable to verify the first certificate)')"
+  if grep -qF 'does NOT verify this address — re-fetch it' <<< "$_aca_wrong" \
+     && ! grep -qE 'cert does not carry this IP|argocd login [^ ]+ --insecure' <<< "$_aca_wrong"; then
+    ok "argocd-ca rc=1: a CA that does not verify gets a re-fetch, not --insecure or the missing-IP-SAN reason"
+  else
+    bad "argocd-ca rc=1: a wrong CA was blamed on a missing IP SAN or pushed to --insecure"
   fi
 fi
 

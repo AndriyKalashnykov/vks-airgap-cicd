@@ -1367,7 +1367,7 @@ case "$_prov" in
                 printf '                   token (minted each run).\n'
               else
                 printf '    values below : PLACEHOLDERS from .env.example — nothing is installed yet\n'
-                _rc_in_context=1   # nothing is configured, so there is nothing for a re-check to test
+                if [ -z "${HARBOR_URL:-}" ]; then _rc_in_context=1; fi   # nothing to re-check unless Harbor is set (it can be exported, not in .env)
               fi ;;
 esac
 if [ "$_sink_refused" = 1 ]; then
@@ -2788,7 +2788,7 @@ printf '\n  Reachable = the address answered — NOT that the credential works. 
 # off the provenance line with no reason; this line IS its reason. Same TARGETS as before:
 # harbor-auth-check when Harbor is configured (it reports push RBAC; env-validate cannot, B715),
 # env-validate otherwise. Gating: none on the powered-off signature (a re-check cannot run either),
-# none when the stamped-MISMATCH arm printed its own, none when nothing is configured (PLACEHOLDERS).
+# none when the stamped-MISMATCH arm printed its own, none in the PLACEHOLDERS arm unless HARBOR_URL is set.
 # Unlike before, it also prints in the DISCOVERED arm — those credentials are equally untested.
 if [ "${_pre_off:-0}" != 1 ] && [ "${_rc_in_context:-0}" != 1 ]; then
   if [ -n "${HARBOR_URL:-}" ]; then
@@ -3134,7 +3134,7 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
       elif [ "$_h_ca_rc" = 1 ]; then
         printf '    - Harbor: the CA at %s does NOT verify it — re-fetch it:\n' "$_ca_abs"
         printf '      make fetch-harbor-ca\n'
-        printf '      if it still fails after that, the certificate Harbor serves is the problem, not the CA file.\n'
+        printf '      if make fetch-harbor-ca succeeds and it still fails, the certificate Harbor serves is the problem.\n'
       elif [ "$_h_ca_rc" = 3 ]; then
         printf '    - Harbor: the CA is right, but %s is not a name its cert carries —\n' "$HARBOR_URL"
         printf '      set HARBOR_URL to a name it carries; make fetch-harbor-ca lists them.\n'
@@ -3231,8 +3231,16 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
       fi
     fi
     if [ "$_a_ca_rc" = 0 ]; then
-      printf '    - ArgoCD CLI: ARGOCD_CA_FILE verifies this address:\n'
+      printf '    - ArgoCD CLI: ARGOCD_CA_FILE verifies this address (a browser still does not trust it):\n'
       printf '      argocd login %s --server-crt %s\n' "$_a_hp" "$_a_ca"
+    elif [ "$_a_ca_rc" = 1 ]; then
+      # (final round, ran-it) connected and the cert carries this address, but THIS CA does not verify it:
+      # the remedy is a re-fetch, not --insecure and not a name hunt.
+      printf '    - ArgoCD CLI: the CA at %s does NOT verify this address — re-fetch it:\n' "$_a_ca"
+      printf '      make fetch-argocd-ca\n'
+    elif [ "$_a_ca_rc" = 5 ]; then
+      printf '    - ArgoCD CLI: the CA at %s is not a readable certificate — get one:\n' "$_a_ca"
+      printf '      make fetch-argocd-ca\n'
     else
       printf '    - ArgoCD CLI: an IP cannot be verified against the default ArgoCD cert:\n'
       printf '      argocd login %s --insecure\n' "$_a_hp"
