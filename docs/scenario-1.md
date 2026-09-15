@@ -1132,8 +1132,8 @@ Gitea, Tekton and every app — correct at that moment, and stale now:
 make creds-show    # re-read it: the *.vks.local rows carry real URLs once the ingress is up
 ```
 
-**Expect:** `add once to /etc/hosts` — the hint `creds` prints ONLY when it has an ingress LB IP, so
-its presence is what distinguishes a table of real URLs from a table of `<needs ingress>` markers.
+**Expect:** `http://gitea.vks.local` in the table — a real URL instead of the `<needs ingress>` marker.
+If those names do not resolve on this machine yet, it also prints an `/etc/hosts` line to add.
 
 ---
 

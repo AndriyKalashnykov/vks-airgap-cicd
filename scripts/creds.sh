@@ -375,14 +375,21 @@ if [ -n "${ARGOCD_SERVER:-}" ]; then
 elif [ -n "${ARGOCD_LB_IP:-}" ]; then
   # KinD publishes this (07-install-argocd.sh). It is a DEFAULT — it applies only when the
   # operator has not said otherwise.
-  argocd_url="${argo_scheme}://${ARGOCD_LB_IP} (untrusted cert)"
+  argocd_url="${argo_scheme}://${ARGOCD_LB_IP}"
   # This branch appended the marker and armed NOTHING -- the orphan, on the KinD path.
   # ⚠️ IT ALSO HAS TO ARM THE ArgoCD ADVICE, or the marker prints with no explanation -- the
   # ORIGINAL bug, one level down, which a round caught here after I fixed it everywhere else.
   # This is the bare-IP case BY CONSTRUCTION (ARGOCD_LB_IP is an IP the KinD flow published), so
   # setting the flag here does not touch the `_argo_tls_note` heuristic B486 freezes.
   # 07-install-argocd.sh mints no SAN, so the cert is argocd-server's own DNS-only one.
-  _tls_note_needed=1; _argo_tls_flag=1; _argocd_bare="${argo_scheme}://${ARGOCD_LB_IP}"
+  # ⚠️ ONLY FOR https (impl round 2026-09-15, measured): with ARGOCD_INSECURE=1 — the mode
+  # `make e2e-kind-both` runs — this armed a "(untrusted cert)" marker on an http:// row and printed a
+  # TLS login line and a TLS verify recipe for a plaintext server. The Harbor marker was already gated
+  # on HARBOR_INSECURE; ArgoCD's was not.
+  if [ "$argo_scheme" = https ]; then
+    argocd_url="${argocd_url} (untrusted cert)"
+    _tls_note_needed=1; _argo_tls_flag=1; _argocd_bare="${argo_scheme}://${ARGOCD_LB_IP}"
+  fi
 else
   # DISCOVER IT before giving up. MEASURED 2026-08-05: this printed `<not set>` and a footnote telling
   # the operator to "set ARGOCD_SERVER in .env" — while `kubectl -n <ns> get svc argocd-server` returned
@@ -430,6 +437,10 @@ fi
 # VERIFIED side-effect-free to source (ran-it): rc=0, no output, no env change, +17 functions.
 # shellcheck source=scripts/lib/harbor.sh
 . "${SCRIPT_DIR}/lib/harbor.sh"
+# lib/tls.sh for `ca_verifies_endpoint` (the Harbor CA bullet settles its own "if" by probing).
+# VERIFIED side-effect-free to source (ran-it 2026-09-15: only BASH_ARGC and $_ differ afterwards).
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 # shellcheck source=scripts/lib/headlamp.sh
 . "${SCRIPT_DIR}/lib/headlamp.sh"
 tekton_url="$(ingress_url "${TEKTON_DASHBOARD_HOST:-tekton.vks.local}")"  # Tekton Dashboard (read-only UI)
@@ -1331,19 +1342,15 @@ case "$_prov" in
                 # reassurance in the one surface a tenant has.
                 # `env-validate` is the honest fallback -- it is BROAD (format + KUBECONFIG +
                 # reachability), so it still has something to check when Harbor does not.
-                if [ "${_pre_off:-0}" = 1 ]; then
-                  :   # nothing answered, so a re-check cannot run either — see the top block
-                elif [ -n "${HARBOR_URL:-}" ]; then
-                  printf '                   re-check: make harbor-auth-check\n'
-                else
-                  printf '                   re-check: make env-validate\n'
-                fi
+                # ⚠️ MOVED 2026-09-15: the register now prints ONCE, under "Nothing here is
+                # auth-tested." (the reason it exists), instead of hanging off provenance with none.
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
                 printf '                   passwords below belong to that one, not to the cluster you are talking to.\n'
                 printf '                   stamped for : %s\n' "$_stamp"
                 printf '                   you are on  : %s\n' "${_live_srv:-<could not read a server from KUBECONFIG>}"
                 printf '                   Inspect it with: make state-show   |   re-check: make env-validate\n'
+                _rc_in_context=1   # this arm's finding carries its own register; do not print a second one
               fi ;;
   *)          if [ "$_env_populated" = 1 ]; then
                 # ⚠️ NOT ALL OF THEM: Reachable is probed live and the headlamp token is minted
@@ -1356,15 +1363,11 @@ case "$_prov" in
                 # `env-validate` deliberately -- its finding is that the whole overlay belongs to
                 # another cluster, where the broad format+KUBECONFIG+reachability check is the
                 # right one and push RBAC is not the question.
-                if [ "${_pre_off:-0}" = 1 ]; then
-                  printf '                   token (minted each run).\n'
-                elif [ -n "${HARBOR_URL:-}" ]; then
-                  printf '                   token (minted each run).  re-check: make harbor-auth-check\n'
-                else
-                  printf '                   token (minted each run).  re-check: make env-validate\n'
-                fi
+                # (the re-check register moved under "Nothing here is auth-tested.", 2026-09-15)
+                printf '                   token (minted each run).\n'
               else
                 printf '    values below : PLACEHOLDERS from .env.example — nothing is installed yet\n'
+                if [ -z "${HARBOR_URL:-}" ]; then _rc_in_context=1; fi   # nothing to re-check unless Harbor is set (it can be exported, not in .env)
               fi ;;
 esac
 if [ "$_sink_refused" = 1 ]; then
@@ -1419,10 +1422,9 @@ echo "Access the UIs:"
 # false-dead vectors -- a slow/cold-start ingress (5 s responder: /dev/tcp alive in 0.00 s, curl 000
 # at the 2 s default), curl absent (bare Photon ships none; /dev/tcp is a bash builtin), unbracketed
 # IPv6, and TLS on the probe port. `_ing_live` is not banner-local: it short-circuits EVERY ingress
-# row to `silent` (:843), so a false dead blanks all nine Reachable cells AND suppresses
-# `add once to /etc/hosts`, which is the ONLY checkable Expect literal in docs/scenario-1.md:1099
-# and docs/scenario-2.md:929 -- i.e. it would redden the six-row walk matrix, hours later, pointing
-# at a document. Here every one of those vectors costs a warning you do not get, never a suppressed
+# row to `silent` (:843), so a false dead blanks all nine Reachable cells — and (until 2026-09-15, when
+# the walks moved their Expect literal to the table's `http://gitea.vks.local`) it suppressed the hint the
+# six-row walk matrix gated on. Here every one of those vectors costs a warning you do not get, never a suppressed
 # hosts line.
 _ing_http_dead=0
 if [ -n "$_ing" ] && [ "$_ing_live" = 1 ] && [ "$_no_probe_snapshot" != "1" ] && have curl; then
@@ -1446,7 +1448,7 @@ elif [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
   echo "      That is the observation, not a diagnosis. It is a STORED value that survives a"
   echo "      rebuild, so it may be a previous lab's — but a POWERED-OFF or still-booting lab is"
   echo "      silent in exactly the same way, and nothing here can tell those apart."
-  echo "      NOT printing an /etc/hosts line for it — a hosts entry pointing at nothing sends you"
+  echo "      Do not add /etc/hosts entries for it yet — a hosts entry pointing at nothing sends you"
   echo "      to debug your browser. Check the lab is up FIRST; if it is, re-run the ingress"
   # ⚠️ NAME WHICH. Only Harbor and ArgoCD have their own LoadBalancer rows; Gitea, Tekton,
   # headlamp and every app row resolve ONLY through this ingress, so telling the operator to
@@ -1455,8 +1457,10 @@ elif [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
   echo "      install. Harbor and ArgoCD have their OWN LoadBalancers and are in the table;"
   echo "      Gitea, Tekton, headlamp and the apps are reachable ONLY through this ingress."
 elif [ -n "${INGRESS_LB_IP:-}" ]; then
-  echo
+  # The leading blank line belongs to whatever prints below, not to the block: with the hint omitted and
+  # no warning, an unconditional `echo` here left a double blank under "Access the UIs:" (measured live).
   if [ "$_ing_http_dead" = 1 ]; then
+    echo
     # ⚠️ THE CLAIM IS WHAT WAS OBSERVED, NOT A DIAGNOSIS. An earlier version said this was "the
     # signature of a gateway with no routes attached" and told the reader to re-run the ingress
     # install. An implementation round measured both halves wrong:
@@ -1478,14 +1482,25 @@ elif [ -n "${INGRESS_LB_IP:-}" ]; then
     echo "      ${CREDS_ROUTE_TIMEOUT_SECONDS:-${CREDS_PROBE_TIMEOUT_SECONDS:-2}}s. That is a gateway with no routes attached, an ingress still"
     echo "      starting (a fresh LoadBalancer can take 5-60s to wire its data path), pods that cannot"
     echo "      start (their images come from a registry that is not answering), or TLS on port ${INGRESS_PROBE_PORT:-80}."
-    echo "      The line below is correct IF this is your current ingress. Re-run 'make creds' in a few minutes;"
+    echo "      Re-run 'make creds' in a few minutes;"
     echo "      if it persists across re-runs, ask whoever runs the lab."
-    echo
   fi
-  echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
   # The trailing space the per-app loop leaves is TRIMMED: this line is COPIED into /etc/hosts.
   _hosts_line="$(printf '%s' "$(ingress_infra_hosts)$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)" | sed 's/[[:space:]]*$//')"
-  echo "    ${INGRESS_LB_IP}  ${_hosts_line}"
+  # ⚠️ PRE-TABLE ONLY WHEN NOTHING MAY BE LOOKED UP (owner 2026-09-15 + idea round F2/F3). Two defects in
+  # the unconditional form, both MEASURED:
+  #   - on the owner's box every *.vks.local name already resolved to this LB: a chore already done;
+  #   - with a STALE entry it prescribed APPENDING every host, while the post-table stale-DNS block
+  #     (`_dns_stale`, which compares getent to the LB per row) says an appended line LOSES — the report
+  #     contradicted itself, and that contradiction was already recorded as fixed.
+  # In a probed run the post-table DNS blocks own the remedy, per row. Under CREDS_NO_PROBE=1 nothing is
+  # looked up, those blocks cannot fire, and this line is the only /etc/hosts advice — so it stays there.
+  # (The scenario walks gate on the table's `http://gitea.vks.local` URL, not on this line.)
+  if [ "$_no_probe_snapshot" = 1 ]; then
+    echo
+    echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
+    echo "    ${INGRESS_LB_IP}  ${_hosts_line}"
+  fi
 fi
 
 # --- table ----------------------------------------------------------------------------
@@ -2769,6 +2784,19 @@ fi
 # Only a real push discriminates a Harbor robot (CLAUDE.md, "THREE HARBOR AUTH CHECKS THAT DO NOT
 # DISCRIMINATE"); `make env-validate` cannot judge one at all (B715).
 printf '\n  Reachable = the address answered — NOT that the credential works. Nothing here is auth-tested.\n'
+# ⚠️ THE RE-CHECK REGISTER LIVES HERE (moved 2026-09-15, idea round F5). In the Context block it hung
+# off the provenance line with no reason; this line IS its reason. Same TARGETS as before:
+# harbor-auth-check when Harbor is configured (it reports push RBAC; env-validate cannot, B715),
+# env-validate otherwise. Gating: none on the powered-off signature (a re-check cannot run either),
+# none when the stamped-MISMATCH arm printed its own, none in the PLACEHOLDERS arm unless HARBOR_URL is set.
+# Unlike before, it also prints in the DISCOVERED arm — those credentials are equally untested.
+if [ "${_pre_off:-0}" != 1 ] && [ "${_rc_in_context:-0}" != 1 ]; then
+  if [ -n "${HARBOR_URL:-}" ]; then
+    printf '  re-check: make harbor-auth-check   (tests the Harbor login; this table does not)\n'
+  else
+    printf '  re-check: make env-validate   (tests the configured credentials; this table does not)\n'
+  fi
+fi
 # ⚠️ THE CELLS THAT HAVE NO MEANING WITHOUT THIS LINE. A round counted them: of the EIGHT strings the
 # producers emit, FOUR reached the operator's table with NO reader-facing definition anywhere in the
 # render — `no backend`, `no route`, `HTTP <n>` and `LB up`.
@@ -3068,8 +3096,8 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
   # (CURLE_SSL_CACERT_BADFILE) where the system store returned 200 -- and `[ -s <directory> ]` is
   # TRUE. It also cannot know the CA is the one that SIGNED this Harbor (a stale CA survives a
   # re-cut). So the voice is CONDITIONAL. The measuring version is lib/tls.sh's
-  # `ca_verifies_endpoint`, which creds.sh does not source and which is a live probe that would
-  # have to be gated on CREDS_NO_PROBE -- named here so the stronger fix is findable.
+  # `ca_verifies_endpoint` — creds.sh now sources lib/tls.sh and calls it below, gated on
+  # CREDS_NO_PROBE and on Harbor's row serving (2026-09-15).
   # ⚠️ TESTS `_ca_abs`, not HARBOR_CA_FILE: the value is REPO_ROOT-relative but `[ -s ]` resolves
   # against the CWD, so a run from elsewhere reported "not on disk" for a CA that was there.
   if [ "${_harbor_marked:-0}" = 1 ] && [ -n "${HARBOR_URL:-}" ]; then
@@ -3085,8 +3113,38 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
         silent)     _h_when=" (once Harbor answers)" ;;
         unresolved) _h_when=" (once its name resolves on this machine — see make show-dns-records)" ;;
       esac
-      printf '    - Harbor%s: if that CA is the one that signed it, this verifies —\n      curl --cacert %s %s://%s\n' "$_h_when" \
-        "$_ca_abs" "$harbor_scheme" "${HARBOR_URL}"
+      # ⚠️ SETTLED BY PROBING WHEN IT CAN BE (2026-09-15, idea round F4, lab-measured: the CA DID verify,
+      # and the report still said "if"). Only when probes are on, Harbor's row is `serving` and the scheme
+      # is https — otherwise the hedge below stays. CA_VERIFY_TIMEOUT is set EXPLICITLY: its default is 15s.
+      #   0 -> verifies: print nothing (tools already use HARBOR_CA_FILE; browsers: click through, above)
+      #   1 -> connected, the CA does NOT verify it (stale/wrong)   3 -> CA right, HARBOR_URL is not its name
+      #   5 -> the CA file is unusable                              2/4/unprobed -> the conditional hedge
+      _h_ca_rc=9
+      if [ "$_no_probe_snapshot" != 1 ] && [ "${_reach_harbor_cell:-}" = serving ] && [ "$harbor_scheme" = https ]; then
+        _h_host="${HARBOR_URL%%:*}"; _h_port=443
+        case "$HARBOR_URL" in *:*) _h_port="${HARBOR_URL##*:}" ;; esac
+        if CA_VERIFY_TIMEOUT="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" ca_verifies_endpoint "$_h_host" "$_h_port" "$_ca_abs"; then
+          _h_ca_rc=0
+        else
+          _h_ca_rc=$?
+        fi
+      fi
+      if [ "$_h_ca_rc" = 0 ]; then
+        :
+      elif [ "$_h_ca_rc" = 1 ]; then
+        printf '    - Harbor: the CA at %s does NOT verify it — re-fetch it:\n' "$_ca_abs"
+        printf '      make fetch-harbor-ca\n'
+        printf '      if make fetch-harbor-ca succeeds and it still fails, the certificate Harbor serves is the problem.\n'
+      elif [ "$_h_ca_rc" = 3 ]; then
+        printf '    - Harbor: the CA is right, but %s is not a name its cert carries —\n' "$HARBOR_URL"
+        printf '      set HARBOR_URL to a name it carries; make fetch-harbor-ca lists them.\n'
+      elif [ "$_h_ca_rc" = 5 ]; then
+        printf '    - Harbor: the CA at %s is not a readable certificate — get one:\n' "$_ca_abs"
+        printf '      make fetch-harbor-ca\n'
+      else
+        printf '    - Harbor%s: if that CA is the one that signed it, this verifies —\n      curl --cacert %s %s://%s\n' "$_h_when" \
+          "$_ca_abs" "$harbor_scheme" "${HARBOR_URL}"
+      fi
     else
       # ⚠️ SPLIT BY THE WIDTH GATE ADDED IN THE SAME CHANGE, on its FIRST run. This was ONE label
       # line of 126 chars carrying an absolute path AND two commands -- the same "chaotic and
@@ -3118,8 +3176,8 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
     # it is the JUSTIFICATION for a security downgrade: without it `--insecure` sits unmotivated
     # beside Harbor's `--cacert`, inviting an operator to "fix" the asymmetry with a `--cacert`
     # that cannot work.
-    printf '    - ArgoCD, browse only — a bare IP cannot match a DNS-only cert:\n'
-    printf '      curl --insecure %s\n' "$_argocd_bare"
+    # (The "browse only — curl --insecure <ip>" bullet was DROPPED 2026-09-15, idea round F8: nobody browses
+    #  with curl, and "browser: click through" above covers browsing. Its reason now labels the CLI bullet.)
     # ⚠️ NAMES THE MAKE TARGET, NOT A RUNBOOK. It used to end "see docs/scenario-2.md" -- one
     # persona's runbook, at a reader this report CANNOT identify (it prints `flow: real lab` and
     # cannot tell the scenario-1 admin from the scenario-2 tenant).
@@ -3140,9 +3198,72 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
     # returns exactly one printf: this is the report's ONLY pointer to the only command that
     # produces ARGOCD_CA_FILE. `.env.example` documenting it does not discharge RULE ZERO-B --
     # this report is the surface the operator is looking at when `argocd login` fails.
-    printf '    - ArgoCD, argocd login / write — needs a NAME the cert carries, plus ARGOCD_CA_FILE:\n'
-    printf '      set ARGOCD_SERVER=<a name the cert carries, resolvable here> in .env FIRST,\n'
-    printf '      then make fetch-argocd-ca (it refuses an IP the cert does not carry), then set ARGOCD_CA_FILE in .env\n'
+    # ⚠️ REWRITTEN 2026-09-15 (owner: "what the fuck is this?"; idea round F1, lab-measured). The old bullet
+    # asked for "a name the cert carries" and named none, and it was FALSE in part: a hand-typed
+    # `argocd login` never reads ARGOCD_CA_FILE (only the repo's scripts turn it into --server-crt via
+    # ARGOCD_OPTS, lib/os.sh), and scenario-1 logs in at the IP with --insecure (scenario-1.md:446).
+    # THREE ARMS, keyed on what this report can see:
+    #   ARGOCD_CA_FILE set      -> no CA can verify an IP: say what that breaks, and where the names are.
+    #   marker `discovered`     -> `make argocd-address` owns ARGOCD_SERVER and would overwrite a
+    #                              hand-set name on its next run (09-argocd-address.sh:283), so a verify
+    #                              recipe would be undone: the CLI line only.
+    #   otherwise (a granted IP)-> the CLI line, plus the verify recipe built on `make fetch-argocd-ca`,
+    #                              which at an IP REFUSES, writes nothing and LISTS the cert's names.
+    # The cert's names are NOT read here (C2 refuted: it would be a fifth hand-rolled SAN parser, and
+    # `argocd-server` is right only for this Service's generated cert).
+    # (impl round 2026-09-15) host and port SPLIT: `10.0.0.9:8443` is not an /etc/hosts entry, and the
+    # final login must keep the port. `_argocd_bare` may also carry a path.
+    _a_hp="${_argocd_bare#*://}"; _a_hp="${_a_hp%%/*}"
+    _a_host="${_a_hp%%:*}"; _a_port=""
+    case "$_a_hp" in *:*) _a_port=":${_a_hp##*:}" ;; esac
+    # ⚠️ ARGOCD_CA_FILE IS PROBED, NOT ASSUMED USELESS (impl round F-B). fetch-ca.sh writes an anchor for an
+    # IP only when the cert CARRIES that IP SAN, so the most direct way to hold a CA file and an IP is a
+    # cert where --server-crt WORKS — and "no CA can verify this IP" would push that reader to --insecure.
+    _a_ca_rc=9; _a_ca=""
+    if [ -n "${ARGOCD_CA_FILE:-}" ]; then
+      case "$ARGOCD_CA_FILE" in /*) _a_ca="$ARGOCD_CA_FILE" ;; *) _a_ca="${REPO_ROOT}/${ARGOCD_CA_FILE#./}" ;; esac
+      if [ "$_no_probe_snapshot" != 1 ] && [ "${_reach_argocd_cell:-}" = serving ]; then
+        if CA_VERIFY_TIMEOUT="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" ca_verifies_endpoint "$_a_host" "${_a_port#:}" "$_a_ca"; then
+          _a_ca_rc=0
+        else
+          _a_ca_rc=$?
+        fi
+      fi
+    fi
+    if [ "$_a_ca_rc" = 0 ]; then
+      printf '    - ArgoCD CLI: ARGOCD_CA_FILE verifies this address (a browser still does not trust it):\n'
+      printf '      argocd login %s --server-crt %s\n' "$_a_hp" "$_a_ca"
+    elif [ "$_a_ca_rc" = 1 ]; then
+      # (final round, ran-it) connected and the cert carries this address, but THIS CA does not verify it:
+      # the remedy is a re-fetch, not --insecure and not a name hunt.
+      printf '    - ArgoCD CLI: the CA at %s does NOT verify this address — re-fetch it:\n' "$_a_ca"
+      printf '      make fetch-argocd-ca\n'
+    elif [ "$_a_ca_rc" = 5 ]; then
+      printf '    - ArgoCD CLI: the CA at %s is not a readable certificate — get one:\n' "$_a_ca"
+      printf '      make fetch-argocd-ca\n'
+    else
+      printf '    - ArgoCD CLI: an IP cannot be verified against the default ArgoCD cert:\n'
+      printf '      argocd login %s --insecure\n' "$_a_hp"
+      if [ -n "${ARGOCD_CA_FILE:-}" ]; then
+        if [ "$_a_ca_rc" = 3 ]; then
+          printf '      ARGOCD_CA_FILE does not verify this IP — the cert does not carry it — so the verifying\n'
+        else
+          printf '      ARGOCD_CA_FILE is set; if the cert does not carry this IP, the verifying\n'
+        fi
+        printf '      paths fail at it (make argocd-auth-check, the gitops api mechanism).\n'
+        printf '      make fetch-argocd-ca lists the names the cert carries.\n'
+      elif [ "${ARGOCD_SERVER_SOURCE:-}" != discovered ]; then
+        # (impl round F-D) an address the report READ FROM THE CLUSTER is in neither ARGOCD_SERVER nor
+        # ARGOCD_LB_IP, and `make fetch-argocd-ca` needs one of them (Makefile:737-738).
+        if [ -z "${ARGOCD_SERVER:-}${ARGOCD_LB_IP:-}" ]; then
+          printf '      first set ARGOCD_SERVER=%s in .env — make fetch-argocd-ca dials it. Then,\n' "$_a_hp"
+        fi
+        printf '      to verify instead: make fetch-argocd-ca — if it refuses this IP it lists the cert'"'"'s names;\n'
+        printf '      map one of them to %s in /etc/hosts, set ARGOCD_SERVER=<that name> in .env,\n' "$_a_host"
+        printf '      run make fetch-argocd-ca again, set ARGOCD_CA_FILE to the file it writes, then:\n'
+        printf '      argocd login <that name>%s --server-crt <that file>\n' "$_a_port"
+      fi
+    fi
   fi
 fi
 
@@ -3705,7 +3826,13 @@ EOF
 # publishes no node-SSH secret"), `<unreachable>` and `<stale CA>` — every one of them a statement
 # about the lab, and scenario-1.md:1102 documents that intent ("never a blank that would read as
 # this cluster has none"). A reader applying the absolute would discount an actionable lab fact.
-printf '\n  Lab access. <not set> = this report lacks it, not the lab.\n'
+# ⚠️ THE LEGEND PRINTS ONLY WHEN ITS MARKER DOES (owner, 2026-09-15): on a fully-populated table it explained
+# a `<not set>` that appeared nowhere. `Lab access` stays the leading token either way.
+if [[ "$_lab_rows" == *$'\t'"<not set>"$'\t'* || "$_lab_rows" == *$'\t'"<not set>"$'\n'* ]]; then   # an exact CELL, not a substring
+  printf '\n  Lab access. <not set> = this report lacks it, not the lab.\n'
+else
+  printf '\n  Lab access\n'
+fi
 # ⚠️ "read live" IS A CLAIM, and it used to print unconditionally -- including on the run where
 # `_sup_timeout` returned 119 WITHOUT DIALLING. Paired with `<could not read node addresses>` it told
 # the operator the live cluster HAD been asked and had no readable addresses (a lab/RBAC fact) when
@@ -3744,7 +3871,9 @@ _ssh_header_line() {   # <answered> <rc> <state> <never-asked> <answered-but-unr
     printf '    guest node SSH: the server ANSWERED but the addresses were not readable — see the\n'
     printf '                    note below.\n'
   elif [ "${1:-0}" = 1 ] || [ "${2:-1}" -eq 0 ]; then
-    printf '    guest node SSH: read live.\n'
+    # SUCCESS PRINTS NOTHING (owner, 2026-09-15): "read live." gave the reader nothing to act on. The
+    # arms below stay, because each separates a lab fact from a fault on this box.
+    :
   elif [ "${2:-1}" -eq 119 ]; then
     printf '    guest node SSH: NOT probed.\n'
   elif [ "${4:-0}" = 1 ]; then
@@ -3883,6 +4012,6 @@ fi
 
 echo
 
-printf '\n  ⚠️ vCenter SSO locks out PERMANENTLY after 3 failed attempts. This report never\n'
+printf '  ⚠️ vCenter SSO locks out PERMANENTLY after 3 failed attempts. This report never\n'   # the `echo` above is the separator; a leading \n here made a double blank
 printf '     authenticates TO vCENTER, so nothing here spends one. If a value is rejected: STOP,\n'
 printf '     ask the lab owner.\n'

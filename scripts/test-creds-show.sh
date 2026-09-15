@@ -425,7 +425,7 @@ if printf '%s' "$_o_mark" | grep -q 'ARGOCD_CA_FILE'; then
   else
     bad "cert advice names ARGOCD_CA_FILE but NO command to obtain it — a value with no way to get it"
   fi
-elif printf '%s' "$_o_mark" | grep -q 'ArgoCD, argocd login'; then
+elif printf '%s' "$_o_mark" | grep -q 'ArgoCD CLI'; then
   # ⚠️ THE OLD `else` ARM WAS A HOLE, and it was the arm this fixture lands in on a deletion.
   # "if ARGOCD_CA_FILE is mentioned it must name the command, ELSE ok" goes GREEN when BOTH halves
   # are deleted -- it guards the historical half-regression (a bare variable name) and is blind to
@@ -1243,6 +1243,29 @@ if printf '%s\n' "$_ss_dflt" | grep -qE '^  vcf CLI ' && ! printf '%s\n' "$_ss_d
   ok "login rows (iv) method unset: vcf CLI row only, no vsphere-login row"
 else
   bad "login rows (iv) method unset: wrong rows in the shipped default state" "vcf CLI always; kubectl vsphere only with VKS_PASSWORD or the vsphere method"
+fi
+# ---- the `<not set>` legend prints ONLY when a cell carries the marker (owner, 2026-09-15) ----
+# On a fully-populated table it explained a marker that appeared nowhere.
+_lg_full="$(render_with_env '
+VCENTER_HOST=vcsa.example.test
+VCENTER_USERNAME=administrator@vsphere.local
+VCENTER_PASSWORD=vc-secret
+SUPERVISOR_HOST=10.0.0.9
+VKS_USERNAME=administrator@vsphere.local
+VCF_CLI_VSPHERE_PASSWORD=vcf-secret
+')"
+_lg_cells="$(printf '%s\n' "$_lg_full" | sed -n '/^  Lab access/,$p' | grep -c '<not set>' || true)"
+if printf '%s\n' "$_lg_full" | grep -qE '^  Lab access$' && [ "$_lg_cells" = 0 ]; then
+  ok "lab legend: a fully-populated table prints a bare 'Lab access' header, no <not set> legend"
+else
+  bad "lab legend: the fully-populated table still carries the <not set> legend (or a cell is <not set>: $_lg_cells)" "explain a marker only when it appears"
+fi
+_lg_empty="$(render_with_env '
+')"
+if printf '%s\n' "$_lg_empty" | grep -qF 'Lab access. <not set> = this report lacks it, not the lab.'; then
+  ok "lab legend: the legend still prints when <not set> cells are present (control)"
+else
+  bad "lab legend: the legend vanished although <not set> cells are present" "the marker still needs its explanation there"
 fi
 
 # ── B202 F6: the ATOMIC-PAIR guard, as an ASSERTION rather than a comment ───────────────────────
@@ -2078,24 +2101,289 @@ _ing_out="$(render_with_env 'HARBOR_URL=h.example
 ' 'INGRESS_LB_IP=10.0.0.9
 INGRESS_CONTROLLER=istio
 ')"
-if printf '%s' "$_ing_out" | grep -qF 'add once to /etc/hosts'; then
-  ok "the /etc/hosts hint is verbatim -- the literal both scenario documents gate on"
+# ⚠️ THE WALK LITERAL MOVED (owner, 2026-09-15). The hint now prints only while the names do NOT
+# already resolve to the LB, so on a box that has done the chore it is absent — it can no longer be the
+# documents' gate. Both scenario docs now gate on `http://gitea.vks.local`, the URL the table shows
+# only once an ingress exists. The hint is still pinned here under CREDS_NO_PROBE=1 (nothing looked up).
+if printf '%s' "$_ing_out" | grep -qF 'http://gitea.vks.local'; then
+  ok "the Gitea row shows http://gitea.vks.local with an ingress -- the literal both scenario documents gate on"
 else
-  bad "creds no longer prints the exact string 'add once to /etc/hosts'. TWO walk blocks
-      (scenario-1 and scenario-2) have that as their ONLY checkable Expect literal, so this reword
-      turns every healthy matrix row RED with the failure pointing at a document."
+  bad "creds no longer prints 'http://gitea.vks.local' with an ingress. TWO walk blocks (scenario-1 and
+      scenario-2) have that as their ONLY checkable Expect literal, so every healthy matrix row goes RED."
+fi
+if printf '%s' "$_ing_out" | grep -qF 'add once to /etc/hosts'; then
+  ok "the /etc/hosts hint still prints when nothing may be looked up (CREDS_NO_PROBE=1)"
+else
+  bad "the /etc/hosts hint vanished under CREDS_NO_PROBE=1" "with no lookup, whether the names resolve is unknown, so the chore must stay visible"
 fi
 
-# THE CONTROL. Without it the pin passes on a string printed unconditionally -- which would gate
-# nothing in the documents either, since the claim is precisely that its PRESENCE distinguishes a
-# table of real URLs from a table of needs-ingress markers.
+# THE CONTROL. Without it the pin passes on a string printed unconditionally.
 _no_ing_out="$(render_with_env 'HARBOR_URL=h.example
 ' '')"
-if printf '%s' "$_no_ing_out" | grep -qF 'add once to /etc/hosts'; then
-  bad "the /etc/hosts hint prints even with NO ingress LB IP. Then its presence distinguishes
+if printf '%s' "$_no_ing_out" | grep -qF 'http://gitea.vks.local' || printf '%s' "$_no_ing_out" | grep -qF 'add once to /etc/hosts'; then
+  bad "the Gitea URL or the /etc/hosts hint prints with NO ingress LB IP. Then its presence distinguishes
       nothing, and the two documents that gate on it are asserting a constant."
 else
-  ok "...and it is ABSENT with no ingress, so its presence is a real discriminator"
+  ok "...and both are ABSENT with no ingress, so their presence is a real discriminator"
+fi
+
+# ══ THE PRE-TABLE /etc/hosts HINT ONLY WHEN NOTHING MAY BE LOOKED UP (owner + idea round F2, 2026-09-15) ══
+# In a probed run the post-table DNS blocks own the remedy per row. A REAL probe (loopback listener = a
+# live ingress) with a stub getent:
+#   all names -> the LB IP  -> no pre-table hint, no stale-DNS block (nothing to do)
+#   all names -> another IP -> no pre-table hint (it prescribed an APPEND the stale block says LOSES),
+#                              and the post-table stale-DNS block IS present
+_hosts_hint_count() {  # <ip every name resolves to> ; echoes hint|url|stale-block counts
+  local t p lp out
+  trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+  t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+  p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+  python3 -m http.server "$p" --bind 127.0.0.1 >/dev/null 2>&1 &
+  lp=$!
+  sleep 1
+  # shellcheck disable=SC2016
+  { printf '#!/bin/sh\n'; printf 'printf "%s %%s\\n" "$2"\n' "$1"; } > "$t/bin/getent"
+  chmod +x "$t/bin/getent"
+  printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\n' "$p" > "$t/.env"
+  out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+            CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+  kill "$lp" 2>/dev/null || true
+  wait "$lp" 2>/dev/null || true
+  rm -rf "$t"
+  printf '%s|%s|%s' "$(printf '%s' "$out" | grep -c 'add once to /etc/hosts' || true)" \
+    "$(printf '%s' "$out" | grep -c 'http://gitea.vks.local' || true)" \
+    "$(printf '%s' "$out" | grep -c 'RESOLVE ON THIS MACHINE' || true)"
+}
+if command -v python3 >/dev/null 2>&1; then
+  IFS='|' read -r _hd_hint _hd_url _hd_stale <<< "$(_hosts_hint_count 127.0.0.1)"
+  IFS='|' read -r _hs_hint _hs_url _hs_stale <<< "$(_hosts_hint_count 10.9.9.9)"
+  if [ "${_hd_url:-0}" -ge 1 ] && [ "${_hs_url:-0}" -ge 1 ]; then
+    ok "hosts-hint: both fixtures rendered the ingress rows (the case is live)"
+  else
+    bad "hosts-hint: the fixtures did not render the ingress rows (url: done=$_hd_url stale=$_hs_url)" "fix the listener or the getent stub, not the product"
+  fi
+  if [ "${_hd_hint:-1}" = 0 ] && [ "${_hd_stale:-1}" = 0 ]; then
+    ok "hosts-hint: names already resolve to the LB -> no /etc/hosts advice at all"
+  else
+    bad "hosts-hint: advice printed although every name resolves to the LB (hint=$_hd_hint stale=$_hd_stale)" "a chore already done is not an instruction"
+  fi
+  if [ "${_hs_hint:-1}" = 0 ] && [ "${_hs_stale:-0}" -ge 1 ]; then
+    ok "hosts-hint: stale names -> no pre-table append, and the post-table stale-DNS block owns the remedy"
+  else
+    bad "hosts-hint: stale names rendered hint=$_hs_hint stale-block=$_hs_stale" "the pre-table append contradicts the stale block ('an appended line LOSES')"
+  fi
+fi
+
+# ══ THE ArgoCD CLI BULLET, per arm (owner + idea round F1, 2026-09-15) ══════════════════════════════
+# (a) a granted IP (no marker, no CA): the CLI line AND the verify recipe
+_ac_grant="$(render_with_env 'ARGOCD_SERVER=10.0.0.9
+' '')"
+# (b) marker `discovered`: `make argocd-address` owns ARGOCD_SERVER and would overwrite a hand-set name,
+#     so the recipe would be undone — the CLI line ONLY
+_ac_disc="$(render_with_env 'ARGOCD_SERVER=10.0.0.9
+' 'ARGOCD_SERVER_SOURCE=discovered
+')"
+# (c) ARGOCD_CA_FILE set: no CA can verify an IP — say what breaks
+_ac_ca="$(render_with_env 'ARGOCD_SERVER=10.0.0.9
+ARGOCD_CA_FILE=./secrets/argocd-ca.crt
+' '')"
+if grep -qF 'argocd login 10.0.0.9 --insecure' <<< "$_ac_grant" \
+   && grep -qF 'to verify instead: make fetch-argocd-ca' <<< "$_ac_grant"; then
+  ok "argocd-cli (a) granted IP: the --insecure login line and the verify recipe"
+else
+  bad "argocd-cli (a) granted IP: missing the CLI line or the verify recipe" "an IP with no marker is where the recipe can actually work"
+fi
+if grep -qF 'argocd login 10.0.0.9 --insecure' <<< "$_ac_disc" \
+   && ! grep -qF 'to verify instead' <<< "$_ac_disc"; then
+  ok "argocd-cli (b) discovered marker: the CLI line only (a hand-set name would be overwritten)"
+else
+  bad "argocd-cli (b) discovered marker: the recipe printed, or the CLI line is missing" "make argocd-address rewrites ARGOCD_SERVER while the marker is discovered"
+fi
+if grep -qF 'ARGOCD_CA_FILE is set; if the cert does not carry this IP' <<< "$_ac_ca" \
+   && ! grep -qF 'to verify instead' <<< "$_ac_ca"; then
+  ok "argocd-cli (c) CA set, unprobed: a CONDITIONAL sentence, no recipe"
+else
+  bad "argocd-cli (c) CA set, unprobed: the conditional CA sentence is missing" "unprobed must not assert the CA is useless"
+fi
+if grep -qE 'browse only|curl --insecure|a NAME the cert carries' <<< "$_ac_grant$_ac_disc$_ac_ca"; then
+  bad "argocd-cli: the dropped bullets are back ('browse only' / curl --insecure / 'a NAME the cert carries')"
+else
+  ok "argocd-cli: no 'browse only' curl bullet and no unnamed 'a NAME the cert carries' instruction"
+fi
+
+# ══ THE RE-CHECK REGISTER sits under "Nothing here is auth-tested." with its reason (idea round F5) ══
+_rcpos="$(printf '%s\n' "$_ac_grant" | grep -A1 -F 'Nothing here is auth-tested.' | tail -1)"
+case "$_rcpos" in
+  *'re-check: make env-validate'*'this table does not'*|*'re-check: make harbor-auth-check'*'this table does not'*)
+    ok "re-check: directly under the auth-tested legend, with its reason" ;;
+  *) bad "re-check: not directly under 'Nothing here is auth-tested.' (got: $_rcpos)" "the register belongs beside the sentence that explains it" ;;
+esac
+if grep -q 're-check:' <<< "$(sed -n '/^  Context/,/^Access the UIs/p' <<< "$_ac_grant")"; then
+  bad "re-check: still printed in the Context block" "it hung off provenance there with no reason"
+else
+  ok "re-check: no longer in the Context block"
+fi
+
+# ══ THE HARBOR CA BULLET settles its own "if" by probing (idea round F4, 2026-09-15) ═══════════════
+# A stub `openssl` decides what `ca_verifies_endpoint` sees; stub `getent`/`curl` make Harbor's row
+# `serving`. Only the verdict line's text is asserted per rc.
+_hca_render() {  # <s_client output text> [no-probe 0|1] [x509 rc] ; echoes the creds render
+  local t out np="${2:-0}" xrc="${3:-0}"
+  trap 'rm -rf "${t:-}"' EXIT INT TERM
+  t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin" "$t/secrets"
+  printf 'dummy\n' > "$t/secrets/harbor-ca.crt"
+  # `$2`/`$1` are the STUBS' positionals, written literally into the generated scripts (SC2016 is deliberate).
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\nprintf "10.0.0.1 %%s\\n" "$2"\n' > "$t/bin/getent"
+  printf '#!/bin/sh\nprintf 200\n' > "$t/bin/curl"
+  # shellcheck disable=SC2016
+  { printf '#!/bin/sh\ncase "$1" in x509) exit %s ;; s_client) cat <<"OUT"\n' "$xrc"; printf '%s\n' "$1"; printf 'OUT\nexit 0 ;; esac\nexit 0\n'; } > "$t/bin/openssl"
+  chmod +x "$t/bin/getent" "$t/bin/curl" "$t/bin/openssl"
+  printf 'HARBOR_URL=harbor.lab.example\nHARBOR_PASSWORD=x\nHARBOR_CA_FILE=./secrets/harbor-ca.crt\n' > "$t/.env"
+  out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+            CREDS_NO_PROBE="$np" CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+  rm -rf "$t"
+  printf '%s' "$out"
+}
+_hca_ok="$(_hca_render 'CONNECTED(00000003)
+depth=0 CN = harbor
+Verify return code: 0 (ok)')"
+_hca_bad="$(_hca_render 'CONNECTED(00000003)
+Verify return code: 21 (unable to verify the first certificate)')"
+_hca_name="$(_hca_render 'CONNECTED(00000003)
+Hostname mismatch
+Verify return code: 62 (Hostname mismatch)')"
+if printf '%s' "$_hca_ok" | grep -qE '^  Harbor \(registry\).*serving$'; then
+  ok "harbor-ca: the fixture made Harbor's row serving (the case is live)"
+else
+  bad "harbor-ca: Harbor's row is not serving in the fixture" "fix the getent/curl stubs, not the product"
+fi
+if printf '%s' "$_hca_ok" | grep -qE '^    - Harbor'; then
+  bad "harbor-ca rc=0: a Harbor bullet printed although the CA verifies" "nothing to do: print nothing"
+else
+  ok "harbor-ca rc=0: no Harbor bullet when the CA verifies"
+fi
+if printf '%s' "$_hca_bad" | grep -qF 'does NOT verify it' && printf '%s' "$_hca_bad" | grep -qF 'make fetch-harbor-ca'; then
+  ok "harbor-ca rc=1: says the CA does NOT verify and names make fetch-harbor-ca"
+else
+  bad "harbor-ca rc=1: the stale-CA verdict or its remedy is missing"
+fi
+if printf '%s' "$_hca_name" | grep -qF 'is not a name its cert carries'; then
+  ok "harbor-ca rc=3: says HARBOR_URL is not a name the cert carries"
+else
+  bad "harbor-ca rc=3: the name-mismatch verdict is missing"
+fi
+if printf '%s' "$_hca_ok$_hca_bad$_hca_name" | grep -qF 'if that CA is the one that signed it'; then
+  bad "harbor-ca: the hedge printed although the probe settled it"
+else
+  ok "harbor-ca: no 'if that CA is the one that signed it' hedge once the probe has settled it"
+fi
+# (impl round F-A, measured: deleting the hedge left the suite GREEN) the hedge must be PRESENT where the
+# probe cannot settle it, and rc 5 needs its own line.
+_hca_np="$(_hca_render 'CONNECTED(00000003)
+Verify return code: 0 (ok)' 1)"
+_hca_unreach="$(_hca_render 'connect: Connection refused')"
+_hca_unread="$(_hca_render 'CONNECTED(00000003)
+Verify return code: 0 (ok)' 0 1)"
+if grep -qF 'if that CA is the one that signed it' <<< "$_hca_np"; then
+  ok "harbor-ca no-probe: the conditional hedge prints when nothing may be probed"
+else
+  bad "harbor-ca no-probe: the hedge is missing although the probe could not run" "unsettled must stay conditional, not silent"
+fi
+if grep -qF 'if that CA is the one that signed it' <<< "$_hca_unreach"; then
+  ok "harbor-ca rc=2 (could not connect): the conditional hedge prints"
+else
+  bad "harbor-ca rc=2: the hedge is missing although the probe could not connect"
+fi
+if grep -qF 'is not a readable certificate' <<< "$_hca_unread" && grep -qF 'make fetch-harbor-ca' <<< "$_hca_unread"; then
+  ok "harbor-ca rc=5: says the CA file is not a readable certificate and names make fetch-harbor-ca"
+else
+  bad "harbor-ca rc=5: the unreadable-CA verdict is missing"
+fi
+if grep -qF 'make fetch-harbor-ca lists them' <<< "$_hca_name"; then
+  ok "harbor-ca rc=3: points at the command that lists the names the cert carries"
+else
+  bad "harbor-ca rc=3: names no way to find the name the cert carries"
+fi
+
+# ══ ArgoCD: plaintext LB, CA probe, port, and the address read from the cluster (impl round) ═══════
+# O1: ARGOCD_INSECURE=1 (the mode e2e-kind-both runs) -> http row, no TLS marker, no TLS login line.
+_ac_plain="$(render_with_env 'ARGOCD_INSECURE=1
+' 'ARGOCD_LB_IP=10.0.0.2
+')"
+if grep -qE '^  ArgoCD +http://10\.0\.0\.2 ' <<< "$_ac_plain" && ! grep -qE 'ArgoCD +http://[^ ]+ \(untrusted cert\)|argocd login' <<< "$_ac_plain"; then
+  ok "argocd plaintext LB: no (untrusted cert) marker and no TLS login line"
+else
+  bad "argocd plaintext LB: a TLS marker or login line printed for an http:// ArgoCD" "gate the ArgoCD LB marker on https"
+fi
+# F-C: a port. Host alone into /etc/hosts; the final login keeps the port.
+_ac_port="$(render_with_env 'ARGOCD_SERVER=https://10.0.0.9:8443
+' '')"
+if grep -qF 'argocd login 10.0.0.9:8443 --insecure' <<< "$_ac_port" \
+   && grep -qF 'map one of them to 10.0.0.9 in /etc/hosts' <<< "$_ac_port" \
+   && grep -qF 'argocd login <that name>:8443 --server-crt' <<< "$_ac_port"; then
+  ok "argocd port: host alone in the /etc/hosts step, port kept in both login lines"
+else
+  bad "argocd port: the recipe put host:port into /etc/hosts or dropped the port" "split host and port"
+fi
+# F-B: ARGOCD_CA_FILE is PROBED. A live listener makes ArgoCD's row serving; stub openssl decides the verdict.
+_aca_render() {  # <s_client output text> [x509 rc] ; echoes the creds render
+  local t p lp out xrc="${2:-0}"
+  trap 'kill "${lp:-}" 2>/dev/null; rm -rf "${t:-}"' EXIT INT TERM
+  t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin" "$t/secrets"
+  printf 'dummy\n' > "$t/secrets/argocd-ca.crt"
+  p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+  python3 -m http.server "$p" --bind 127.0.0.1 >/dev/null 2>&1 &
+  lp=$!
+  sleep 1
+  # shellcheck disable=SC2016
+  { printf '#!/bin/sh\ncase "$1" in x509) exit %s ;; s_client) cat <<"OUT"\n' "$xrc"; printf '%s\n' "$1"; printf 'OUT\nexit 0 ;; esac\nexit 0\n'; } > "$t/bin/openssl"
+  chmod +x "$t/bin/openssl"
+  printf 'ARGOCD_SERVER=https://127.0.0.1:%s\nARGOCD_CA_FILE=./secrets/argocd-ca.crt\n' "$p" > "$t/.env"
+  out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+            CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+  kill "$lp" 2>/dev/null || true
+  wait "$lp" 2>/dev/null || true
+  rm -rf "$t"
+  printf '%s' "$out"
+}
+if command -v python3 >/dev/null 2>&1; then
+  _aca_ok="$(_aca_render 'CONNECTED(00000003)
+Verify return code: 0 (ok)')"
+  _aca_name="$(_aca_render 'CONNECTED(00000003)
+IP address mismatch
+Verify return code: 64 (IP address mismatch)')"
+  if grep -qE '^  ArgoCD .*serving$' <<< "$_aca_ok"; then
+    ok "argocd-ca: the fixture made ArgoCD's row serving (the case is live)"
+  else
+    bad "argocd-ca: ArgoCD's row is not serving in the fixture" "fix the listener, not the product"
+  fi
+  if grep -qE 'argocd login 127\.0\.0\.1:[0-9]+ --server-crt ' <<< "$_aca_ok" && ! grep -qF -- '--insecure' <<< "$_aca_ok"; then
+    ok "argocd-ca rc=0: a CA that verifies gets --server-crt, never --insecure"
+  else
+    bad "argocd-ca rc=0: a verifying CA was downgraded to --insecure" "probe ARGOCD_CA_FILE before calling it useless"
+  fi
+  if grep -qF 'ARGOCD_CA_FILE does not verify this IP' <<< "$_aca_name" && grep -qF -- '--insecure' <<< "$_aca_name"; then
+    ok "argocd-ca rc=3: says the CA does not verify this IP, with the --insecure line"
+  else
+    bad "argocd-ca rc=3: the does-not-verify-this-IP verdict is missing"
+  fi
+  _aca_unread="$(_aca_render 'CONNECTED(00000003)
+Verify return code: 0 (ok)' 1)"
+  if grep -qF 'is not a readable certificate' <<< "$_aca_unread" && grep -qF 'make fetch-argocd-ca' <<< "$_aca_unread"; then
+    ok "argocd-ca rc=5: an unreadable CA file says so and names make fetch-argocd-ca"
+  else
+    bad "argocd-ca rc=5: an unreadable CA file was not reported as such"
+  fi
+  # (final round, ran-it) rc1 and rc5 used to print the rc3 reason and --insecure.
+  _aca_wrong="$(_aca_render 'CONNECTED(00000003)
+Verify return code: 21 (unable to verify the first certificate)')"
+  if grep -qF 'does NOT verify this address — re-fetch it' <<< "$_aca_wrong" \
+     && ! grep -qE 'cert does not carry this IP|argocd login [^ ]+ --insecure' <<< "$_aca_wrong"; then
+    ok "argocd-ca rc=1: a CA that does not verify gets a re-fetch, not --insecure or the missing-IP-SAN reason"
+  else
+    bad "argocd-ca rc=1: a wrong CA was blamed on a missing IP SAN or pushed to --insecure"
+  fi
 fi
 
 # ══ THE /etc/hosts ADVICE BLOCK ═══════════════════════════════════════════════════════════════════
@@ -2410,8 +2698,13 @@ _hdr_case() {  # <label> <answered> <rc> <state> <expected-substring> [never-ask
     *)      bad "ssh-header: $1" "got: $(printf '%s' "$got" | tr -d '\n')" ;;
   esac
 }
-# the rc=0 arm — we asked and the server answered
-_hdr_case "rc=0 -> read live"                       0 0   ""            "read live"
+# the rc=0 arm — we asked and the server answered. SUCCESS PRINTS NOTHING (owner, 2026-09-15):
+# "read live." gave the reader nothing to act on.
+_hdr_case_empty() {  # <label> <answered> <rc> <state> [never-asked] [unreadable]
+  local got; got="$(_hdr_says "$2" "$3" "$4" "${5:-0}" "${6:-0}")"
+  if [ -z "$got" ]; then ok "ssh-header: $1"; else bad "ssh-header: $1" "got: $(printf '%s' "$got" | tr -d '\n')"; fi
+}
+_hdr_case_empty "rc=0 -> prints nothing"            0 0   ""
 # THE DEFECT'S OWN CASE: our budget expired, nothing came back. NOT a lab fact.
 _hdr_case "rc=124 (our timeout) -> NOT a lab fact"  0 124 "some state"  "NOTHING answered"
 _hdr_case "rc=137 (external kill) -> NOT a lab fact" 0 137 "some state" "NOTHING answered"
@@ -2432,7 +2725,7 @@ _hdr_case "never probed -> NOT probed"              0 1   ""            "NOT pro
 # would be a claim about the LAB made from a fault inside this box.
 _hdr_case "never-asked -> NOT probed, not a lab fact"  0 1 "some state" "kube config named no reachable target" 1
 # ...and the never-asked flag must NOT override a real answer.
-_hdr_case "answered beats never-asked"                 1 1 "some state" "read live" 1
+_hdr_case_empty "answered beats never-asked (prints nothing, not the never-asked sentence)" 1 1 "some state" 1
 
 # ⚠️ STRUCTURAL: NO ARM MAY CLAIM AN ANSWER WHILE ITS CELL SAYS IT COULD NOT READ.
 # The header cases above drive `_ssh_header_line` with explicit args, so they cannot see the
@@ -3182,12 +3475,31 @@ INGRESS_PROBE_PORT=${_ip}
     esac
   done
 
-  # (5) the ArgoCD login bullet: the ADDRESS first. fetch-argocd-ca refuses a bare IP the cert does not carry.
-  _argo_bul="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh" | grep -F -A2 'argocd login / write' | tr '\n' ' ')"
-  if [[ "$_argo_bul" == *"ARGOCD_SERVER"*"fetch-argocd-ca"*"ARGOCD_CA_FILE"* ]]; then
-    ok "argocd-login-order: ARGOCD_SERVER is set before fetch-argocd-ca, and ARGOCD_CA_FILE after it"
+  # (1r) ARGOCD address READ FROM THE CLUSTER (impl round F-D): it is in neither ARGOCD_SERVER nor
+  #      ARGOCD_LB_IP, and `make fetch-argocd-ca` needs one of them — so the recipe must say to set it first.
+  _ac_disc_ip="$(_lab_fixture '#!/bin/sh
+case "$*" in
+  *current-context*) echo ctx; exit 0 ;;
+  *"get svc -A"*) printf argocd; exit 0 ;;
+  *"get svc argocd-server"*) printf 10.0.0.9; exit 0 ;;
+esac
+exit 1
+' "" "$_getent_no_test" KUBECONFIG=@T@/kc)"
+  if grep -qF 'first set ARGOCD_SERVER=10.0.0.9 in .env' <<< "$_ac_disc_ip"; then
+    ok "argocd-cluster-read: the recipe first says to set ARGOCD_SERVER to the address it read"
+  elif ! grep -qF 'argocd login 10.0.0.9' <<< "$_ac_disc_ip"; then
+    bad "argocd-cluster-read: the fixture did not reach the discovered-address branch" "fix the kubectl stub, not the product"
   else
-    bad "argocd-login-order: the steps are out of order (fetch-argocd-ca refuses a bare IP)" "set ARGOCD_SERVER first, then fetch, then ARGOCD_CA_FILE"
+    bad "argocd-cluster-read: the recipe starts with make fetch-argocd-ca, which cannot run without ARGOCD_SERVER"
+  fi
+
+  # (5) the ArgoCD verify recipe, in runnable order: fetch-argocd-ca first (at an IP it REFUSES and LISTS the
+  #     cert's names), then ARGOCD_SERVER=<that name>, then fetch again + ARGOCD_CA_FILE, then --server-crt.
+  _argo_bul="$(grep -vE '^[[:space:]]*#' "${_CREDS_REPO}/scripts/creds.sh" | grep -F -A3 'to verify instead: make fetch-argocd-ca' | tr '\n' ' ')"
+  if [[ "$_argo_bul" == *"fetch-argocd-ca"*"ARGOCD_SERVER=<that name>"*"fetch-argocd-ca again"*"ARGOCD_CA_FILE"*"--server-crt"* ]]; then
+    ok "argocd-verify-recipe: list the names, set ARGOCD_SERVER to one, fetch again, ARGOCD_CA_FILE, --server-crt"
+  else
+    bad "argocd-verify-recipe: the steps are missing or out of order" "fetch (lists names) -> ARGOCD_SERVER=<name> -> fetch again -> ARGOCD_CA_FILE -> argocd login --server-crt"
   fi
 
   # (1i) a 403 as system:anonymous accepted NO credential.

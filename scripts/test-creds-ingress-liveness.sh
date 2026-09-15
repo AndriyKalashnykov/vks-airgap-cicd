@@ -96,6 +96,9 @@ render() {
 }
 
 _HINT='add once to /etc/hosts'
+# 2026-09-15: in a PROBED run the pre-table hint no longer prints (the post-table DNS blocks own the
+# remedy), so "the report still gives the operator real URLs" is asserted on the Gitea row's URL instead.
+_URL='http://gitea.vks.local'
 _WARN='accepts TCP connections but completed no HTTP request'
 _DEAD='is NOT ANSWERING on port'
 
@@ -119,19 +122,19 @@ else
   bad "accept-then-RST: NO warning. The TCP probe says alive and the report hands over an
       /etc/hosts line for a gateway that completes no request -- the B560 defect."
 fi
-if grep -qF "$_HINT" <<< "$out"; then
-  ok "...and the hint is STILL printed (the walk's only Expect literal survives)"
+if grep -qF "$_URL" <<< "$out"; then
+  ok "...and the Gitea URL is STILL in the table (the walks' Expect literal survives)"
 else
-  bad "...but the hint was SUPPRESSED. That kills the only checkable Expect literal in
+  bad "...but the Gitea URL is gone. That is the only checkable Expect literal in
       docs/scenario-{1,2}.md and reddens the walk matrix."
 fi
 
 # ── 2. THE DISCRIMINATING CONTROL. A healthy 404 must NOT warn. ──────────────────────────────────
 port="$(listen ok)"; out="$(render 127.0.0.1 "$port")"; _kill_srv
-if grep -qF "$_HINT" <<< "$out" && ! grep -qF "$_WARN" <<< "$out"; then
-  ok "healthy 404 at the bare IP: hint printed, no warning (404 is ALIVE -- no vhost was named)"
+if grep -qF "$_URL" <<< "$out" && ! grep -qF "$_WARN" <<< "$out"; then
+  ok "healthy 404 at the bare IP: URL rows, no warning (404 is ALIVE -- no vhost was named)"
 else
-  bad "healthy 404: expected the hint and NO warning. Without this case the warning could fire
+  bad "healthy 404: expected the URL rows and NO warning. Without this case the warning could fire
       unconditionally and cases 1-2 would both still pass."
 fi
 
@@ -147,10 +150,10 @@ fi
 # 5 s against a 2 s budget. Replacing the socket verdict with an HTTP one -- the REFUTED design --
 # fails here, which is the point of measuring it.
 port="$(listen slow)"; out="$(render 127.0.0.1 "$port")"; _kill_srv
-if grep -qF "$_HINT" <<< "$out"; then
-  ok "slow (5s) ingress: the hint still prints -- a timeout must not read as a dead LB"
+if grep -qF "$_URL" <<< "$out"; then
+  ok "slow (5s) ingress: the URL rows survive -- a timeout must not read as a dead LB"
 else
-  bad "slow ingress: the hint was suppressed. A cold-start or loaded ingress now blanks the
+  bad "slow ingress: the URL rows were lost. A cold-start or loaded ingress now blanks the
       operator's only actionable line AND every Reachable cell."
 fi
 
@@ -161,10 +164,10 @@ for _b in bash sed grep awk cut tr sort head tail printf date mktemp rm cat wc k
 done
 port="$(listen ok)"; out="$(render 127.0.0.1 "$port" "PATH=$_stub")"; _kill_srv
 rm -rf "$_stub"
-if grep -qF "$_HINT" <<< "$out"; then
-  ok "no curl on PATH: the hint still prints (/dev/tcp is a bash builtin and needs nothing)"
+if grep -qF "$_URL" <<< "$out"; then
+  ok "no curl on PATH: the URL rows survive (/dev/tcp is a bash builtin and needs nothing)"
 else
-  bad "no curl: the hint was suppressed. curl is an UNDECLARED dependency of this report -- there
+  bad "no curl: the URL rows were lost. curl is an UNDECLARED dependency of this report -- there
       is no require_cmd curl anywhere in creds.sh -- so a bare jump box would lose the line."
 fi
 # ⚠️ AND IT MUST NOT WARN. Case 5 originally asserted only that the HINT prints, so it never tested
