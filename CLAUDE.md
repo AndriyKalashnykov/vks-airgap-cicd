@@ -1067,7 +1067,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 - **powered off:** the report now leads with "⚠️ NOTHING answered on this run", names what was silent,
   and gives the steps (check reach, start the lab, renew the token only if expired, re-run). The
-  token/SSO banners are suppressed there: they cannot help while nothing answers.
+  the token and SSO banners are suppressed there: they cannot help while nothing answers.
 - **the lab-off signature requires evidence:** ingress probed and silent, Harbor/ArgoCD silent or
   skipped, cluster not up, AND either the cluster refused/had no route or ≥2 endpoints were silent.
 - **the cluster probe's UNREACHABLE class is split by kubectl's REAL stderr** (allow-list): proxy,
