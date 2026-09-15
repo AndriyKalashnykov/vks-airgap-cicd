@@ -2187,14 +2187,14 @@ _ac_disc="$(render_with_env 'ARGOCD_SERVER=10.0.0.9
 _ac_ca="$(render_with_env 'ARGOCD_SERVER=10.0.0.9
 ARGOCD_CA_FILE=./secrets/argocd-ca.crt
 ' '')"
-if printf '%s' "$_ac_grant" | grep -qF 'argocd login 10.0.0.9 --insecure' \
-   && printf '%s' "$_ac_grant" | grep -qF 'to verify instead: make fetch-argocd-ca'; then
+if grep -qF 'argocd login 10.0.0.9 --insecure' <<< "$_ac_grant" \
+   && grep -qF 'to verify instead: make fetch-argocd-ca' <<< "$_ac_grant"; then
   ok "argocd-cli (a) granted IP: the --insecure login line and the verify recipe"
 else
   bad "argocd-cli (a) granted IP: missing the CLI line or the verify recipe" "an IP with no marker is where the recipe can actually work"
 fi
-if printf '%s' "$_ac_disc" | grep -qF 'argocd login 10.0.0.9 --insecure' \
-   && ! printf '%s' "$_ac_disc" | grep -qF 'to verify instead'; then
+if grep -qF 'argocd login 10.0.0.9 --insecure' <<< "$_ac_disc" \
+   && ! grep -qF 'to verify instead' <<< "$_ac_disc"; then
   ok "argocd-cli (b) discovered marker: the CLI line only (a hand-set name would be overwritten)"
 else
   bad "argocd-cli (b) discovered marker: the recipe printed, or the CLI line is missing" "make argocd-address rewrites ARGOCD_SERVER while the marker is discovered"
@@ -2218,7 +2218,7 @@ case "$_rcpos" in
     ok "re-check: directly under the auth-tested legend, with its reason" ;;
   *) bad "re-check: not directly under 'Nothing here is auth-tested.' (got: $_rcpos)" "the register belongs beside the sentence that explains it" ;;
 esac
-if printf '%s' "$_ac_grant" | sed -n '/^  Context/,/^Access the UIs/p' | grep -q 're-check:'; then
+if grep -q 're-check:' <<< "$(sed -n '/^  Context/,/^Access the UIs/p' <<< "$_ac_grant")"; then
   bad "re-check: still printed in the Context block" "it hung off provenance there with no reason"
 else
   ok "re-check: no longer in the Context block"
