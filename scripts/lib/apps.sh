@@ -97,6 +97,32 @@ app_host() {
   printf '%s.%s' "$1" "${APP_DOMAIN:?APP_DOMAIN is not set (it is in .env.example; scripts get it via load_env)}"
 }
 
+# _hosts_teardown_advice — B727: how to remove the /etc/hosts line THIS repo told the operator to add,
+# WITHOUT the data-loss of `sed -i '/<domain>/d'` (which deletes any line CONTAINING the domain — so it
+# removed `127.0.0.1 localhost <app>.<domain>` (localhost gone) and unrelated real hosts; measured 3/5
+# lines destroyed on a realistic fixture). creds.sh adds ONE line `${INGRESS_LB_IP}  <our hostnames>`,
+# so an anchored delete on `^<LB_IP><space>` removes EXACTLY that line — localhost is 127.0.0.1 and real
+# hosts are other IPs, so neither can match. When the LB IP is unknown (partial/wiped state) we CANNOT
+# build a safe command (matching the domain would delete localhost), so we print the names and ask for a
+# by-hand removal. Emits to STDOUT (the caller routes through its own `note`); ends `return 0` for set -e.
+_hosts_teardown_advice() {
+  local names esc
+  names="$(ingress_infra_hosts)$(app_names | while IFS= read -r a; do [ -n "$a" ] && printf '%s ' "$(app_host "$a")"; done)"
+  if [ -n "${INGRESS_LB_IP:-}" ]; then
+    esc="$(printf '%s' "$INGRESS_LB_IP" | sed 's/\./\\./g')"   # dots are BRE 'any char' — escape for literal ZERO-V truth
+    printf 'and the /etc/hosts line we told you to add (it starts with the ingress LB IP); needs root:\n'
+    printf "  sudo sed -i '/^%s[[:space:]]/d' /etc/hosts\n" "$esc"
+    printf '  (removes ONLY lines starting with %s. If you added other names to that line, or the LB IP\n' "$INGRESS_LB_IP"
+    printf '   has since changed, remove it by hand — the names we added were: %s)\n' "$names"
+  else
+    printf 'and any /etc/hosts line you added for the ingress. We do not have the LB IP to build a safe\n'
+    printf 'command (matching the domain would also delete "127.0.0.1 localhost ..."), so find the line\n'
+    printf 'whose names are: %s\n' "$names"
+    printf 'and remove that ONE line by hand (needs root).\n'
+  fi
+  return 0
+}
+
 # --- per-LANGUAGE behaviour #1: which Tekton task runs the tests -----------------------------
 # The Pipeline is rendered per app (envsubst), so the test task is just a token.
 app_test_task() {
