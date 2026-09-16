@@ -9748,7 +9748,14 @@ is already recorded in `rules/shell/coding-style.md`. Surfaced as an out-of-scop
 adversary-bash-git-cli while reviewing an unrelated diff — this repo's recurring pattern that the
 highest-value finding is about something already shipped.
 
-## 🔴 B727 — `make uninstall-all` prescribes a root `sed` that DELETES the localhost line from /etc/hosts
+## ✅ B727 (CLOSED — PR #1273, 2026-09-16) — `make uninstall-all` prescribed a root `sed` that DELETED the localhost line from /etc/hosts
+
+**CLOSED.** Replaced the `/${APP_DOMAIN}/d` delete with an LB-IP-anchored `_hosts_teardown_advice()` in
+`lib/apps.sh` (`/^<escaped-ip>[[:space:]]/d` removes only the one line the emitters add; empty LB IP → no
+sed, by-hand removal naming the hosts). `scripts/test-hosts-teardown-advice.sh` (10/10, fast tier): applies
+the emitted sed to a fixture (localhost/corp/indented/nas survive); two RED-proofs (naive `/<domain>/d`
+destroys localhost+corp; dropped-`^` deletes the indented LB-IP line). Fixture hosts derived from the
+registry. Implementation-round adversary-bash-git-cli: cleared, all claims held under ran-it.
 
 **MEASURED 2026-09-10** on a fixture holding an ordinary `/etc/hosts`. `98-uninstall-all.sh:332`
 prints, for the operator to paste:
