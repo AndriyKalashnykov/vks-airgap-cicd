@@ -8688,8 +8688,24 @@ Harbor, and the lab is DOWN mid ArgoCD/Harbor upgrade. So the PR is reviewed and
 together with `make builder-image` (dual-homed) / `make builder-build`+`builder-push` (sneakernet)
 when the lab returns**, then confirm `make builder-freshness` clean and the alerts CLOSE.
 
-**Still owed (blocked on lab):** rebuild+push both builders · `make builder-freshness` clean ·
-alerts close · merge PR #1266.
+**Rebuild + PROOF done 2026-09-15 (lab-independent — the internet-box half):** `make builder-build`
+rebuilt all 6 builders from the fix branch (0 errors, saved into the bundle). The fix is PROVEN in the
+ARTIFACT, discharging the impl round's MED finding (`make app-test` could not, since it runs the stale
+builder):
+
+    localhost/nodejswebapp-builder:0.3.0  /build/node_modules/qs -> 6.16.0   (rc=0)
+    localhost/pythonwebapp-builder:0.3.0  /opt/venv pip show flask -> 3.1.3
+    make builder-freshness -> 0 of 6 stale (node+python both `fresh`)
+
+**Genuinely still owed (needs a real Harbor -> lab):** `make builder-push` to the production Harbor so
+a real air-gap deploy carries the fix. The carried builders are already rebuilt; only the push remains.
+
+**Open decision (surfaced to the owner):** whether to merge PR #1266 NOW (closes the Dependabot alerts;
+the source IS fixed and the fix is artifact-proven; a stale deploy is guarded by the freshness gate and
+both CVEs are unreachable) or keep it draft until `make builder-push` accompanies it (this row's original
+"worse than inert" caution). The caution's core — "closes the alert while shipping a vulnerable image" —
+is now weakened: nothing deploys without the lab, and the lab's own upgrade will rebuild from the merged
+manifests.
 
 ## B555 — 🟡 three `fetch-ca.sh` refusal arms are reachable only via a MID-FETCH endpoint change, so nothing pins them
 
