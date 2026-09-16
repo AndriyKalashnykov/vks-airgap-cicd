@@ -1182,7 +1182,24 @@ to be a **fail-open** that reproduces this script's founding incident.
 (`github.event_name == 'schedule' || needs.changes.outputs.code == 'true'`) is documented at
 `ci.yml:155/184/195` as the **restoration path**, and it matches BOTH classifiers.
 
-## 🔴 B564 — `ci-pass` REFUSES after `gh run rerun --failed`, because a partial attempt has a partial job list 🔴 open
+## ✅ B564 — CLOSED 2026-09-16: Stage 1 shipped (#1183); one bug (jobs-API lag), Stage 2 deferred (zero recurrence)
+
+### ✅ VERIFIED SHIPPED 2026-09-16 — the fix is already on main; this is a stale-open row
+
+Confirmed against the code, not the row: the two "bugs" are ONE (the jobs API lags the `needs`
+context), and **Stage 1 is already implemented in `.github/workflows/ci.yml`'s `ci-pass` step** —
+shipped in **#1183** (`5e582f8`). It reads the jobs API, runs `ci-pass-verdict.sh`; on a REFUSE it
+emits a `::notice::` (the incidence counter), `sleep 15`, re-reads, and uses the second read
+authoritatively (refusing if that read is empty). Monotone: a retry can convert REFUSE→PASS, never
+PASS→REFUSE. The `|| rc=$?` trap (GitHub's `bash -e {0}`) is handled. All three refuted options
+(cross-check `needs` = CRITICAL fail-open; `gh run watch` = deadlock; accept-`none`-when-completed =
+guessing) are documented in-step.
+
+**Stage 2 (a bounded poll) stays DEFERRED — do NOT build it.** The row's own condition is "only if it
+recurs after Stage 1", and it has not: the incidence was a single day (2026-09-08), and measured
+2026-09-16 there were **0 failures in the last 15 main runs**. Building a tested poll now would be a
+control against one day's GitHub weather. Re-open only if a `ci-pass`-only refusal recurs (the
+`::notice::` is how the next session gets a second data point).
 
 MEASURED 2026-09-08 on PR #1167: a raced `ci-pass` (it read `static-check-fast conclusion=none` while
 that job was still running) was re-run with `gh run rerun --failed`. The re-run then reported
