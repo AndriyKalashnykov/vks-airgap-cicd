@@ -8586,7 +8586,7 @@ lab; IPv6 endpoints are unparsed by `${hostport%%:*}` and untested (pre-existing
 `make env-validate` has **zero** ArgoCD anchor coverage (`grep -c ARGOCD_CA_FILE scripts/02-env.sh`
 -> 0) where Harbor has a graded arm — filed as its own row.
 
-## B554 — 🟡 three Dependabot alerts on `main`, in the demo apps, surfaced by a push
+## B554 — 🟡 three Dependabot alerts — manifests BUMPED (PR #1266, unmerged); builder rebuild+push still owed
 
 Reported by GitHub on push 2026-09-07, read via `gh api .../dependabot/alerts`:
 
@@ -8658,6 +8658,38 @@ correctly, which is the confirmation that the rebuild is genuinely required and 
 ⚠️ **`make builder-image` rebuilds ALL SIX builders and mutates Harbor**, so it is serial work: do
 not run it alongside anything else that touches the registry, and not while editing `scripts/`
 (it sources `lib/os.sh` mid-run — see the never-edit-a-script-mid-run rule).
+
+### ▶️ MANIFESTS BUMPED 2026-09-15 (PR #1266) — held UNMERGED on purpose; the rebuild is what closes it
+
+Two `adversary-security-secrets` rounds (idea then implementation, both `ran-it`) on the delta:
+
+    apps/nodejs/nodejswebapp/package-lock.json   qs 6.15.3 -> 6.16.0   (`npm update qs`, lockfile-only 3 lines, package.json UNCHANGED)
+    apps/python/pythonwebapp/requirements.txt    Flask==3.1.2 -> 3.1.3
+
+Design round: the delta is byte-correct — the new qs integrity matches `registry.npmjs.org/qs/6.16.0`
+exactly, 6.16.0 satisfies both consumer carets (express `^6.14.0`, body-parser `^6.15.2`), qs 6.16.0's
+deps are identical to 6.15.3's (no stale transitive), and no `images.txt`/`selfbuilt.tsv`/builder-tag
+edit is needed (bases unchanged; the tag is single-sourced and must NOT move for a dep bump). Both
+CVEs are LOW/UNREACHABLE with file:line evidence: `server.js` handlers never read `req.query` and
+there is no body-parser; `app.py` has no `session`/`secret_key`. **Do not inflate the severity.**
+
+Impl round refuted the *framing*, not the fix — two findings, both applied:
+- `make app-test` green proves the apps still WORK, NOT that the CVE is fixed: it runs inside the
+  STALE builder (copies baked `node_modules` = qs 6.15.3; pytest in the builder venv = Flask 3.1.2),
+  never `npm ci`/pip against the new manifest. The freshness WARN both runs printed is the tell.
+- the working tree also carried the B571 ci.yml change; shipped SEPARATELY (PR #1265), staged by
+  name, `git diff --cached --stat` gated to exactly the two dep files.
+
+**Why the PR is UNMERGED:** this row's own "Done when" ties the bump to the builder rebuild+push, and
+warns that merging the manifest alone is *worse than inert* — Dependabot keys on the MANIFEST, so
+merging closes the alerts while the built image still ships the old dep (node fails LOUD at the
+offline `npm ci --offline`; python serves 3.1.2 SILENTLY from the baked venv). The rebuild+push needs
+Harbor, and the lab is DOWN mid ArgoCD/Harbor upgrade. So the PR is reviewed and ready; **merge it
+together with `make builder-image` (dual-homed) / `make builder-build`+`builder-push` (sneakernet)
+when the lab returns**, then confirm `make builder-freshness` clean and the alerts CLOSE.
+
+**Still owed (blocked on lab):** rebuild+push both builders · `make builder-freshness` clean ·
+alerts close · merge PR #1266.
 
 ## B555 — 🟡 three `fetch-ca.sh` refusal arms are reachable only via a MID-FETCH endpoint change, so nothing pins them
 
