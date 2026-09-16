@@ -54,8 +54,8 @@ else
 fi
 
 # From ci.yml: every top-level job, and which of them carry a job-level if: guard.
-Y_JOBS="$(awk '/^jobs:/{j=1;next} j && /^  [a-z][a-z0-9-]*:/{n=$1;sub(/:$/,"",n);print n}' "$CI_YML" | sort -u)"
-Y_IF="$(awk '/^jobs:/{j=1} j && /^  [a-z][a-z0-9-]*:/{n=$1;sub(/:$/,"",n)} j && /^    if:/{print n}' "$CI_YML" | sort -u)"
+Y_JOBS="$(awk '/^jobs:/{j=1;next} /^[A-Za-z_]/{j=0} j && /^  [A-Za-z_][A-Za-z0-9_-]*:/{n=$1;sub(/:$/,"",n);print n}' "$CI_YML" | sort -u)"
+Y_IF="$(awk '/^jobs:/{j=1;next} /^[A-Za-z_]/{j=0} j && /^  [A-Za-z_][A-Za-z0-9_-]*:/{n=$1;sub(/:$/,"",n)} j && /^    if:/{print n}' "$CI_YML" | sort -u)"
 Y_NEEDS="$(sed -n 's/^ *needs: *\[\(.*\)\].*/\1/p' "$CI_YML" | tr ',' '\n' | tr -d ' ' | grep -v '^$' | sort -u)"
 
 if [ "$(printf '%s\n' "$Y_JOBS" | wc -l)" -ge 3 ] && [ -n "$Y_NEEDS" ]; then
@@ -68,6 +68,15 @@ _same() { # _same <label> <a> <b>
   local d; d="$(diff <(printf '%s\n' "$2") <(printf '%s\n' "$3") 2>/dev/null)"
   if [ -z "$d" ]; then ok "$1"; else bad "$1" "$(printf '%s' "$d" | tr '\n' ' ')"; fi
 }
+
+# B574-b CANARY — the charset above ([A-Za-z_][A-Za-z0-9_-]*) is a MODEL of GitHub's job-id grammar.
+# A header using a char the model misses is SILENTLY DROPPED from Y_JOBS, so the coverage assertions
+# below pass VACUOUSLY and a FAILED unlisted gate goes unjudged (note-not-judge) -> fail-OPEN on the
+# SOLE required check. This maximally-permissive parse (any 2-space key that is not a comment), under
+# the SAME jobs:-scope+reset, must equal Y_JOBS; a diff means a header the grammar-regex cannot see.
+Y_JOBS_ALL="$(awk '/^jobs:/{j=1;next} /^[A-Za-z_]/{j=0} j && /^  [^ #][^ ]*:/{n=$1;sub(/:$/,"",n);print n}' "$CI_YML" | sort -u)"
+_same "every ci.yml job header parses under the job-id grammar (a miss is silently dropped -> fail-open)" \
+  "$Y_JOBS" "$Y_JOBS_ALL"
 
 _same "the script's two lists together == ci.yml's jobs minus $S_SELF" \
   "$(printf '%s\n%s\n' "$S_UNCOND" "$S_COND" | sort -u)" \
@@ -135,8 +144,9 @@ fi
 # distinguishes those two today (see the residual in the row), which is exactly why the guard must
 # not be allowed to drift in the first place.
 Y_SELF_IF="$(awk -v self="$S_SELF" '
-  /^jobs:/{j=1}
-  j && /^  [a-z][a-z0-9-]*:/{n=$1; sub(/:$/,"",n)}
+  /^jobs:/{j=1;next}
+  /^[A-Za-z_]/{j=0}
+  j && /^  [A-Za-z_][A-Za-z0-9_-]*:/{n=$1; sub(/:$/,"",n)}
   j && n==self && /^    if:/{sub(/^    if:[[:space:]]*/,""); print; exit}' "$CI_YML")"
 if [ "$Y_SELF_IF" = "always()" ]; then
   ok "${S_SELF}'s OWN job-level guard is exactly 'if: always()' (it is the sole required check — a conditional guard would let it SKIP)"
@@ -348,6 +358,42 @@ if printf '%s' "$LAST_OUT" | grep -q '^note  e2e-nightly'; then
   ok "  ...and it is reported"
 else
   bad "  ...but it was not reported" "silently ignoring an unknown job hides a renamed one"
+fi
+
+# ── B574-b SELF-RED PROOFS (committed 2026-09-16) — the odd-id protection cannot silently rot ───
+# A regression that reopens the fail-open (an odd job id going UNJUDGED) is INVISIBLE on the real
+# ci.yml, whose every id is lowercase. The ONLY thing that catches it is running THIS guard against
+# a scratch ci.yml carrying an odd id. gates.md: a hand-run RED-proof decays — commit it. The child
+# is invoked with a scratch CI_YML and _CIPV_SELFTEST set, so it runs the guard WITHOUT re-entering.
+# The assertion is on the OUTCOME (guard fails LOUD on an odd id; does NOT false-RED on a trailing
+# 0-indent key), which holds whether the catch comes from the charset (coverage) or the canary.
+if [ -z "${_CIPV_SELFTEST:-}" ]; then
+  _sd="$(mktemp -d)"; trap 'rm -rf "$_sd"' EXIT
+  _selfred() { # <label> <lines-to-append-to-ci.yml> <FAIL|CLEAN> [<needle>]
+    { cat "$CI_YML"; printf '\n%s\n' "$2"; } > "$_sd/ci.yml"
+    local out rc; out="$(_CIPV_SELFTEST=1 CI_YML="$_sd/ci.yml" bash "$0" 2>&1)"; rc=$?
+    if [ "$3" = FAIL ]; then
+      if [ "$rc" -ne 0 ] && { [ -z "${4:-}" ] || grep -qF "$4" <<<"$out"; }; then ok "self-RED: $1"
+      else bad "self-RED: $1 (want FAIL${4:+ naming $4}, got rc=$rc)" "$(grep -iE 'FAIL|passed,' <<<"$out" | tr '\n' ' ')"; fi
+    else
+      if [ "$rc" -eq 0 ]; then ok "self-GREEN: $1 (no false-RED)"
+      else bad "self-GREEN: $1 (want CLEAN, got rc=$rc)" "$(grep -iE 'FAIL' <<<"$out" | tr '\n' ' ')"; fi
+    fi
+  }
+  _selfred "an uppercase/underscore job id is fail-LOUD, not silently dropped (fail-open closed)" \
+'  Nightly_E2E:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true' FAIL "Nightly_E2E"
+  _selfred "a grammar-INVALID id (digit-start) trips the canary" \
+'  2fa-check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true' FAIL "2fa-check"
+  _selfred "a trailing 0-indent top-level key does NOT false-RED (jobs:-scope reset)" \
+'extra-top-level:
+  looks-like-a-job:
+    x: 1' CLEAN
 fi
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
