@@ -8615,7 +8615,7 @@ lab; IPv6 endpoints are unparsed by `${hostport%%:*}` and untested (pre-existing
 `make env-validate` has **zero** ArgoCD anchor coverage (`grep -c ARGOCD_CA_FILE scripts/02-env.sh`
 -> 0) where Harbor has a graded arm — filed as its own row.
 
-## B554 — 🟢 alerts CLOSED (PR #1266 merged, builders rebuilt+proven); only the production `make builder-push` remains (lab)
+## B554 — ✅ CLOSED 2026-09-16 — deps fixed, alerts closed, builders rebuilt + pushed + proven from production Harbor
 
 Reported by GitHub on push 2026-09-07, read via `gh api .../dependabot/alerts`:
 
@@ -8736,9 +8736,22 @@ open). The "worse than inert" caution was defused before merging: the fix is art
 are unreachable, and any future deploy is guarded by the freshness gate — and nothing deploys while the
 lab is down. The rebuilt builders are carried in the bundle.
 
-**The ONLY remainder (lab-gated):** `make builder-push` into the PRODUCTION Harbor so a real air-gap
-deploy carries the fix. It needs the real lab's Harbor (down mid ArgoCD/Harbor upgrade). Nothing else is
-owed — source fixed, alerts closed, builders rebuilt+proven+carried.
+**CLOSED 2026-09-16 — the lab came back and the push landed.** `make trust-harbor` confirmed podman
+auth (no sudo), then `make builder-push` pushed all 6 carried builders to `harbor.env1.lab.test/cicd/`
+and crane-verified each intact (log: "builder images pushed + verified: 6"; node+python both
+`verified intact in Harbor`). END-RESULT proof, pulled back FROM production Harbor and run:
+
+    podman run harbor.env1.lab.test/cicd/nodejswebapp-builder:0.3.0  -> qs 6.16.0
+    podman run harbor.env1.lab.test/cicd/pythonwebapp-builder:0.3.0  -> Flask 3.1.3
+
+So an operator pulling from the real Harbor now gets the fixed deps. Every "Done when" is met:
+manifests bumped (#1266) · Dependabot alerts `fixed` (0 open) · builders rebuilt + pushed ·
+`make builder-freshness` clean · fix proven in the shipped artifact.
+
+**Out of scope (NOT part of B554, and ArgoCD is off-limits this session):** the fix reaches a RUNNING
+pod only on the next pipeline run (git push -> Tekton -> Kaniko builds the app FROM the new builder ->
+ArgoCD sync). That is an ordinary deploy, not a remediation step, and it is guarded by the freshness
+stamp regardless.
 
 ## B555 — 🟡 three `fetch-ca.sh` refusal arms are reachable only via a MID-FETCH endpoint change, so nothing pins them
 
