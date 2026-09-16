@@ -964,7 +964,7 @@ is unreferenced), or delete it and correct the four comments that claim it runs.
 the reason `static-check` is dispatch-gated is a deliberate cost decision (trivy's cold DB download
 per run), and the round did not evaluate whether the PR path can afford the fast half.
 
-## 🔴 B572 — ~5 rc=0 SKIP arms emit NO machine-readable verdict, and that is the wider class 🔴 open
+## ✅ B572 — CLOSED 2026-09-16: the fake-green-skip class is MEASURED-BENIGN (already hunted); do NOT instrument the 31
 
 Found by the round that **refuted** a `--require-asserted` consumer for `gateway-image-verdict`
 (see [[B482]]). Its closing measurement is the useful part:
@@ -1005,6 +1005,46 @@ arm count is `02-env.sh` (9), `96-verify-gateway-image` (4), `08-install-argocd-
 **REACHABLE** at its call site AND **WRONG** if taken. Counting arms is not that — a `check-*.sh`
 that skips on an absent optional corpus is fine. Do not instrument all 31; that is the
 enumerated-list reflex the row already refuses.
+
+### ✅ RESOLVED 2026-09-16 — deep-research adversary CLEARED the class; one small honest-warning shipped
+
+An `adversary-bash-git-cli` deep-research round answered the row's OWN first question ("which of the
+~31 rc=0 SKIP arms is REACHABLE at its call site AND WRONG-but-green") — measured, not estimated. It
+traced the named top-4 (`02-env.sh`, `96-verify-gateway-image`, `08-install-argocd-service`,
+`06-install-harbor`), EVERY verify step, the FULL `install-all` skip-bearing chain, and a
+representative gate. **Verdict: the population is clear of clean fake-greens.** Every skip is one of:
+exit-0-by-contract printer/preflight; a correct skip of a genuinely-unmeasurable case with a loud
+warn; unreachable at the real call site (chain ordering / a stronger prior gate); guarded by a loud
+downstream `die`; or belt-and-braces behind a stronger gate. Unsurprising — the code is dense with
+prior "idea-round refuted / MEASURED / the-false-green-this-exists-to-stop", i.e. the class has been
+hunted repeatedly. **Instrumenting the 31 is the enumerated-list reflex the row already refuses; a
+consumer for the existing `-verdict:` token is also refused (all its arms are unreachable at its only
+call site, and it would hard-fail a correct `make e2e-kind INGRESS_CONTROLLER=traefik`).**
+
+⚠️ **Measured on a strong SAMPLE, not an exhaustive per-arm enumeration.** The unexamined remainder is
+dominated by exit-0-by-contract printers/preflights (`03/04/18/23/24/26/28/29/48`) and config-gated
+tenant-choice skips (`71-argocd-register-guest.sh` `ARGOCD_REGISTER=never`), which the sampled pattern
+predicts benign. To settle any decisively: run the operator-flow script in a KinD e2e with the skip
+condition forced and assert the OVERALL target still `die`s.
+
+**The ONE thing shipped (the closest thing to a finding, LOW):** `make env-validate` could exit 0
+without contacting Harbor when `HARBOR_URL` is unset/the `harbor.vks.local` placeholder — and
+RULE ZERO-A0 points tenants at `make env-validate` alone for "does my Harbor credential WORK?", so
+exit 0 read as "cred works". NOT a fake-green (it declines to invent a target; `env-check` is the
+presence gate that FAILS on the sentinel), but an operator-clarity gap. Fixed with a contract-
+preserving honest WARNING on that branch (`02-env.sh`): *"Exit 0 here does NOT mean your credential
+works (Harbor was not contacted); run 'make env-check' for presence, set HARBOR_URL …, then re-run."*
+Message-only, RED/GREEN-proven (placeholder → hint fires + partial-.env contract preserved; real URL →
+real probe, no hint); idea + impl adversary both cleared. Deliberately NOT folding presence into
+env-validate and NOT making env-check a prereq — either breaks its documented standalone-on-partial-.env
+contract.
+
+**NOTE, explicitly NOT fixed and NOT a clean fake-green (real-lab-only):** on the
+`ISTIO_INSTALL_METHOD=package` path, `43-install-istio-package.sh:147` proceeds-unverified ONLY when
+the Supervisor Package API is UNREACHABLE (a genuinely unmeasurable state; it hard-`die`s on every
+measurable-bad case at :162/:209, and this path is not in the default `install-all`, which uses helm
+`46-install-istio.sh`). Leave it a note — do NOT convert the unmeasurable-state warn into a die, which
+would re-block air-gapped labs (the refuted design).
 
 ## ✅ B574 — CLOSED 2026-09-16 — F shipped (the paired-rot hole); B574-b fixed (fail-open on an odd job id); B574-a refuted-do-not-build
 
