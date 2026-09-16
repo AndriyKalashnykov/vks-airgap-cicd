@@ -8674,6 +8674,7 @@ CVEs are LOW/UNREACHABLE with file:line evidence: `server.js` handlers never rea
 there is no body-parser; `app.py` has no `session`/`secret_key`. **Do not inflate the severity.**
 
 Impl round refuted the *framing*, not the fix — two findings, both applied:
+
 - `make app-test` green proves the apps still WORK, NOT that the CVE is fixed: it runs inside the
   STALE builder (copies baked `node_modules` = qs 6.15.3; pytest in the builder venv = Flask 3.1.2),
   never `npm ci`/pip against the new manifest. The freshness WARN both runs printed is the tell.
