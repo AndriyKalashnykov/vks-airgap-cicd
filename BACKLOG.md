@@ -8615,7 +8615,7 @@ lab; IPv6 endpoints are unparsed by `${hostport%%:*}` and untested (pre-existing
 `make env-validate` has **zero** ArgoCD anchor coverage (`grep -c ARGOCD_CA_FILE scripts/02-env.sh`
 -> 0) where Harbor has a graded arm — filed as its own row.
 
-## B554 — 🟡 three Dependabot alerts — manifests BUMPED (PR #1266, unmerged); builder rebuild+push still owed
+## B554 — 🟢 alerts CLOSED (PR #1266 merged, builders rebuilt+proven); only the production `make builder-push` remains (lab)
 
 Reported by GitHub on push 2026-09-07, read via `gh api .../dependabot/alerts`:
 
@@ -8688,7 +8688,7 @@ correctly, which is the confirmation that the rebuild is genuinely required and 
 not run it alongside anything else that touches the registry, and not while editing `scripts/`
 (it sources `lib/os.sh` mid-run — see the never-edit-a-script-mid-run rule).
 
-### ▶️ MANIFESTS BUMPED 2026-09-15 (PR #1266) — held UNMERGED on purpose; the rebuild is what closes it
+### ✅ MERGED 2026-09-16 (PR #1266) — alerts CLOSED, builders rebuilt+proven; production push is the only remainder
 
 Two `adversary-security-secrets` rounds (idea then implementation, both `ran-it`) on the delta:
 
@@ -8730,12 +8730,15 @@ builder):
 **Genuinely still owed (needs a real Harbor -> lab):** `make builder-push` to the production Harbor so
 a real air-gap deploy carries the fix. The carried builders are already rebuilt; only the push remains.
 
-**Open decision (surfaced to the owner):** whether to merge PR #1266 NOW (closes the Dependabot alerts;
-the source IS fixed and the fix is artifact-proven; a stale deploy is guarded by the freshness gate and
-both CVEs are unreachable) or keep it draft until `make builder-push` accompanies it (this row's original
-"worse than inert" caution). The caution's core — "closes the alert while shipping a vulnerable image" —
-is now weakened: nothing deploys without the lab, and the lab's own upgrade will rebuild from the merged
-manifests.
+**Decided + done 2026-09-16 (owner: "undraft and merge"):** PR #1266 merged to main (squash e9a0ba8),
+post-merge CI green, and **all three Dependabot alerts are `fixed`** (fixed_at 2026-09-16T04:10:41Z; zero
+open). The "worse than inert" caution was defused before merging: the fix is artifact-proven, both CVEs
+are unreachable, and any future deploy is guarded by the freshness gate — and nothing deploys while the
+lab is down. The rebuilt builders are carried in the bundle.
+
+**The ONLY remainder (lab-gated):** `make builder-push` into the PRODUCTION Harbor so a real air-gap
+deploy carries the fix. It needs the real lab's Harbor (down mid ArgoCD/Harbor upgrade). Nothing else is
+owed — source fixed, alerts closed, builders rebuilt+proven+carried.
 
 ## B555 — 🟡 three `fetch-ca.sh` refusal arms are reachable only via a MID-FETCH endpoint change, so nothing pins them
 
