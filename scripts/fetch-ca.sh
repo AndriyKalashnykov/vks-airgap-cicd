@@ -50,6 +50,47 @@ hostport="$(printf '%s' "$EP" | sed -E 's#^https?://##; s#/.*##')"
 host="${hostport%%:*}"; port="${hostport##*:}"; [ "$port" = "$host" ] && port=443
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+# B561: a stale KinD overlay hijacks make's $(HARBOR_URL)/$(HARBOR_CA_FILE), which reach this script
+# as ARGV. This script does NOT call load_env, so state_check cannot help — and an idea round refuted
+# a gate here (state_check misses the DEFAULT posture, is blind to .env.kind, its permissive arms are
+# deliberate). So PRINT provenance, keyed on the FILE+VALUE not the stamp, LOUDLY *before* the pin
+# check — an operator must see "this is the KinD stand-in" before any "something is intercepting this
+# connection" accusation. A VKS_STATE_KIND=1 sink is DEFINITELY KinD; the legacy .env.kind is a
+# KinD-NAMED file that may hold stale KinD OR real-lab state (lib/state.sh:6), so it is HEDGED and
+# never ASSERTS KinD (RULE ZERO-V).
+_from_kind_overlay=0        # set only by a STAMPED (certain-KinD) match -> remedy SUPPRESSES the .env line
+_overlay_ambiguous=0        # set by a legacy .env.kind match -> remedy asks the operator to CONFIRM first
+_b561_kind_provenance() {
+  local f is_kind certain k v up
+  up="$(printf '%s' "$LABEL" | tr '[:lower:]' '[:upper:]')"
+  for f in "${VKS_STATE_FILE:-${REPO_ROOT}/.env.state}" "${REPO_ROOT}/.env.kind"; do
+    [ -f "$f" ] || continue
+    case "$f" in
+      *.env.kind) is_kind=1; certain=0 ;;                                         # KinD-NAMED, provenance ambiguous
+      *) is_kind="$(grep -m1 '^VKS_STATE_KIND=' "$f" 2>/dev/null | cut -d= -f2- || true)"; certain=1 ;;
+    esac
+    [ "${is_kind:-0}" = 1 ] || continue
+    while IFS='=' read -r k v || [ -n "$k" ]; do
+      # ONLY the endpoint/CA keys for THIS label — never every key (iterating all keys echoed
+      # secret-named keys and could mis-attribute a real fetch on a coincidental value collision).
+      # Derived from the label: covers harbor (HARBOR_URL/HARBOR_CA_FILE) and argocd
+      # (ARGOCD_SERVER/ARGOCD_LB_IP/ARGOCD_CA_FILE) with no hand-typed label->key map.
+      case "$k" in "${up}_URL"|"${up}_CA_FILE"|"${up}_SERVER"|"${up}_LB_IP") ;; *) continue ;; esac
+      v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"                           # strip one quote layer
+      [ "$v" = "$EP" ] || [ "$v" = "$host" ] || [ "$v" = "$OUT" ] || continue
+      if [ "$certain" = 1 ]; then
+        log_warn "the ${LABEL} ${k}='${v}' you are fetching comes from a KinD-stamped overlay (${f##*/}) — this is the LOCAL stand-in, not the real ${LABEL}. If you meant the real lab, run 'make kind-down' (or unset ${k}); do NOT persist this CA to .env (it dies with the KinD cluster)."
+        _from_kind_overlay=1
+      else
+        log_warn "the ${LABEL} ${k}='${v}' you are fetching comes from the legacy ${f##*/} overlay — a deprecated KinD-named file that may hold stale KinD OR real-lab state. VERIFY this is the ${LABEL} you meant before trusting the CA or setting ${k} in .env."
+        _overlay_ambiguous=1
+      fi
+    done < "$f"
+  done
+  return 0
+}
+_b561_kind_provenance
+
 log_info "fetching the ${LABEL} CA from ${host}:${port}"
 
 # -showcerts prints the WHOLE chain the server sends. Keep it all; we choose from it deliberately.
@@ -451,5 +492,11 @@ if [ "$_ep_rc" -eq 2 ]; then
 else
   printf '  REACHABLE — this anchor and this address agree (chain AND name).\n'
   printf '     NOT an authenticity check; see the line above.\n'
-  printf '  set it in .env, e.g.  %s_CA_FILE=%s\n' "$UPPER" "$OUT"
+  if [ "${_from_kind_overlay:-0}" = 1 ]; then
+    printf '  This is the KinD stand-in CA — do NOT set it in .env; it dies with '"'"'make kind-down'"'"'.\n'
+  elif [ "${_overlay_ambiguous:-0}" = 1 ]; then
+    printf '  This value came from the legacy .env.kind overlay — CONFIRM it is the real %s, then set %s_CA_FILE in .env only if so.\n' "$LABEL" "$UPPER"
+  else
+    printf '  set it in .env, e.g.  %s_CA_FILE=%s\n' "$UPPER" "$OUT"
+  fi
 fi

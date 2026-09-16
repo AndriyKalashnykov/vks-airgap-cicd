@@ -2690,7 +2690,35 @@ than source-read. Everything else has rotted:
 
 ⚠️ **The successors are B462 and B464, and a NEW row below — the class is not closed.**
 
-## 🔴 B561 — a stale KinD `.env.state` hijacks BOTH arguments of `make fetch-harbor-ca`, on the OPERATOR path 🔴 open
+## ✅ B561 — CLOSED 2026-09-16: a provenance PRINTER in fetch-ca.sh (gate refuted); RED-proven + committed test
+
+### ✅ RESOLVED 2026-09-16 — the cleared PRINTER design, implemented; idea + impl (+ re-check) adversary rounds
+
+`make fetch-harbor-ca` passes `$(HARBOR_URL)`/`$(HARBOR_CA_FILE)` (make-vars resolved from
+`.env.kind`→`.env.state`→`.env`) as ARGV to `fetch-ca.sh`, so a not-torn-down KinD overlay hijacks
+both — the operator fetches the LOCAL stand-in's CA and (on success) is told to persist a KinD path
+to `.env`. The idea round REFUTED a `state_check` gate (it misses the DEFAULT posture, is blind to
+`.env.kind`, and its permissive arms are deliberate/adversary-forced) and prescribed a PRINTER.
+
+Shipped in `fetch-ca.sh`, BEFORE the pin check (so provenance prints before any "something is
+intercepting this connection" accusation): `_b561_kind_provenance` greps the two overlays directly,
+scoped to the label's endpoint/CA keys only (`${UP}_URL|_CA_FILE|_SERVER|_LB_IP` — no hand-typed map,
+no secret-named key echoed), and warns when the handed-in endpoint/CA-file appears there. A
+`VKS_STATE_KIND=1` sink is asserted DEFINITELY KinD (suppresses the `.env` remedy); the legacy
+`.env.kind` is HEDGED ("may hold stale KinD OR real-lab state — VERIFY", RULE ZERO-V, since per
+`lib/state.sh:6` it can carry real-lab state). The success remedy is 3-way (KinD → do-not-persist;
+ambiguous → confirm-first; neither → the original `set it in .env`), so the fetch-time warn and the
+remedy AGREE — fixing the misleading remedy the row required.
+
+RED-proven both ways and COMMITTED as `scripts/test-b561-kind-provenance.sh` (5 cases, in
+`test-scripts`): stamped→definite, `.env.kind`→hedged, no-sink→silent, unstamped-real-lab→silent, and
+a stamped sink whose NON-endpoint key equals the endpoint→silent (no secret echo / mis-attribution).
+Proven the test catches a regression: reverting the label-scoping makes case E fail (4/1); restored 5/5.
+
+The impl round refuted the first cut on THREE counts — all applied verbatim and re-check-cleared: the
+`.env.kind` remedy contradiction (MED), the every-key secret-echo/coincidental-match (LOW), and the
+missing committed test (LOW). Residual (named): the SUCCESS-remedy branch is exercised end-to-end only
+by the KinD e2e (needs a live/pinned TLS endpoint); the branch-SELECTION was verified in isolation.
 
 Found by B461's round, which scoped it out of B461 deliberately: **different actor, different repo,
 different trigger.** B461 was the HARNESS path and is fixed upstream. This is the operator's, in
