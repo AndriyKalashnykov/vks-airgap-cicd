@@ -504,7 +504,7 @@ env_validate() {
 
   # --- Harbor reachability + auth (secret via umask-077 curl -K, never argv) -
   if harbor_url_is_placeholder "${HARBOR_URL:-}"; then
-    log_warn "HARBOR_URL is unset or the placeholder — skipping Harbor reachability (real value comes from discovery/.env.state or your .env)"
+    log_warn "HARBOR_URL is unset or the placeholder — skipping Harbor reachability. Exit 0 here does NOT mean your credential works (Harbor was not contacted); run 'make env-check' for presence, set HARBOR_URL (discovery/.env.state or your .env), then re-run."
   else
       # Single-sourced with the productized probe: lib/harbor.sh's harbor_scheme. The two used to
       # derive this independently, and the OTHER one hardcoded https — which made harbor_auth_verdict
