@@ -26,7 +26,7 @@ verdict() { # <scratch-dir>
   elif grep -qF 'legacy .env.kind overlay' <<<"$out"; then printf 'LEGACY'
   else printf 'SILENT'; fi
 }
-mk() { rm -rf "$T/$1"; mkdir -p "$T/$1"; printf '%s' "$2" > "$T/$1/$3"; }
+mk() { rm -rf "${T:?}/$1"; mkdir -p "${T:?}/$1"; printf '%s' "$2" > "${T:?}/$1/$3"; }
 
 # A: a KinD-STAMPED .env.state whose HARBOR_URL/HARBOR_CA_FILE match -> definite KinD assertion.
 mk A "$(printf 'VKS_STATE_KIND=1\nHARBOR_URL=127.0.0.1\nHARBOR_CA_FILE=/kind/ca.crt\n')" .env.state
