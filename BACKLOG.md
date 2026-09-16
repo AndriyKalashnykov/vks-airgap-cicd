@@ -1006,7 +1006,7 @@ arm count is `02-env.sh` (9), `96-verify-gateway-image` (4), `08-install-argocd-
 that skips on an absent optional corpus is fine. Do not instrument all 31; that is the
 enumerated-list reflex the row already refuses.
 
-## 🔴 B574 — `ci-pass` goes **OK over a PR where 2 of 6 jobs ran**, and its guard's own error message TELLS you how to blind it 🔴 open
+## ✅ B574 — CLOSED 2026-09-16 — F shipped (the paired-rot hole); B574-b fixed (fail-open on an odd job id); B574-a refuted-do-not-build
 
 Found by a round auditing the false *"paths-filter"* sentence; the sharpened version is mine, measured
 on `356b71c`. Both arms run, both reproducible (`VERDICT=` and `CI_YML=` are env-overridable at
@@ -1075,14 +1075,45 @@ blinds the gate.
 the mutation *downstream* of the `case` that handles `failure`, so it was never reached (MUTATED
 rc=1). The fixture would have looked worthless.
 
-#### 🔴 B574-a — a job NEUTERED IN PLACE is green everywhere 🔴 open
+#### ⛔ B574-a — REFUTED do-not-build 2026-09-16 (idea + impl adversary): a job neutered in place is green everywhere, but no guard shape is worth it
 
 `run: make static-check-fast` → `run: true` passes **every** assertion: `conclusion=success`,
 `nsteps ≥ 1`, lists untouched, `if:` untouched. Neither F nor anything else here sees it. The shape
 that would catch it is an **anchor assertion on the `run:` line** (`grep -c 'make static-check-fast'
 .github/workflows/ci.yml`). Not built — it is a new control and wants its own round.
 
-#### 🔴 B574-b — an unparseable job id is INVISIBLE, and it MISATTRIBUTES 🔴 open
+**REFUTED, not built.** Two adversary rounds (bash-git-cli, idea then impl): every candidate is
+either blind or net-negative on the SOLE required check's guard. (1) "job has a `uses:` OR a
+non-noop `run:`" is BLIND — every PR_FLOOR job carries `uses: actions/checkout`, so a neutered
+`run: true` still passes. (2) a no-op blocklist (`true`/`:`/`exit 0`/…) is enumerated-list rot —
+`cd /tmp`, `sleep 0`, `test 1` all pass. (3) no single heuristic covers the 3 structurally-different
+PR_FLOOR jobs (`make static-check-fast` / `make secrets-scan` (name≠target) / an inline
+`classify-changes.sh` run-block), so a make-target check false-REDs `changes`. Any robust catch is a
+hand-maintained per-job anchor MAP, and a false-RED there reddens every PR's required check. Threat
+model is weak: `run: make X → run: true` is a glaring one-line ci.yml diff PR review catches. This is
+the "inventing a control feels like follow-through" 7/20 class — the comment at
+`test-ci-pass-verdict.sh:129-131` records it "named rather than implied", which is the correct state.
+
+#### ✅ B574-b — FIXED 2026-09-16: the real danger was FAIL-OPEN under-counting, not just misattribution
+
+**FIXED.** The idea round redirected my design: the dangerous half is UNDER-COUNTING (fail-OPEN),
+not misattribution — the strict awk `^  [a-z][a-z0-9-]*:` SILENTLY DROPS an uppercase/underscore job
+id, so the coverage assertions pass VACUOUSLY and a FAILED odd-id gate goes unjudged (`note`, not
+`REFUSE`) on the sole required check. Fix (not my set-difference): correct the job-id charset to
+`[A-Za-z_][A-Za-z0-9_-]*` (GitHub's real grammar) in ALL THREE header parsers (Y_JOBS/Y_IF/Y_SELF_IF)
+so the EXISTING coverage/`if:` assertions now judge the odd id with the accurate message; plus a
+maximally-permissive CANARY (`^  [^ #][^ ]*:`) that REDs on any header the grammar-regex can't see
+(so the fix-open stays closed even if the charset later reverts); plus a latent THIRD bug the
+adversary found by measurement — the awks set `j=1` at `/^jobs:/` and never reset, so a trailing
+0-indent top-level key would mis-count its children as jobs (`/^[A-Za-z_]/{j=0}` bounds the scan;
+`;next` added to Y_IF/Y_SELF_IF's jobs: rule so the reset doesn't fire on `jobs:` itself).
+
+RED/GREEN-proven and the proofs COMMITTED as self-tests (gates.md: a hand-run RED-proof decays):
+`test-ci-pass-verdict.sh` now re-runs itself against three scratch ci.yml variants — an uppercase id
+(`Nightly_E2E`) must fail-LOUD, a grammar-invalid id (`2fa-check`) must trip the canary, a trailing
+0-indent key must NOT false-RED. Proven the self-tests CATCH a full regression: reverting the charset AND
+neutering the canary makes both self-RED cases fail (30/2); restored → 32/0. Impl-round adversary
+cleared the diff on all six axes.
 
 The guard's shared `awk` matches `^  [a-z][a-z0-9-]*:` only. GitHub job ids may carry uppercase and
 underscores, so `Nightly_E2E:` with an event `if:` is attributed to the **preceding parseable job**.
