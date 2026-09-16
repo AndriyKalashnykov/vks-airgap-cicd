@@ -746,7 +746,7 @@ Measured: `TEST_MANUAL`/`TEST_SLOW` grep only `manual`/`slow`; `TEST_FAST` is de
 the PR path holds this row's belief in a different costume. (`test-creds-reach-ingress.sh:223` is the
 **one** site that gets it right — it cites B571 explicitly.)
 
-##### 🔴 F2b-iii — `ci.yml` has ZERO `timeout-minutes` on ANY job
+##### ✅ F2b-iii — CLOSED 2026-09-15 (PR pending): every ci.yml job now has a `timeout-minutes`
 
 Measured: `grep -c timeout-minutes .github/workflows/ci.yml` → **0**, so every job runs at GitHub's
 **360-minute** default — including `static-check-fast`, the only unconditional gate. Its one network
@@ -760,6 +760,35 @@ MEASURED-labelled; `test-manifest-assert.sh:25`) chose **not** to add a marker *
 believed no-marker meant every-PR. So correcting the sentences leaves those decisions standing on
 nothing — the fix is to decide, per file, whether it belongs on the PR path (as `test-ci-pass-verdict`
 now does) or to say plainly that it does not.
+
+###### Resolution — 7 job caps + a step cap, both adversary rounds cleared
+
+Two rounds (`adversary-bash-git-cli`, idea then implementation; both with Bash working, so `ran-it`):
+
+    changes 5 · docs-lint 10 · diagrams-check 15 · static-check-fast 10 · secrets 10 · ci-pass 5   (job caps)
+    static-check: job 60  +  STEP 50 on the `make static-check` step
+
+The PR-path caps are ≥30× their measured durations, so a degraded API/CDN day cannot false-cancel a
+merge. `ci-pass` at 5m does NOT deadlock — its clock starts only after its `needs` are terminal, and a
+hung jobs-API call → cancel → the sole required check fails CLOSED (beats a 6h hang).
+
+**Why static-check is 60/50, not the 2×-warm 30**: it runs ONLY on schedule/dispatch and is the sole
+writer of its 4 caches, so the weekly cron sits on GitHub's 7-day eviction boundary and OFTEN starts
+COLD; the 14m38s I measured (run 34815337907) was WARM. The idea round flagged a bare 30m as risking a
+false-cancel of the legitimate cold+throttled run; the impl round then flagged that the STEP cap is the
+BINDING constraint on the make step, so the generous headroom belongs there — hence step 50 < job 60. A
+STEP timeout is `failure` (keeps `if: !cancelled()`, so the kubeconform/maven/go cache saves run); a JOB
+cancel would skip them and leave the next weekly cron cold. The job backstop only fires on a genuine
+>60m SETUP+make hang, where discarding a half-populated cache is acceptable.
+
+**Residual (documented, not a blocker):** the ~25-35m cold magnitude is UNMEASURED (I did not force a
+>7-day-cold run), and the step-`failure`-preserves-saves mechanic is reasoned from runner semantics, not
+observed on a real timeout. Both are settled by a forced-cold `gh workflow run ci.yml` / a throwaway
+tiny-step-cap expiry when the lab work frees up. The 60/50 sizing is the conservative call precisely
+because a generous cap on this schedule-only job costs ZERO on the PR path.
+
+⚠️ This closes F2b-iii ONLY. [[B571]]'s core argument (`lint` + the offline unit suite run on NO PR path,
+only the dispatch-gated weekly) is untouched — a cap makes a hang fail faster; it does not add coverage.
 
 #### 🔴 F2c — 31% of this repo's `Makefile:NNN` comment citations point at a BLANK LINE, and NO gate asserts any of them
 

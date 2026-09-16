@@ -64,6 +64,7 @@ jobs:
   # change can slip through with zero gates).
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
@@ -198,6 +199,12 @@ jobs:
     # wall-clock script tests run in CI at all.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # static-check runs ONLY on schedule/dispatch and is the sole writer of its 4 caches, so the
+    # weekly cron sits on GitHub's 7-day eviction boundary and OFTEN starts COLD (mise installs ~18
+    # toolchains, maven cold-downloads the Spring Boot 4 tree, kubeconform+trivy DBs fetch cold). The
+    # 14m38s measured run was WARM; a cold+CDN-throttled run can reach ~25-35m (UNMEASURED). Generous caps cost
+    # ZERO on the PR path (this job never runs there); it only avoids false-cancelling the weekly scan.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -363,6 +370,10 @@ jobs:
       # GitHub UI showed a step name asserting otherwise. A label that misreports what ran is how
       # someone reasonably concludes CI is still building the apps when it is not.
       - name: make static-check
+        # STEP cap (< the job backstop): a STEP timeout is `failure`, which keeps `if: !cancelled()`,
+        # so the kubeconform/maven/go cache saves still run — a JOB-level cancel would skip them and
+        # leave the next weekly cron cold. See the job-level note above for the cold-run sizing.
+        timeout-minutes: 50
         env:
           # CI has network by definition, so a schema that could not be FETCHED is a FAILURE here,
           # not a skip — the same reason static-check-fast sets GWAPI_REQUIRE_FETCH=1 below.
@@ -403,6 +414,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -423,6 +435,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.diagrams == 'true'
     runs-on: ubuntu-latest
+    # cold ~478MB PlantUML pull measured at 15s; 15m is ~60x headroom.
+    timeout-minutes: 15
     # podman is the local default; on the runner use docker for the diagram render
     # (rootless-podman keep-id isn't guaranteed configured on the runner).
     env:
@@ -475,6 +489,7 @@ jobs:
   # `needs: []` on purpose: this job does not consult the change classifier at all.
   static-check-fast:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -490,6 +505,7 @@ jobs:
 
   secrets:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # fetch-depth: 1 is LOAD-BEARING for gitleaks. `gitleaks detect` scans git HISTORY, not the
       # working tree; with a shallow checkout the single root commit has no parent, so it is diffed
@@ -517,6 +533,9 @@ jobs:
     needs: [changes, static-check, static-check-fast, docs-lint, diagrams-check, secrets]
     if: always()
     runs-on: ubuntu-latest
+    # ci-pass's own work is sleep 15 + 2 gh api calls; the clock starts only after its
+    # needs are terminal, so 5m is ample and a hung jobs-API call fails the required check closed.
+    timeout-minutes: 5
     permissions:
       contents: read
       actions: read      # required to read this run's own jobs; without it the API 403s
