@@ -3494,7 +3494,7 @@ while True:
     { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
     chmod +x "$t/bin/getent"
     printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\n' "$p" "$dp" > "$t/.env"
-    out="$( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+    out="$( cd "$t" && PATH="$t/bin:$PATH" VKS_LAB_STATE_DIR=/nonexistent VKS_SUPERVISOR_KUBECONFIG='' REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
               CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
     printf '%s' "$out"
     rm -rf "$t"
@@ -3513,7 +3513,7 @@ while True:
             "the confirmation must never reach this path — a refused lab writes ZERO strikes" ;;
   esac
   if [ "$(printf '%s' "$_off_out" | grep -c 'needs the lab')" -ge 1 ]; then
-    ok "powered-off: the precondition FIRES — every remedy needs an estate that answers"
+    ok "powered-off: the precondition FIRES — every URL and login needs an estate that answers"
   else
     bad "powered-off: the precondition is ABSENT on a genuinely refused port" \
         "this is the regression five rounds were spent preventing"
@@ -3561,7 +3561,7 @@ while True:
     bad "lab-off: the verdict is not above Context (verdict line '${_l_top:-none}', Context '${_l_ctx:-none}')" \
         "a reader stops at the first advice they can act on; the verdict must precede it"
   fi
-  for _want in 'silent: the ingress 127.0.0.1 (a stored address' 'Check this machine can reach the lab network' 'Re-run: make creds' \
+  for _want in 'silent (stored addresses' 'the ingress 127.0.0.1 (Gitea' 'Check this machine can reach the lab network' 'Re-run: make creds' \
                'so the cluster was not asked'; do
     case "$_off_out" in
       *"$_want"*) ok "lab-off: the headline carries '$_want'" ;;
@@ -3605,7 +3605,7 @@ while True:
     for a in "$@"; do args+=("${a//@T@/$t}"); done   # `@T@` = this fixture's own directory
     # proxies CLEARED by default: a refusal is judged against the proxy environment, and the box running
     # the suite must not decide these verdicts. A case that needs a proxy passes one in its args.
-    out="$( cd "$t" && env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u NO_PROXY -u no_proxy "${args[@]}" PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+    out="$( cd "$t" && env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u NO_PROXY -u no_proxy "${args[@]}" PATH="$t/bin:$PATH" VKS_LAB_STATE_DIR=/nonexistent VKS_SUPERVISOR_KUBECONFIG='' REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
               CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
     printf '%s' "$out"
     rm -rf "$t"
