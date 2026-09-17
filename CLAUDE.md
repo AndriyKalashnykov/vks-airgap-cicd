@@ -1060,62 +1060,53 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-15 — `make creds` tells the truth about a DOWN lab; merged after 9 review rounds
+## ▶️ HANDOFF 2026-09-16 — B727 shipped + a B574-gap lint fix; PAUSED for a fresh lab cut
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### Shipped — PR #1252, squash `333474f` (merged 2026-09-15)
+### Shipped this session (both merged on green, post-merge CI success, branches deleted)
 
-`make creds` validated against a lab that was REALLY powered off, then started, then fully up:
-
-- **powered off:** the report now leads with "⚠️ NOTHING answered on this run", names what was silent,
-  and gives the steps (check reach, start the lab, renew the token only if expired, re-run). The
-  the token and SSO banners are suppressed there: they cannot help while nothing answers.
-- **the lab-off signature requires evidence:** ingress probed and silent, Harbor/ArgoCD silent or
-  skipped, cluster not up, AND either the cluster refused/had no route or ≥2 endpoints were silent.
-- **the cluster probe's UNREACHABLE class is split by kubectl's REAL stderr** (allow-list): proxy,
-  DNS, no local route, refused/no-route, timeout, unknown. A refusal is definitive ONLY when no
-  proxy was USED for that address — Go's rules modelled: kubeconfig `proxy-url` wins; the server
-  SCHEME picks `HTTPS_PROXY`/`HTTP_PROXY` (unknown scheme → either); canonical `127.x.x.x`/`::1`
-  loopback only; `.x` NO_PROXY entries cover subdomains only; IPs never suffix-matched.
-- test-creds-show **136 → 260** assertions, every new one RED-proven against its parent.
+- **PR #1273** (`4af5474`) — **B727**: replaced `98-uninstall-all.sh`'s data-losing
+  `sed '/${APP_DOMAIN}/d' /etc/hosts` (deleted the `127.0.0.1 localhost` line) with an LB-IP-anchored
+  `_hosts_teardown_advice()` in `lib/apps.sh` (`/^<escaped-ip>[[:space:]]/d`; empty LB IP → no sed +
+  by-hand removal naming the hosts). New `scripts/test-hosts-teardown-advice.sh` (10/10, fast tier,
+  auto-discovered): applies the *emitted* sed to a fixture; TWO RED-proofs (naive `/<domain>/d`
+  destroys localhost+corp; dropped-`^` deletes the indented LB-IP line). Fixture hosts DERIVED from
+  the registry. `adversary-bash-git-cli` impl-round: **cleared** (all claims ran-it; its one LOW —
+  the `^` anchor wasn't itself under test — is the indented-LB-IP assertion). B727 row → CLOSED.
+- **PR #1274** (`d30e6a0`) — fixed a **pre-existing** `test-b561-kind-provenance.sh:29` SC2115
+  lint-red that merged via #1269 because CI's `static-check-fast` **omits `lint`** (the B574 gap);
+  `"${T:?}/$1"`. `make lint` now `OK`.
 
 ### 🔴 DISTRUST FIRST
 
 | instrument | what it did |
 |---|---|
-| **a round's own prescribed fix** | rounds 5, 6, 7 and 8 each refuted the fix for the round before. The NO_PROXY rules alone took three rounds (dot entries, IP suffix, `127.1` is NOT loopback to Go). |
-| **kubectl's "refused" text** | a dead proxy prints the SAME terse `The connection to the server H:P was refused` naming the CLUSTER. Never read it as the cluster's refusal without checking which proxy Go used. |
-| **test stubs with an unrealistic stderr shape** | the v9 terse refused string was missed because stubs printed `dial tcp … connection refused`, which real kubectl does not. Copy strings from a real kubectl run. |
-| **`check-env-coverage` after reading a new env var** | failed `static-check` THREE times this session (`HTTPS_PROXY`, `NO_PROXY`, `HTTP_PROXY`). Run it in the staging tree before committing. |
-| **an unexplained "y" in the prompt** | this session merged #1252 on a "y" that was the user answering a Claude Code survey. The merge was within RULE ZERO-0; the reading was wrong. |
+| **a backgrounded `cmd >log 2>&1; echo rc=$?` / `; tail`** | the task-completion notification reported **"exit 0"** over a FAILED `make lint` AND over `test-scripts-fast`, TWICE — the last statement's status becomes the task status. Read the LOG's verdict line, never the notification's exit code. |
+| **`static-check-fast` (the PR gate)** | omits BOTH `lint` and `test-scripts` (B574). A green PR check does NOT mean `static-check` passed — run `make lint` + `make test-scripts` locally for any shell/test change. |
+| **a backlog row HEADER** | systematically stale. Of 7 top-severity rows read this session, 3 were softer than their titles (B470 litter already fixed; B484 re-graded LOW/disclosed; B500 an intentional placeholder). `git log -S` / read the code before briefing. |
+| **a grep pattern with regex metachars in an `&&` chain** | `grep -q '${T:?}...'` failed to match (regex-special) and broke the chain; use `grep -Fq` for fixed strings. |
 
-### NOT done — next units, in order
+### NOT done — next work, ranked (verified against code this session)
 
-1. ~~VKS/SSO row~~ **DONE 2026-09-15 (owner chose option A, PR #1254):** `vcf CLI` carries the bare
-   Supervisor host; `kubectl vsphere` renders only when VKS_PASSWORD is set or the vsphere method.
-2. **Partial-state sentences are fixture-verified only** (Harbor-dependency, still-starting,
-   at-least-partly-up). No live render on the final commit — capture one during the next lab start.
-3. **B728** — `09-harbor-auth-check.sh:53` claims RBAC push permission was checked while
-   `harbor_auth_report` returns 0 in states that probed nothing, and the 403 arm never calls
-   `harbor_push_report`. ⚠️ Its `rc` must NOT change — documented to exit 0 on an unconfigured box.
-4. **B721 still-open** — classifier extraction. ⚠️ Order is load-bearing: fix `_harbor_ca_args`
-   FIRST and RED-prove `noca + 401` non-zero in BOTH entry points before switching any caller.
-5. **B719** · untouched: **B484**, **B498**, **B565**, **B523**, **B716** stages 2–3. (B732: do NOT
-   build the derived SSH legend — measured and refuted.)
-
-⚠️ **`static-check-fast` — what runs on a push — contains neither `lint` nor `test-scripts`**, so a
-green PR check does NOT mean `static-check` passed (B574). Run it locally, on a tree you are not
-editing (~10 min; its tree-stability guard VOIDS the run if you edit mid-flight).
+1. **B725** (🔴 HIGH, RECOMMENDED, LAB-INDEPENDENT) — `02-env.sh:90` generates `HARBOR_PASSWORD` with
+   NO discriminator and it is in `required=`, so `make env-validate` goes GREEN on a password Harbor
+   never accepted (2nd instance of the B714/B715 fabricated-credential class; mirror their discriminator).
+2. **B722** (🔴 HIGH) — `make creds` REFUSED-state arm: `state_set` (`lib/state.sh:57-60`) has no
+   mismatch guard, so even a successful `make install-ingress` leaves the report byte-identical and
+   still misinforms a tenant whose overlay is another cluster's. 4 residuals, one self-tagged HIGH.
+3. **B723** (🔴 MED) — 8 `.env.state.stale-*` 0600 files, no restore/prune (write-only credential graveyard).
+4. Then B729 (#2 split, #3 deferred-with-design), B500 (placeholder tracking). Tier-3 (header-only,
+   verify first): B570, B462, B509, B511, B512, B501, B498, B565, B571. Re-scope (Done-when refuted):
+   B486, B518, B468(owner). Full ranking was given in this session's `status` reply.
 
 ### Lab
 
-**Contacted, read-only.** Powered off at session start, then `make lab-start` (nested-vsphere-lab).
-That target waits for Supervisor READY and guest Machines, NOT for Supervisor Services or workloads,
-and does NOT renew this repo's `secrets/supervisor.kubeconfig`. Measured: Harbor stayed CONFIGURING
-~31 min after it returned and every guest pod was ImagePullBackOff until then; `make creds` reached
-**12 of 12 serving** ~35 min after return, and still read 12 of 12 on the merged code (2026-09-15).
+**PAUSED at the user's request: they are starting a FRESH lab cut and will signal when to continue.**
+`secrets/supervisor.kubeconfig` is stale until then. B725 (the recommended next) is
+lab-INDEPENDENT (`02-env.sh` env-populate logic), so it can proceed before the cut is ready if asked.
+Not contacted this session.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
