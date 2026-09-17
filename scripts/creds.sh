@@ -1271,7 +1271,8 @@ if [ "$_pre_off" = 1 ]; then
   printf '\n  %s\u26a0\ufe0f  NOTHING answered on this run%s.%s\n' "${_BOLD}${_RED}" "$_cclause" "${_RST}"
   # A STORED address that survives a rebuild: it may be a previous lab's (the ingress paragraph this
   # block replaces said so, and it is the right diagnosis when the lab was re-cut).
-  _sil="the ingress ${INGRESS_LB_IP:-?} (a stored address, possibly a previous lab's; Gitea, Tekton, headlamp and the apps go through it)"
+  # The hedge covers the WHOLE list: ARGOCD_SERVER and HARBOR_URL are stored exactly like the ingress IP.
+  _sil="the ingress ${INGRESS_LB_IP:-?} (Gitea, Tekton, headlamp and the apps go through it)"
   _unres=""
   _ah="${ARGOCD_SERVER:-}"; [ -n "$_ah" ] || _ah="${argocd_url%% *}"
   _ah="${_ah#https://}"; _ah="${_ah#http://}"; _ah="${_ah%%/*}"
@@ -1283,12 +1284,14 @@ if [ "$_pre_off" = 1 ]; then
     silent)     _sil="${_sil}, ArgoCD ${_ah}" ;;
     unresolved) _unres="${_unres}${_unres:+, }${_ah}" ;;
   esac
-  printf '      silent: %s\n' "$_sil"
+  printf "      silent (stored addresses; after a rebuild they may be the previous lab's): %s\n" "$_sil"
   if [ -n "$_unres" ]; then printf '      does not resolve on this machine: %s\n' "$_unres"; fi
   printf '      The lab is still starting, is OFF, or this machine cannot reach it. Do this, in order:\n'
   printf '        1. Check this machine can reach the lab network (VPN, route). If the lab was just\n'
   printf '           started, wait and re-run make creds: its services come up after the cluster.\n'
   printf '        2. Otherwise the lab is off: if you run it, start it; if not, ask whoever runs it.\n'
+  printf "           If it was REBUILT, the addresses and credentials in .env are the old lab's: get the new\n"
+  printf '           values (docs/scenario-1.md, or from your platform team per docs/scenario-2.md) first.\n'
   _step=3
   # Only when this report needed the token: the same `_sup_unread` list the banner prints. An expired
   # token that nothing here reads is not a step.
@@ -1301,7 +1304,9 @@ if [ "$_pre_off" = 1 ]; then
     _step=4
   fi
   printf '        %s. Re-run: make creds\n' "$_step"
-  printf '      Every command below needs the lab answering.\n'
+  # NOT "every command below": in several lab-off renders no command follows, and in others an
+  # OFFLINE one does (make state-show). URLs and logins are what always follow (adversary, ran-it).
+  printf '      Every URL and login below needs the lab answering.\n'
 fi
 if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
   # F5: the old headline said "every <not read> below needs it" and MEASURED to ZERO referents in
@@ -1337,7 +1342,8 @@ if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
 fi
 printf '\n  Context\n'
 case "$_prov" in
-  DISCOVERED) printf '    values below : read from the cluster you are talking to now\n' ;;
+  DISCOVERED) if [ "${_pre_off:-0}" = 1 ]; then printf '    values below : install-time discovery for this cluster; the lab did not answer, so treat them as last known, not current. Reachable is probed live.\n'
+              else printf '    values below : read from the cluster you are talking to now\n'; fi ;;
   # ⚠️ REWORDED 2026-09-07. It used to read "saved by an earlier run, and not tied to this cluster
   # — some may be from a lab that no longer exists." Every word of that is defensible and the whole
   # sentence was still wrong to print, because it fires on EVERY real lab, ALWAYS: `state_stamp` has
@@ -1397,6 +1403,8 @@ case "$_prov" in
                 # line — "live reads … probed live" contradicted it (implementation review, measured).
                 if [ "$_no_probe_snapshot" = 1 ]; then
                   printf '    values below : your .env + install-time discovery — nothing was read live (CREDS_NO_PROBE=1).\n'
+                elif [ "${_pre_off:-0}" = 1 ]; then
+                  printf '    values below : your .env + install-time discovery; the lab did not answer, so treat them as last known, not current. Reachable is probed live.\n'
                 else
                   printf '    values below : your .env, install-time discovery, and live reads from the cluster. Reachable is probed live.\n'
                 fi
@@ -1454,6 +1462,8 @@ case "$_prov" in
                 # is false. (2026-09-15: the headlamp-only clause was cut; it named one of four.)
                 if [ "$_no_probe_snapshot" = 1 ]; then
                   printf '    values below : your .env — nothing was read live (CREDS_NO_PROBE=1).\n'
+                elif [ "${_pre_off:-0}" = 1 ]; then
+                  printf '    values below : your .env; the lab did not answer, so treat them as last known, not current. Reachable is probed live.\n'
                 else
                   printf '    values below : your .env and live reads from the cluster. Reachable is probed live.\n'
                 fi
