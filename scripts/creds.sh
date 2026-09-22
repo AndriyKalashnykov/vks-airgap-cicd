@@ -708,7 +708,7 @@ else
     esac
     _pw_unset_argo=0
   elif [ "${_argo_rc:-0}" = 7 ]; then
-    argo_pw="<not read — run: make argocd-password to see why>"
+    argo_pw="<not read — the read failed (bad cert, 503, Forbidden, or a dead guest cluster); run: make argocd-password to see why — it names WHICH kubeconfig failed>"
     _pw_unset_argo=0
   elif [ "${_argo_rc:-0}" != 3 ]; then
     argo_pw="<not read — argocd-password.sh exited ${_argo_rc:-?}>"
@@ -990,7 +990,7 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
           _cluster_state=answered ;;
         STALE_CA)
           # "wrong name" may mean a DIFFERENT endpoint — so later text must not say THE cluster answered.
-          _cluster="answering, but its certificate does not verify for this kubeconfig (untrusted CA or wrong name)"
+          _cluster="answering, but its certificate does not verify for this kubeconfig (untrusted CA or wrong name) — a RE-CUT lab mints a new CA at the SAME address, so a dead kubeconfig looks correct: re-export it with 'VKS_AUTH_METHOD=vcf make vks-login'; if that does not clear it, 'make ca-status' (no cluster needed) tells a stale CA from a wrong address"
           _cluster_state=answered
           _cl_ans="Something answered at the cluster address"; _cl_did="something at the cluster address did" ;;
         PLAINTEXT)
@@ -2225,7 +2225,7 @@ _kube_classify() {
       return 0 ;;
   esac
   case "$(classify_kube_failure "$_e")" in
-    FORBIDDEN)           _kube_tok="<forbidden>";     _kube_state="${_p} — FORBIDDEN: this identity may not read that in '${VKS_NAMESPACE:-?}'. Ask your platform admin." ;;
+    FORBIDDEN)           _kube_tok="<forbidden>";     _kube_state="${_p} — FORBIDDEN in '${VKS_NAMESPACE:-?}'. RBAC is evaluated BEFORE existence, so a namespace that does not exist answers this way too: check with 'kubectl get ns ${VKS_NAMESPACE:-?}' — NotFound means install it (scenario-1 §2), not that you lack rights. Only if it EXISTS is this a permissions question for whoever runs the lab." ;;
     # ⚠️ "Re-run: make vks-login" WAS A NO-OP FOR THIS FAILURE, and it cost a real session.
     # MEASURED 2026-09-07: with VKS_AUTH_METHOD=kubeconfig that arm (30-vks-login.sh:42-45) is a
     # [ -s ] test on the GUEST kubeconfig plus `kubectl cluster-info`; it never touches the

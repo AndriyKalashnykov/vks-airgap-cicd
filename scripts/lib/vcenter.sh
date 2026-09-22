@@ -215,7 +215,10 @@ vc_login() {
   This is a TRUST failure, not a network one — the host answered. Most likely the lab was re-cut
   and minted a new VMCA: every cut produces a new CA with a BYTE-IDENTICAL subject, so a stale
   anchor looks correct and only a handshake tells you otherwise.
-  Re-fetch the anchor, or accept the risk for this run with VCENTER_INSECURE=1." ;;
+  Re-fetch it (it is picked BY HANDSHAKE, so a stale file cannot be chosen again):
+      make fetch-vcenter-ca
+  Then re-run this command. VCENTER_INSECURE=1 skips the check for one run instead, and sends the
+  SSO administrator password to a peer whose identity was never established." ;;
     # MEASURED: rc 77 fires on ALL of absent, empty, mode-000 AND "exists, readable, but is HTML
     # rather than a PEM" — the last being the realistic operator error (saving the wrong file out
     # of download.zip). The old text said "check it exists and is readable by you", which sends
