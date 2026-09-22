@@ -2283,7 +2283,7 @@ else
   ok "cause codes: creds absent + klog noise is not rendered as a failed read"
 fi
 # The remaining creds arms, each by its own cell text (a deleted arm must go RED).
-_ac_creds "absent + overlay -> (it waits)" "$(_AC_SINK='VKS_STATE_KIND=1' _ac_render creds "$(_jwt 9999999999)" "$_AC_SNF" "$_AC_NSNF")" no 'run: make argocd-password (it waits)'
+_ac_creds "absent + overlay -> names the command AND its wait" "$(_AC_SINK='VKS_STATE_KIND=1' _ac_render creds "$(_jwt 9999999999)" "$_AC_SNF" "$_AC_NSNF")" no 'run: make argocd-password (waits up to 900s, then names the cause)'
 _ac_creds "VALID 401 -> rejected: rotated, revoked" "$(_ac_render creds "$(_jwt 9999999999)" "$_AC_401" "$_AC_NSNF")" no 'is being REJECTED: rotated, revoked'
 _ac_creds "no-expiry 401 -> rejected, see why" "$(_ac_render creds notajwt "$_AC_401" "$_AC_NSNF")" no 'rejected this kubeconfig; run: make argocd-password to see why'
 # The CHILD's wording per code: a failed read is not "genuinely gone", and the quoted kubectl line is its
