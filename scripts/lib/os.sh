@@ -2361,7 +2361,10 @@ supervisor_renew_how() {
   # The VKS_AUTH_METHOD prefix is load-bearing and stays: Step 6 leaves .env on `kubeconfig`, so a
   # BARE `make vks-login` targets the GUEST cluster and renews nothing here. That WHY belongs in this
   # comment, not in the operator's terminal — it was 370 characters on one line, printed twice.
-  printf 'renew: VKS_AUTH_METHOD=vcf make vks-login  (the prefix is required). Not yours to renew? Ask the lab owner.'
+  # ONE command, not two: `make creds-renew` renews and re-prints in a single step. The two-step
+  # form is kept beside it because an operator who only wants the token (not the report) needs it,
+  # and because `creds-renew` is opt-in precisely so a read-only report never spends an SSO attempt.
+  printf 'renew and re-print, one step: make creds-renew   (token only: VKS_AUTH_METHOD=vcf make vks-login — the prefix is required). Not yours to renew? Ask the lab owner.'
 }
 
 # ── jwt_exp_seconds <jwt> — the `exp` claim in SECONDS, or EMPTY. Never guesses. ─────────────────
