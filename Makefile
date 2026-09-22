@@ -887,6 +887,21 @@ creds-show: ## Print the access summary (URLs + logins) for the current context
 	@$(SCRIPTS)/creds.sh
 creds: creds-show  ## Alias for creds-show (back-compat)
 
+# ⚠️ ONE COMMAND, because the banner's remedy used to be TWO and the operator had to type both to
+#    see a value they had merely asked to be shown. MEASURED 2026-09-22: a token expires, `make
+#    creds` prints `<not read>` for the Harbor web UI admin password and the guest node SSH
+#    address, and names the renew command -- which works, and then needs `make creds` again.
+#
+# ⚠️ DELIBERATELY A SEPARATE TARGET, NOT automatic inside `creds`. Renewing SPENDS AN SSO LOGIN
+#    ATTEMPT, and vCenter SSO locks an account after repeated failures (the report says so itself).
+#    A read-only summary must never spend one without being asked. So: opt in.
+#
+# ⚠️ `&&`, NOT `;`. If the login fails, do NOT go on to print a report whose values are stale or
+#    absent -- the login's own error is the thing the operator needs to read.
+.PHONY: creds-renew
+creds-renew: ## Renew the Supervisor token, THEN print the access summary (spends one SSO attempt)
+	@VKS_AUTH_METHOD=vcf $(MAKE) --no-print-directory vks-login && $(MAKE) --no-print-directory creds-show
+
 .PHONY: walkbox walkbox-down
 walkbox: ## Run docs/scenario-1.md END TO END on a real throwaway VM (a container cannot: no subuid for builder-image)
 	@$(SCRIPTS)/walkbox.sh up
