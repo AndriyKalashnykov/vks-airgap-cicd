@@ -144,6 +144,16 @@ if [ "$n" -eq 1 ]; then
     # a certificate every consumer of this file trusts. The UI route needs only a service login and no
     # Kubernetes access at all. Printing the privileged route first, with a disclosure underneath, IS
     # the laundering: a disclosure only changes behaviour when a CHEAPER path sits beside it.
+    # Only harbor has an automated privileged route (27-harbor-ca-from-cluster.sh). For any other
+    # label, say so rather than naming a target that does not exist — check-doc-make-targets and a
+    # reader both treat an invented `make` command as worse than prose.
+    _cluster_route_cmd=""          # NOT `local`: this block is in the main body, where `local` is
+                                   # a runtime error that `bash -n` does not catch.
+    case "$LABEL" in
+      harbor) _cluster_route_cmd="
+        make harbor-ca-from-cluster" ;;
+      *)      _cluster_route_cmd=" it is not automated for ${LABEL}; follow §8 by hand." ;;
+    esac
     die "${host}:${port} presents ONE certificate that is NOT self-signed (subject != issuer).
   Its CA is not on the wire, so it cannot be fetched from here.
     subject: ${subj}
@@ -155,6 +165,9 @@ if [ "$n" -eq 1 ]; then
   Only if that is unavailable, ask the platform team for the issuing CA directly. There is also a
   read-it-from-the-cluster route, but it costs an ADMIN-level grant (the Secret carries the CA's
   private key, not just the certificate) — docs/scenario-1.md §8 documents it, and what it costs.
+  It is automated, and naming it here does NOT reorder the paragraphs above: the cheap path is
+  still first, and the grant is still disclosed. If you ARE the lab admin (you re-cut this lab),
+  it is one command:${_cluster_route_cmd}
 
   Either way, point ${LABEL^^}_CA_FILE at the file you obtain."
   fi
