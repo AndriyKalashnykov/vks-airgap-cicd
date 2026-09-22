@@ -396,8 +396,15 @@ fi
 if [ "${_waited:-0}" = 1 ]; then
   log_error "argocd-initial-admin-secret never appeared in ns/${ARGOCD_NAMESPACE} (waited ${_wait}s)."
   log_error "  Tried: $(_candidates | tr '\n' ' ')"
-  log_error "  If the ArgoCD instance IS running, its namespace is probably not ${ARGOCD_NAMESPACE}:"
-  log_error "      kubectl get argocd -A        # on VKS it is often argocd-instance-N"
+  log_error "  TWO causes, and the wait only ever fixes the first:"
+  log_error "  1. the instance is in a DIFFERENT namespace than ${ARGOCD_NAMESPACE} -- check:"
+  log_error "         kubectl get argocd -A     # on VKS it is often argocd-instance-N"
+  log_error "  2. SOMEONE ALREADY SET A PASSWORD and deleted the secret (upstream advises exactly"
+  log_error "     that after a change), so it can NEVER appear and no amount of waiting helps."
+  log_error "     Then the password is whatever they set: get it from whoever installed this"
+  log_error "     instance, or set ARGOCD_ADMIN_PASSWORD in .env to the value they used."
+  log_error "     If 1 is ruled out (the command above shows the instance IS in ${ARGOCD_NAMESPACE}),"
+  log_error "     it is 2 -- do not re-run this command expecting a different answer."
   exit 4
 fi
 # ⚠️ LEAD WITH THE CAUSE WHEN WE KNOW IT. The expiry is already measured at :296 (`_ap_exp`) and was

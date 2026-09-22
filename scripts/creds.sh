@@ -727,7 +727,7 @@ else
     # rc=3 now means ABSENT — every attempt said NotFound — so the secret may still be reconciling,
     # and the command that waits for it is the true next step. Rejections and failures have their
     # own exit codes above.
-    argo_pw="<not read — run: make argocd-password (it waits)>"
+    argo_pw="<not read — run: make argocd-password (waits up to ${ARGOCD_PASSWORD_WAIT_SECONDS:-900}s, then names the cause)>"
   fi
 fi
 
