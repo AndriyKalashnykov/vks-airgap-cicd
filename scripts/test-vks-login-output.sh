@@ -71,6 +71,7 @@ case "$1 $2" in
       ok)      echo "Logged in successfully." >&2; exit 0 ;;
       generic) echo "[x] : Invalid vSphere Supervisor endpoint" >&2; exit 7 ;;
       flag)    echo "[x] : unknown flag: --username" >&2; exit 3 ;;
+      flagca)  echo "[x] : unknown flag: --ca-certificate" >&2; exit 3 ;;
     esac ;;
   "context use")
     echo "[i] Successfully activated context '$3' (Type: kubernetes)" >&2
@@ -109,25 +110,36 @@ run() {  # run <tls: insecure|none> + STUB_* in the environment
 out="$(run insecure STUB_CREATE=generic)"; rc=$?
 if { [ "$rc" = 7 ] && ! grep -qE 'activating context|discovering it' <<< "$out"; }; then ok "script: a generic create failure stops AT the create with its rc (7)"
 else bad "script: generic create failure should exit 7 before discovery/use (rc=$rc)"; fi
-if grep -qF 'minimal form' <<< "$out"; then bad "script: generic failure must NOT print the flag fallback"
-else ok "script: generic failure prints no flag fallback"; fi
+if grep -qF 'rejected an argument' <<< "$out"; then bad "script: generic failure must NOT print the flag-rejection hint"
+else ok "script: generic failure prints no flag-rejection hint"; fi
+# The replay after CREATE: vcf's own error must reach the operator. Keyed on text ONLY the stub prints.
+if grep -qF '[x] : Invalid vSphere Supervisor endpoint' <<< "$out"; then ok "script: create's stderr is replayed on failure"
+else bad "script: create's captured stderr was NOT replayed — the operator would see only an exit code"; fi
 
-out="$(run insecure STUB_CREATE=flag)"; rc=$?
-if { [ "$rc" = 3 ] && grep -qF -- "--endpoint '192.0.2.10' --insecure-skip-tls-verify --auth-type basic" <<< "$out"; }; then ok "script: flag rejection -> hint carries THIS run's TLS flag (insecure run)"
-else bad "script: flag rejection hint wrong (rc=$rc)"; fi
-out="$(run none STUB_CREATE=flag)"; rc=$?
-if { [ "$rc" = 3 ] && grep -qF -- "--endpoint '192.0.2.10' --auth-type basic" <<< "$out" && ! grep -qE 'insecure-skip-tls-verify|ca-certificate' <<< "$out"; }; then ok "script: flag rejection with no TLS flag -> hint adds NO --insecure-skip-tls-verify"
-else bad "script: a run with no TLS flag must not be offered a TLS downgrade (rc=$rc)"; fi
+# The rejection hint names the flag vcf ACTUALLY rejected and offers an UPGRADE. It must print no
+# by-hand `vcf context create`: a re-run deletes and recreates the context with the same flags, and a
+# bare create writes into $KUBECONFIG. And it must never offer --insecure-skip-tls-verify.
+for arm in 'flag|--username' 'flagca|--ca-certificate'; do
+  out="$(run insecure STUB_CREATE="${arm%%|*}")"; rc=$?
+  if { [ "$rc" = 3 ] && grep -qF "rejected an argument this script passes: unknown flag: ${arm#*|}" <<< "$out" \
+       && grep -qF 'make install-vcf-cli' <<< "$out"; }; then ok "script: rejection of ${arm#*|} -> names it + points at the upgrade"
+  else bad "script: rejection of ${arm#*|} -> hint must name it and point at make install-vcf-cli (rc=$rc)"; fi
+  if grep -qE "vcf context create '|insecure-skip-tls-verify --auth-type" <<< "$out"; then bad "script: the hint prints a by-hand create / TLS downgrade (${arm#*|})"
+  else ok "script: no by-hand create command, no TLS downgrade (${arm#*|})"; fi
+done
 
 out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT")"; rc=$?
 if grep -qF 'INTERACTIVE' <<< "$out"; then bad "script: the false 'INTERACTIVE: expect a PASSWORD prompt' is back"
 else ok "script: no 'INTERACTIVE: expect a PASSWORD prompt'"; fi
 if grep -qF 'fall back to the LAB-VERIFIED' <<< "$out"; then bad "script: the pre-emptive fallback hint is back"
 else ok "script: no pre-emptive fallback hint on a successful create"; fi
-if { grep -qF 'Supervisor context verified via' <<< "$out" && grep -qF "stop the login: context '$WANT' is selected" <<< "$out"; }; then ok "script: benign [x] + right context -> the note prints (rc=$rc)"
+if { grep -qF 'Supervisor context verified via' <<< "$out" && grep -qF "context is '$WANT'" <<< "$out"; }; then ok "script: benign [x] + right context -> the note prints (rc=$rc)"
 else bad "script: benign [x] + right context should print the note (rc=$rc)"; fi
-if grep -qF 'could not be discovered' <<< "$out"; then ok "script: the vcf CLI's own [x] is still shown"
-else bad "script: the captured vcf stderr was not replayed"; fi
+# The replay after USE, keyed on text ONLY vcf prints — the note itself also contains "could not be
+# discovered", so grepping for that would be satisfied by the note alone (an adversary deleted this
+# replay and the old check stayed green).
+if { grep -qF "[i] Successfully activated context '$WANT'" <<< "$out" && grep -qF 'from the Supervisor cluster.' <<< "$out"; }; then ok "script: use's stderr is replayed"
+else bad "script: use's captured stderr was NOT replayed"; fi
 
 out="$(run insecure STUB_USE_ERR="$BROKEN" STUB_CUR="$WANT")"
 if grep -qF 'stop the login' <<< "$out"; then bad "script: the BROKEN-registry variant got the reassuring note"

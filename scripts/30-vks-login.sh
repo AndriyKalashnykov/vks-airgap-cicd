@@ -103,9 +103,10 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # LAB-VERIFIED 2026-09-23 (vcf v9.1.1.0, live Supervisor): the --username + --type pairing is in
     # `vcf context create --help` and the create below SUCCEEDED with it. An OLDER CLI may still
     # reject a flag or a value; that case is detected AFTER the call (vcf_create_flag_rejected) and
-    # only then is the minimal form suggested -- never pre-emptively, and never with a weaker TLS
-    # flag than this run used.
-    tls_args=()
+    # only then does it say so -- never pre-emptively. It names the flag vcf rejected and points at
+    # an upgrade; it deliberately prints NO by-hand `vcf context create`: a re-run of this script
+    # deletes and recreates the context with the same flags (so "create it by hand, then re-run"
+    # cannot work), and a bare create writes into $KUBECONFIG (see ISOLATION below).
     create_args=("$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" --username "$user" --type kubernetes --auth-type basic)
     # TLS: prefer a VERIFIED CA over skipping verification. MEASURED 2026-08-04 —
     # `vcf context create --help` documents BOTH:
@@ -289,10 +290,10 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
   Re-pin it from the lab that is actually running, then re-run. Do NOT reach for
   VKS_INSECURE_SKIP_TLS_VERIFY: a credential is submitted over this connection." ;;
       esac
-      create_args+=(--ca-certificate "$VKS_CA_CERT_FILE"); tls_args=(--ca-certificate "$VKS_CA_CERT_FILE")
+      create_args+=(--ca-certificate "$VKS_CA_CERT_FILE")
       log_info "TLS: verifying the Supervisor against ${VKS_CA_CERT_FILE}"
     elif is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then   # one truthiness rule, repo-wide (lib/os.sh)
-      create_args+=(--insecure-skip-tls-verify); tls_args=(--insecure-skip-tls-verify)
+      create_args+=(--insecure-skip-tls-verify)
       log_warn "TLS: verification is OFF (VKS_INSECURE_SKIP_TLS_VERIFY). Prefer VKS_CA_CERT_FILE —"
       log_warn "  a credential is submitted over this connection."
     elif [ -n "${VKS_CA_CERT_FILE:-}" ]; then
@@ -310,7 +311,7 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # live). The unset case has its own, correct warning below. A pre-emptive "if this call rejects
     # --username or --type, fall back to ... --insecure-skip-tls-verify" hint also printed here,
     # BEFORE anything had failed, offering a TLS downgrade to a run that had just verified the CA.
-    # It now prints only after a real rejection, carrying this run's own TLS flag.
+    # It now prints only after a real rejection, and offers an upgrade rather than a downgrade.
     # THE PASSWORD MECHANISM IS NOW ESTABLISHED [9.0-doc] — the old TODO here is answered:
     #   * There is NO --password flag. Confirmed by the command reference and by a practitioner
     #     ("The vcf CLI doesn't include a way to provide this password through parameters").
@@ -415,9 +416,12 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # with an unrelated message.
     if [ "$_vcf_rc" -ne 0 ]; then
       if vcf_create_flag_rejected "$_vcf_err"; then
-        log_error "your vcf CLI rejected a flag this script passes (--username, --type or --auth-type)."
-        log_error "  Create the context by hand with the minimal form, then re-run:"
-        log_error "  vcf context create '${VKS_CONTEXT_NAME}' --endpoint '${SUPERVISOR_HOST}'${tls_args[*]:+ ${tls_args[*]}} --auth-type basic"
+        _vcf_rej="$(grep -oE 'unknown (shorthand )?flag: [^ ]+|invalid argument .*' "$_vcf_err" | head -1 || true)"
+        log_error "your vcf CLI rejected an argument this script passes: ${_vcf_rej:-see the [x] line above}"
+        _vcf_ver="$(vcf version 2>/dev/null | head -1 || true)"; _vcf_ver="${_vcf_ver#version: }"
+        log_error "  Installed vcf: ${_vcf_ver:-unknown}. These arguments are lab-verified with vcf v9.1.1.0;"
+        log_error "  install a vcf CLI that accepts them from your licensed archive:"
+        log_error "    make install-vcf-cli VCF_CLI_SRC_DIR=<dir>"
       fi
       exit "$_vcf_rc"
     fi
@@ -483,11 +487,12 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     _vcf_cur="$(kubectl --kubeconfig "$SUP_KUBECONFIG" config current-context 2>/dev/null || true)"
     if vcf_use_plugin_note_ok "$_vcf_err" "$_vcf_cur" "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}"; then
       log_info "note: the vcf '[x] ... system Harbor registry could not be discovered' error above did not"
-      log_info "  stop the login: context '${_vcf_cur}' is selected. It is about the vcf CLI's AUTOMATIC"
-      log_info "  plugin download, which looks for a Harbor registered as this Supervisor's system plugin"
-      log_info "  registry and found none. This repo's scripts use no vcf plugins. If your platform team DID"
-      log_info "  set up a system plugin registry, report the error to them; otherwise ignore it. For manual"
-      log_info "  'vcf cluster ...' commands, install plugins from your archive: make install-vcf-plugins"
+      log_info "  stop the login: the Supervisor answered (verified above) and the kubeconfig's current"
+      log_info "  context is '${_vcf_cur}'. The error concerns the vcf CLI's plugin-source discovery, which"
+      log_info "  looks for a Harbor registered as this Supervisor's system plugin registry and could not"
+      log_info "  find one. This repo's scripts use no vcf plugins. If your platform team DID set up a system"
+      log_info "  plugin registry, report the error to them; otherwise ignore it. For manual 'vcf cluster ...'"
+      log_info "  commands, install plugins from your archive: make install-vcf-plugins"
     fi
 
     # PUBLISH IT — this pairing is MANDATORY, not a nicety. 70-configure-argocd.sh does

@@ -433,8 +433,10 @@ EOF
 # document a SECOND variant under the same prefix -- "...was discovered but did not pass the health
 # check" -- which means a system registry EXISTS and is BROKEN. That one is not benign, and a note
 # telling the operator to ignore it would hide a real fault (adversary round, 2026-09-23).
-# ⚠️ AND IT CHECKS THE CONTEXT, because the caller's kubectl verification cannot: `vcf context create`
-# already points the kubeconfig at the Supervisor, so that check passes whatever `use` did.
+# It also requires the kubeconfig's current-context to equal the wanted CTX:NS. That is NECESSARY,
+# not sufficient: `vcf context create` itself sets a CTX:NS current-context, so on a lab whose first
+# namespace is the wanted one this passes whatever `use` did (UNVERIFIED which one create picks).
+# So the note states the context it READ; it does not claim `use` selected it.
 vcf_use_plugin_note_ok() {
   local _f="$1" _cur="$2" _want="$3" _nx
   [ -n "$_cur" ] && [ "$_cur" = "$_want" ] || return 1
