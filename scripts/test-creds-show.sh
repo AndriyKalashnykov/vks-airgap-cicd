@@ -1967,7 +1967,8 @@ _sso_render() {  # _sso_render <creds|argocd-password> <token> <sink-or-empty> [
 # be restated on EVERY row that lost a value (measured: 264 chars, printed twice), so any of those
 # strings proved the arm. The operator's word for the result was "a poem". The fault and its command
 # are now a BANNER at the very top, printed only when something is wrong, and every affected cell
-# reads exactly `<not read>` -- so no per-row string can serve as a marker any more.
+# reads a SHORT fixed tag, `<not read — token expired>` (2026-09-23) -- the same on every row, so no
+# per-row string can serve as a marker any more.
 #
 # ⚠️ THE MARKER IS THE *PROPERTY*, NOT THE SENTENCE. It moved once already: the banner now
 # presents the renew and the ArgoCD follow-up as TWO NUMBERED DEPENDENT STEPS, because the flat
@@ -2102,19 +2103,25 @@ fi
 # Each `sup-unread:` token must agree with its row: a named value whose cell was read, or a `<not read>`
 # cell the banner does not name, is drift between a predicate and the read it mirrors. NOT applied under
 # CREDS_NO_PROBE=1, where `<not read>` means "not probed" and no token is owed.
+# ⚠️ TWO-SIDED since the cell became `<not read — token expired>` (2026-09-23). Keying only on the
+# new tag would make a bare `<not read>` in an UNNAMED row invisible -- the reverse direction this
+# check exists for. So: named -> the row carries the tag; unnamed -> neither the tag nor bare `<not read>`.
+_TE='<not read — token expired>'
 _tb_agree() {  # _tb_agree <label> <render>
-  local lbl="$1" out="$2" tok row n miss=""
+  local lbl="$1" out="$2" tok row n nb miss=""
   for tok in harbor-web argocd ssh; do
     case "$tok" in
       harbor-web) row='^  Harbor \(web UI\) ' ;;
       argocd)     row='^  ArgoCD ' ;;
       ssh)        row='^  guest node SSH ' ;;
     esac
-    n="$(grep -E "$row" <<< "$out" | grep -cF '<not read>' || true)"
+    n="$(grep -E "$row" <<< "$out" | grep -cF -- "$_TE" || true)"
+    nb="$(grep -E "$row" <<< "$out" | grep -cF '<not read>' || true)"
     if grep -qxF "sup-unread: $tok" <<< "$out"; then
       [ "${n:-0}" -ge 1 ] || miss="$miss $tok:named-but-read"
     else
       [ "${n:-0}" -eq 0 ] || miss="$miss $tok:not-read-but-unnamed"
+      [ "${nb:-0}" -eq 0 ] || miss="$miss $tok:bare-not-read-unnamed"
     fi
   done
   if [ -z "$miss" ]; then ok "token banner: tokens and cells agree ($lbl)"
@@ -2235,9 +2242,9 @@ _ac_creds() {  # _ac_creds <label> <render> <yes|no: ArgoCD named in the banner>
   if [ -z "$miss" ]; then ok "cause codes: creds $lbl"; else bad "cause codes: creds $lbl:$miss"; fi
 }
 _ac_exp="$(_jwt 1000000000)"
-_ac_creds "A 401/ns-NotFound -> named, <not read>" "$(_ac_render creds "$_ac_exp" "$_AC_401" "$_AC_NSNF")" yes '<not read>'
-_ac_creds "B 401/Forbidden -> named, <not read>" "$(_ac_render creds "$_ac_exp" "$_AC_401" "$_AC_FORB")" yes '<not read>'
-_ac_creds "C 401/refused -> named, <not read>" "$(_ac_render creds "$_ac_exp" "$_AC_401" "$_AC_REF")" yes '<not read>'
+_ac_creds "A 401/ns-NotFound -> named, token expired" "$(_ac_render creds "$_ac_exp" "$_AC_401" "$_AC_NSNF")" yes "$_TE"
+_ac_creds "B 401/Forbidden -> named, token expired" "$(_ac_render creds "$_ac_exp" "$_AC_401" "$_AC_FORB")" yes "$_TE"
+_ac_creds "C 401/refused -> named, token expired" "$(_ac_render creds "$_ac_exp" "$_AC_401" "$_AC_REF")" yes "$_TE"
 _ac_creds "E refused/refused -> not named, could not be reached" "$(_ac_render creds "$_ac_exp" "$_AC_REF" "$_AC_REF")" no 'could not be reached from this machine'
 _ac_creds "G x509/ns-NotFound -> not named, see why" "$(_ac_render creds "$_ac_exp" "$_AC_X509" "$_AC_NSNF")" no 'run: make argocd-password to see why'
 _ac_creds "K 503/401 -> not named, see why" "$(_ac_render creds "$_ac_exp" "$_AC_503" "$_AC_401")" no 'run: make argocd-password to see why'
@@ -2483,14 +2490,17 @@ _119_bare="$(_sso_render creds "$(_jwt 1000000000)" 'VKS_STATE_KIND=1' || true)"
 # ⚠️ COLUMN-WIDTH-TOLERANT: the label column is as wide as the longest label present, so a fixture that
 # sets VKS_PASSWORD (adding the 15-char `kubectl vsphere` row) widens it. A literal two-space gap
 # failed that way on 2026-09-15 against a correct product.
-if printf '%s\n' "$_119" | grep -qE '^  guest node SSH +<not read>'; then
-  ok "119 arm: a dead Supervisor token renders <not read> (B717)"
+if printf '%s\n' "$_119" | grep -qE '^  guest node SSH +<not read — token expired>'; then
+  ok "119 arm: a dead Supervisor token renders <not read — token expired> (B717)"
 else
   bad "119 arm: the guest-node-SSH row did NOT reach the 119 classification. Either the probe did
       not start (VKS_* unset?) or B717's arm regressed. This cell exists because the arm previously
       had NO fixture at all."
 fi
-case "$_119_bare" in
+# Scoped to the SSH ROW: the same render legitimately carries the tag on the Harbor/ArgoCD rows.
+case "$(grep -E '^  guest node SSH ' <<< "$_119_bare" || true)" in
+  *"$_TE"*) bad "  the no-VKS_* render says the token-expired tag — it claims a Supervisor read was skipped
+      when VKS_NAMESPACE is unset and no probe was ever due." ;;
   *"<not probed>"*) ok "  ...and WITHOUT the VKS_* vars it says <not probed>, not <not read>" ;;
   *) bad "  the no-VKS_* render should say <not probed> — if it now says <not read>, the report is
       claiming a probe was attempted when VKS_NAMESPACE is unset." ;;
