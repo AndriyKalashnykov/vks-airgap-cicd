@@ -100,9 +100,12 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     #     'kubernetes' context type, and the working third-party automation pairs it with
     #     `-t kubernetes`, so we pair them too rather than sending --username bare.
     #
-    # STILL UNVERIFIED: the --username + --type pairing itself was not in the lab-verified run. If
-    # this call rejects either flag, the minimal form above is known-good — fall back to it and
-    # tell us, per lab-validation-plan step 3.
+    # LAB-VERIFIED 2026-09-23 (vcf v9.1.1.0, live Supervisor): the --username + --type pairing is in
+    # `vcf context create --help` and the create below SUCCEEDED with it. An OLDER CLI may still
+    # reject a flag or a value; that case is detected AFTER the call (vcf_create_flag_rejected) and
+    # only then is the minimal form suggested -- never pre-emptively, and never with a weaker TLS
+    # flag than this run used.
+    tls_args=()
     create_args=("$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" --username "$user" --type kubernetes --auth-type basic)
     # TLS: prefer a VERIFIED CA over skipping verification. MEASURED 2026-08-04 —
     # `vcf context create --help` documents BOTH:
@@ -286,10 +289,10 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
   Re-pin it from the lab that is actually running, then re-run. Do NOT reach for
   VKS_INSECURE_SKIP_TLS_VERIFY: a credential is submitted over this connection." ;;
       esac
-      create_args+=(--ca-certificate "$VKS_CA_CERT_FILE")
+      create_args+=(--ca-certificate "$VKS_CA_CERT_FILE"); tls_args=(--ca-certificate "$VKS_CA_CERT_FILE")
       log_info "TLS: verifying the Supervisor against ${VKS_CA_CERT_FILE}"
     elif is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then   # one truthiness rule, repo-wide (lib/os.sh)
-      create_args+=(--insecure-skip-tls-verify)
+      create_args+=(--insecure-skip-tls-verify); tls_args=(--insecure-skip-tls-verify)
       log_warn "TLS: verification is OFF (VKS_INSECURE_SKIP_TLS_VERIFY). Prefer VKS_CA_CERT_FILE —"
       log_warn "  a credential is submitted over this connection."
     elif [ -n "${VKS_CA_CERT_FILE:-}" ]; then
@@ -301,11 +304,13 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # auth attempt (it fails before authenticating). MEASURED 2026-08-04.
 
     log_info "creating VCF context '${VKS_CONTEXT_NAME}' for the Supervisor at ${SUPERVISOR_HOST} (user: ${user})"
-    log_warn "INTERACTIVE: expect a PASSWORD prompt. To avoid it, export VCF_CLI_VSPHERE_PASSWORD"
-    log_warn "  (the only supported mechanism — there is no --password flag and no stdin form)."
-    log_warn "  Do NOT use 'vcf config set env.…' — it writes the password in plaintext to disk."
-    log_warn "If this call rejects --username or --type, fall back to the LAB-VERIFIED minimal form:"
-    log_warn "  vcf context create '${VKS_CONTEXT_NAME}' --endpoint '${SUPERVISOR_HOST}' --insecure-skip-tls-verify --auth-type basic"
+    # (2026-09-23) An unconditional "INTERACTIVE: expect a PASSWORD prompt" warning used to print
+    # here. It was FALSE on every run: the create runs with </dev/null, so it cannot prompt, and when
+    # the password IS set the CLI prints "[i] Reading the password from env variable" (measured,
+    # live). The unset case has its own, correct warning below. A pre-emptive "if this call rejects
+    # --username or --type, fall back to ... --insecure-skip-tls-verify" hint also printed here,
+    # BEFORE anything had failed, offering a TLS downgrade to a run that had just verified the CA.
+    # It now prints only after a real rejection, carrying this run's own TLS flag.
     # THE PASSWORD MECHANISM IS NOW ESTABLISHED [9.0-doc] — the old TODO here is answered:
     #   * There is NO --password flag. Confirmed by the command reference and by a practitioner
     #     ("The vcf CLI doesn't include a way to provide this password through parameters").
@@ -396,8 +401,26 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     ensure_secret_dir "$(dirname "$SUP_KUBECONFIG")"
     log_info "vcf contexts -> ${SUP_KUBECONFIG} (KUBECONFIG=${KUBECONFIG} is left untouched)"
 
+    # stderr is CAPTURED and replayed so it can be classified; the replay is post-hoc (after the
+    # call), deliberately not a `2> >(tee ...)` process substitution, which races the grep below.
+    # `2>` sits AFTER `</dev/null` on purpose: check-vks-login-requires asserts
+    # `vcf context create[^\n]*</dev/null`, and GNU grep reads that class as "not a backslash and
+    # not the LETTER n" -- a redirect naming a file with an `n` in between would false-red it.
+    _vcf_err="$(mktemp)"; trap 'rm -f "$_vcf_err"' EXIT
     KUBECONFIG="$SUP_KUBECONFIG" VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
-      vcf context create "${create_args[@]}" </dev/null
+      vcf context create "${create_args[@]}" </dev/null 2>"$_vcf_err" && _vcf_rc=0 || _vcf_rc=$?
+    cat "$_vcf_err" >&2
+    # The exit is UNCONDITIONAL on failure. `&& || ` switches set -e off for the call above, so
+    # without this every create failure would fall through into namespace discovery and die later
+    # with an unrelated message.
+    if [ "$_vcf_rc" -ne 0 ]; then
+      if vcf_create_flag_rejected "$_vcf_err"; then
+        log_error "your vcf CLI rejected a flag this script passes (--username, --type or --auth-type)."
+        log_error "  Create the context by hand with the minimal form, then re-run:"
+        log_error "  vcf context create '${VKS_CONTEXT_NAME}' --endpoint '${SUPERVISOR_HOST}' ${tls_args[*]} --auth-type basic"
+      fi
+      exit "$_vcf_rc"
+    fi
 
     # Namespace: pinned in .env, or DISCOVERED from the contexts the create above just produced.
     # Discovery must run AFTER `vcf context create` — there is nothing to list before it.
@@ -412,8 +435,10 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     fi
 
     log_info "activating context '${VKS_CONTEXT_NAME}' at namespace '${VKS_NAMESPACE}'"
-    # ⚠️ `vcf context use` EXITS NON-ZERO AFTER SUCCEEDING. MEASURED 2026-08-04 on a live 9.1
-    # Supervisor — it activates the context and THEN fails a post-activation step:
+    # ⚠️ `vcf context use` CAN EXIT NON-ZERO AFTER SUCCEEDING. MEASURED rc=1 2026-08-04 and again
+    # 2026-09-23 (vcf v9.1.1.0, from this script); BACKLOG B91 records rc=0 with the SAME message in
+    # four walkthrough runs. So neither the status nor the message is the verdict. It activates the
+    # context and THEN fails a post-activation step:
     #   [i] Successfully activated context 'vks-cicd:lab' (Type: kubernetes)
     #   [x] : failed to discover plugin sources from the system Harbor registry: the system
     #         Harbor registry could not be discovered from the Supervisor cluster.
@@ -424,14 +449,23 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # ⚠️ VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 DOES **NOT** SUPPRESS IT — that
     # was tried and MEASURED not to work, and `vcf context use --help` has no skip flag. It is
     # set below only for symmetry with `create`; do not read it as the fix.
+    # ⚠️ A CONFIG KEY EXISTS AND IS NOT A FIX EITHER. Broadcom's 9.1 docs document
+    # `vcf config set features.global.disable-plugin-source-discovery true`. MEASURED 2026-09-23 on
+    # vcf v9.1.1.0 (a COPY of the config, throwaway HOME): the key is accepted, but `use` STILL
+    # exits 1 and prints `[x] : ` with the text blanked -- it hides the explanation, not the
+    # failure. And it is the operator's GLOBAL config; this script must never set it.
     #
     # So the status cannot be the verdict. Tolerate it and VERIFY THE END RESULT below.
     # ⚠️ Do NOT verify via `vcf context list`'s `.iscurrent`: that lives in
     # ~/.config/vcf/config.yaml, a DIFFERENT state store from the kubeconfig, and the two were
     # measured DISAGREEING — `iscurrent=true` for a kubecontext absent from the very file the
     # same record names. Only the artifact settles it.
+    : > "$_vcf_err"
     KUBECONFIG="$SUP_KUBECONFIG" VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
-      vcf context use "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}" </dev/null \
+      vcf context use "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}" </dev/null 2>"$_vcf_err" \
+      && _vcf_rc=0 || _vcf_rc=$?
+    cat "$_vcf_err" >&2
+    [ "$_vcf_rc" -eq 0 ] \
       || log_warn "'vcf context use' exited non-zero — verifying the end result before judging it"
 
     # VERIFY THE ARTIFACT, because the status above cannot be trusted and neither can
@@ -442,6 +476,19 @@ back to skipping TLS verification: that would silently downgrade a connection yo
       || die "the Supervisor context did not come up: ${SUP_KUBECONFIG} cannot list namespaces in
 '${VKS_NAMESPACE}'. Inspect: KUBECONFIG='${SUP_KUBECONFIG}' vcf context list"
     log_info "Supervisor context verified via ${SUP_KUBECONFIG}"
+    # The vcf CLI tells the operator to "Contact your administrator" about the plugin-registry [x]
+    # above. Say what it means -- but ONLY when that is the sole error AND the context really is
+    # selected (vcf_use_plugin_note_ok), and phrase it so it is true on every lab: we cannot know
+    # whether this Supervisor was MEANT to have a system plugin registry.
+    _vcf_cur="$(kubectl --kubeconfig "$SUP_KUBECONFIG" config current-context 2>/dev/null || true)"
+    if vcf_use_plugin_note_ok "$_vcf_err" "$_vcf_cur" "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}"; then
+      log_info "note: the vcf '[x] ... system Harbor registry could not be discovered' error above did not"
+      log_info "  stop the login: context '${_vcf_cur}' is selected. It is about the vcf CLI's AUTOMATIC"
+      log_info "  plugin download, which looks for a Harbor registered as this Supervisor's system plugin"
+      log_info "  registry and found none. This repo's scripts use no vcf plugins. If your platform team DID"
+      log_info "  set up a system plugin registry, report the error to them; otherwise ignore it. For manual"
+      log_info "  'vcf cluster ...' commands, install plugins from your archive: make install-vcf-plugins"
+    fi
 
     # PUBLISH IT — this pairing is MANDATORY, not a nicety. 70-configure-argocd.sh does
     # `ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}"`, and `install-all` does NOT run

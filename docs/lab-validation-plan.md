@@ -146,6 +146,12 @@ vcf addon   --help 2>&1 | head -40
 **THREE SPECIFIC ANSWERS this step now owes us** (2026-07-19: the docs let us pre-state what we
 expect, so the `--help` either confirms or refutes each in seconds):
 
+> **Answered 2026-09-23 (vcf v9.1.1.0, live lab).** (a) the synopsis takes a positional name, and
+> `30-vks-login.sh` passes one. (b) `--type` and `--username` both exist, and `make vks-login`
+> succeeded passing `--username … --type kubernetes`. (c) no `--password` flag; the password came
+> from `VCF_CLI_VSPHERE_PASSWORD` (`[i] Reading the password from env variable`). The table below
+> is kept as the pre-lab prediction.
+
 | # | What we expect, from `9.0-doc` | What it decides |
 |---|---|---|
 | a | The synopsis is **`vcf context create CONTEXT_NAME [flags]`** — a required positional, no `--name` flag | `30-vks-login.sh` passes **no** positional and is probably broken; `31-fetch-argocd-kubeconfig.sh:77` passes one and is probably right. Confirm and we fix `30` to match. |

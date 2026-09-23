@@ -115,13 +115,18 @@ KUBECONFIG=./secrets/supervisor.kubeconfig vcf context create …
 
 **`vcf context use` can exit non-zero after succeeding.** It prints `Successfully activated context
 …` and then fails plugin discovery against a "system Harbor registry" a Supervisor only has if one
-is registered as such. Judge it by the artifact (`kubectl … get ns`), not by the exit status. No env
-var or flag suppresses it.
+is registered as such. Judge it by the artifact (`kubectl … get ns`), not by the exit status.
+`make vks-login` now says so itself, but only for the "could not be discovered" wording: a registry
+that "was discovered but did not pass the health check" is a real fault and gets no reassurance. No
+env var or flag suppresses it. Broadcom's 9.1 docs name a config key,
+`features.global.disable-plugin-source-discovery`; measured 2026-09-23 on vcf v9.1.1.0 it only blanks
+the message (`[x] : `) and the exit is still 1.
 
-**Two forms of `vcf context create`.** The positional-name, bare-endpoint form is the one
+**Two forms of `vcf context create`.** The positional-name, bare-endpoint form was the first one
 **lab-verified** on a 9.1 Supervisor. `make vks-login` additionally passes `--username` and
-`--type kubernetes`, which is **not** lab-verified — if either flag is rejected, the positional form
-is known-good. Confirm with `vcf context create --help`. *(vSphere 8: `kubectl vsphere login
+`--type kubernetes`; that pairing is **lab-verified 2026-09-23** (vcf v9.1.1.0 lists both flags and
+the login succeeded with them). If an older CLI rejects one, `make vks-login` detects it and prints
+the positional form, with the same TLS flag the run used. *(vSphere 8: `kubectl vsphere login
 --server $SUPERVISOR_HOST`.)*
 
 ---
