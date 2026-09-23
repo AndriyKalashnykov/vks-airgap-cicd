@@ -417,7 +417,7 @@ back to skipping TLS verification: that would silently downgrade a connection yo
       if vcf_create_flag_rejected "$_vcf_err"; then
         log_error "your vcf CLI rejected a flag this script passes (--username, --type or --auth-type)."
         log_error "  Create the context by hand with the minimal form, then re-run:"
-        log_error "  vcf context create '${VKS_CONTEXT_NAME}' --endpoint '${SUPERVISOR_HOST}' ${tls_args[*]} --auth-type basic"
+        log_error "  vcf context create '${VKS_CONTEXT_NAME}' --endpoint '${SUPERVISOR_HOST}'${tls_args[*]:+ ${tls_args[*]}} --auth-type basic"
       fi
       exit "$_vcf_rc"
     fi

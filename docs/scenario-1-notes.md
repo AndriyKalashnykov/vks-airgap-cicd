@@ -120,7 +120,7 @@ is registered as such. Judge it by the artifact (`kubectl … get ns`), not by t
 that "was discovered but did not pass the health check" is a real fault and gets no reassurance. No
 env var or flag suppresses it. Broadcom's 9.1 docs name a config key,
 `features.global.disable-plugin-source-discovery`; measured 2026-09-23 on vcf v9.1.1.0 it only blanks
-the message (`[x] : `) and the exit is still 1.
+the message (an `[x]` line with no text) and the exit is still 1.
 
 **Two forms of `vcf context create`.** The positional-name, bare-endpoint form was the first one
 **lab-verified** on a 9.1 Supervisor. `make vks-login` additionally passes `--username` and

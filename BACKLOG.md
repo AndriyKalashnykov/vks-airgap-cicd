@@ -10283,7 +10283,6 @@ the right discipline for an agent; printing it as a fact is the question.
 
 **Done when:** the printed claim matches a measured or primary-sourced 9.1 fact, in every home.
 
-
 ## 🔴 B734 — the sibling of the 30-vks-login.sh output fix: `31-fetch-argocd-kubeconfig.sh` prints the same misleading vcf output, and `check-vks-login-requires` has a `[^\n]` class that reads as "not the letter n"
 
 Filed 2026-09-23 from the design review of the `30-vks-login.sh` output fix, deliberately left out of

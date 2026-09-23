@@ -32,32 +32,33 @@ WANT='vks-test:ns1'
 # ── 1. vcf_use_plugin_note_ok, pure ──────────────────────────────────────────────────────────────
 f="$T/err"
 printf "[i] Successfully activated context '%s' (Type: kubernetes)\n%s\n" "$WANT" "$BENIGN" > "$f"
-vcf_use_plugin_note_ok "$f" "$WANT" "$WANT" && ok "note: benign error + right context -> note" \
-  || bad "note: benign error + right context should print the note"
+if vcf_use_plugin_note_ok "$f" "$WANT" "$WANT"; then ok "note: benign error + right context -> note"
+else bad "note: benign error + right context should print the note"; fi
 printf '%s\n' "$BROKEN" > "$f"
-vcf_use_plugin_note_ok "$f" "$WANT" "$WANT" && bad "note: the BROKEN-registry variant must NOT be called benign" \
-  || ok "note: the 'did not pass the health check' variant gets no reassurance"
+if vcf_use_plugin_note_ok "$f" "$WANT" "$WANT"; then bad "note: the BROKEN-registry variant must NOT be called benign"
+else ok "note: the 'did not pass the health check' variant gets no reassurance"; fi
 printf '%s\n' "$BENIGN" > "$f"
-vcf_use_plugin_note_ok "$f" "other:ctx" "$WANT" && bad "note: must not fire when the context is not the wanted one" \
-  || ok "note: wrong current-context -> no note"
-vcf_use_plugin_note_ok "$f" "" "$WANT" && bad "note: must not fire when the current-context is unreadable" \
-  || ok "note: unreadable current-context -> no note"
+if vcf_use_plugin_note_ok "$f" "other:ctx" "$WANT"; then bad "note: must not fire when the context is not the wanted one"
+else ok "note: wrong current-context -> no note"; fi
+if vcf_use_plugin_note_ok "$f" "" "$WANT"; then bad "note: must not fire when the current-context is unreadable"
+else ok "note: unreadable current-context -> no note"; fi
 printf '%s\n[x] : some other failure\n' "$BENIGN" > "$f"
-vcf_use_plugin_note_ok "$f" "$WANT" "$WANT" && bad "note: must not fire when ANOTHER [x] error is present" \
-  || ok "note: a second [x] error -> no note"
+if vcf_use_plugin_note_ok "$f" "$WANT" "$WANT"; then bad "note: must not fire when ANOTHER [x] error is present"
+else ok "note: a second [x] error -> no note"; fi
 : > "$f"
-vcf_use_plugin_note_ok "$f" "$WANT" "$WANT" && bad "note: must not fire with no error at all" \
-  || ok "note: no error -> no note"
+if vcf_use_plugin_note_ok "$f" "$WANT" "$WANT"; then bad "note: must not fire with no error at all"
+else ok "note: no error -> no note"; fi
 
 # ── 2. vcf_create_flag_rejected, pure ────────────────────────────────────────────────────────────
 for l in '[x] : unknown flag: --username' '[x] : unknown shorthand flag: '"'"'t'"'"' in -t' \
          '[x] : invalid argument "kubernetes" for "-t, --type" flag: bad type'; do
   printf '%s\n' "$l" > "$f"
-  vcf_create_flag_rejected "$f" && ok "flag-rejected: '${l:6:40}' detected" || bad "flag-rejected: '$l' missed"
+  if vcf_create_flag_rejected "$f"; then ok "flag-rejected: '${l:6:40}' detected"
+  else bad "flag-rejected: '$l' missed"; fi
 done
 printf '[x] : Invalid vSphere Supervisor endpoint\n' > "$f"
-vcf_create_flag_rejected "$f" && bad "flag-rejected: an endpoint error is NOT a flag rejection" \
-  || ok "flag-rejected: an endpoint error is not a flag rejection"
+if vcf_create_flag_rejected "$f"; then bad "flag-rejected: an endpoint error is NOT a flag rejection"
+else ok "flag-rejected: an endpoint error is not a flag rejection"; fi
 
 # ── 3. the real script, stubbed ──────────────────────────────────────────────────────────────────
 mkdir -p "$T/bin"
@@ -106,38 +107,33 @@ run() {  # run <tls: insecure|none> + STUB_* in the environment
 }
 
 out="$(run insecure STUB_CREATE=generic)"; rc=$?
-{ [ "$rc" = 7 ] && ! grep -qE 'activating context|discovering it' <<< "$out"; } \
-  && ok "script: a generic create failure stops AT the create with its rc (7)" \
-  || bad "script: generic create failure should exit 7 before discovery/use (rc=$rc)"
-grep -qF 'minimal form' <<< "$out" && bad "script: generic failure must NOT print the flag fallback" \
-  || ok "script: generic failure prints no flag fallback"
+if { [ "$rc" = 7 ] && ! grep -qE 'activating context|discovering it' <<< "$out"; }; then ok "script: a generic create failure stops AT the create with its rc (7)"
+else bad "script: generic create failure should exit 7 before discovery/use (rc=$rc)"; fi
+if grep -qF 'minimal form' <<< "$out"; then bad "script: generic failure must NOT print the flag fallback"
+else ok "script: generic failure prints no flag fallback"; fi
 
 out="$(run insecure STUB_CREATE=flag)"; rc=$?
-{ [ "$rc" = 3 ] && grep -qF -- "--endpoint '192.0.2.10' --insecure-skip-tls-verify --auth-type basic" <<< "$out"; } \
-  && ok "script: flag rejection -> hint carries THIS run's TLS flag (insecure run)" \
-  || bad "script: flag rejection hint wrong (rc=$rc)"
+if { [ "$rc" = 3 ] && grep -qF -- "--endpoint '192.0.2.10' --insecure-skip-tls-verify --auth-type basic" <<< "$out"; }; then ok "script: flag rejection -> hint carries THIS run's TLS flag (insecure run)"
+else bad "script: flag rejection hint wrong (rc=$rc)"; fi
 out="$(run none STUB_CREATE=flag)"; rc=$?
-{ [ "$rc" = 3 ] && grep -qF -- "--endpoint '192.0.2.10'  --auth-type basic" <<< "$out" \
-    && ! grep -qE 'insecure-skip-tls-verify|ca-certificate' <<< "$out"; } \
-  && ok "script: flag rejection with no TLS flag -> hint adds NO --insecure-skip-tls-verify" \
-  || bad "script: a run with no TLS flag must not be offered a TLS downgrade (rc=$rc)"
+if { [ "$rc" = 3 ] && grep -qF -- "--endpoint '192.0.2.10' --auth-type basic" <<< "$out" && ! grep -qE 'insecure-skip-tls-verify|ca-certificate' <<< "$out"; }; then ok "script: flag rejection with no TLS flag -> hint adds NO --insecure-skip-tls-verify"
+else bad "script: a run with no TLS flag must not be offered a TLS downgrade (rc=$rc)"; fi
 
 out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT")"; rc=$?
-grep -qF 'INTERACTIVE' <<< "$out" && bad "script: the false 'INTERACTIVE: expect a PASSWORD prompt' is back" \
-  || ok "script: no 'INTERACTIVE: expect a PASSWORD prompt'"
-grep -qF 'fall back to the LAB-VERIFIED' <<< "$out" && bad "script: the pre-emptive fallback hint is back" \
-  || ok "script: no pre-emptive fallback hint on a successful create"
-{ grep -qF 'Supervisor context verified via' <<< "$out" && grep -qF "stop the login: context '$WANT' is selected" <<< "$out"; } \
-  && ok "script: benign [x] + right context -> the note prints (rc=$rc)" \
-  || bad "script: benign [x] + right context should print the note (rc=$rc)"
-grep -qF 'could not be discovered' <<< "$out" && ok "script: the vcf CLI's own [x] is still shown" \
-  || bad "script: the captured vcf stderr was not replayed"
+if grep -qF 'INTERACTIVE' <<< "$out"; then bad "script: the false 'INTERACTIVE: expect a PASSWORD prompt' is back"
+else ok "script: no 'INTERACTIVE: expect a PASSWORD prompt'"; fi
+if grep -qF 'fall back to the LAB-VERIFIED' <<< "$out"; then bad "script: the pre-emptive fallback hint is back"
+else ok "script: no pre-emptive fallback hint on a successful create"; fi
+if { grep -qF 'Supervisor context verified via' <<< "$out" && grep -qF "stop the login: context '$WANT' is selected" <<< "$out"; }; then ok "script: benign [x] + right context -> the note prints (rc=$rc)"
+else bad "script: benign [x] + right context should print the note (rc=$rc)"; fi
+if grep -qF 'could not be discovered' <<< "$out"; then ok "script: the vcf CLI's own [x] is still shown"
+else bad "script: the captured vcf stderr was not replayed"; fi
 
 out="$(run insecure STUB_USE_ERR="$BROKEN" STUB_CUR="$WANT")"
-grep -qF 'stop the login' <<< "$out" && bad "script: the BROKEN-registry variant got the reassuring note" \
-  || ok "script: the BROKEN-registry variant gets no note"
+if grep -qF 'stop the login' <<< "$out"; then bad "script: the BROKEN-registry variant got the reassuring note"
+else ok "script: the BROKEN-registry variant gets no note"; fi
 out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="other:ctx")"
-grep -qF 'stop the login' <<< "$out" && bad "script: note printed although the context is wrong" \
-  || ok "script: wrong current-context -> no note"
+if grep -qF 'stop the login' <<< "$out"; then bad "script: note printed although the context is wrong"
+else ok "script: wrong current-context -> no note"; fi
 
 if [ "$fail" = 0 ]; then echo "test-vks-login-output: ALL PASS ($n)"; else echo "test-vks-login-output: FAILED" >&2; exit 1; fi
