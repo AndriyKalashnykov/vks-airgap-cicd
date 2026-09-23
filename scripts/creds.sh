@@ -484,6 +484,16 @@ if [ "$_have_sink" = 1 ] && [ "${_VKS_STATE_SOURCED-1}" = "0" ]; then _sink_refu
 # two DISAGREEING on the undecidable arm, and the lockout clause missing from one).
 _renew_how() { supervisor_renew_how "$@"; }
 
+# The cell for a Supervisor read SKIPPED because the token is PROVABLY expired (read offline from
+# the token's own `exp` -- `_sup_timeout` rc 119, or ArgoCD's EXPIRED arm). A SHORT CAUSE TAG, not
+# the recipe: b405841 (the "a poem" cleanup, 2026-09-09) moved the cause+renew command out of every
+# row into the banner and left these cells a bare `<not read>`. That was right about the recipe and
+# wrong about the tag: on a powered-off lab the neighbouring cells read `<not read — nothing
+# answered>`, so a bare `<not read>` read as a MISSING reason (operator, 2026-09-23). The banner still
+# owns the cause and the renew command. And bare `<not read>` is left meaning only "not probed / no
+# Supervisor", which removes the ambiguity recorded at the `_sup_reads_harbor_web` comment (F5).
+_TOK_EXPIRED='<not read — token expired>'
+
 # ── _pad <width> <cell> — pad to a COLUMN width, not a BYTE count ────────────────────────────────
 # printf's `%-*s` pads by BYTES. The column widths above it are computed with `${#c}`, which counts
 # CHARACTERS in a UTF-8 locale. So any cell holding a multibyte character is padded short and every
@@ -687,7 +697,7 @@ else
     # not on the probe alone, which blamed the token for a refusal, a bad cert or a 503 and prescribed
     # an SSO login for them. The probe stays a second condition: the child reads the clock later, so a
     # token that expired between the two reads must not set the flag without the banner.
-    if [ "${_sup_expiry_probe%% *}" = EXPIRED ]; then argo_pw="<not read>"; _argo_pw_expired=1
+    if [ "${_sup_expiry_probe%% *}" = EXPIRED ]; then argo_pw="$_TOK_EXPIRED"; _argo_pw_expired=1
     else argo_pw="<not read — the Supervisor token expired during this run; re-run make creds>"; fi
     _pw_unset_argo=0
   elif [ "${_argo_rc:-0}" = 6 ]; then
@@ -2187,7 +2197,7 @@ _kube_classify() {
   # prescribing a bind for a state we cannot decide; this state IS decided.
   case "$_rc" in
     119)
-      _kube_tok="<not read>"
+      _kube_tok="$_TOK_EXPIRED"
       # The renew recipe is printed ONCE, in the Context block, not on every row it affects.
       _kube_state="${_p} — Supervisor token expired"
       # ⚠️ AND SAY WHETHER THE REMEDY CAN EVEN RUN. MEASURED 2026-09-09, lab powered off: every
@@ -3855,7 +3865,7 @@ else
       # is a claim about the LAB, made when the fault is entirely in this box's kube configuration.
       # `_ssh_never_asked` keeps them out of it.
       case "${_ssh_vrc}" in
-        119) _ssh_ep="<not read>" ;;
+        119) _ssh_ep="$_TOK_EXPIRED" ;;
         *)   case "$(classify_kube_failure "$_ssh_verr" 2>/dev/null || true)" in
                # A REFUSAL IS AN ANSWER. The server replied; it said no. That IS a live read and a
                # genuine RBAC fact, so it must NOT be lumped with "nothing answered".

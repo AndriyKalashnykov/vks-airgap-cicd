@@ -889,8 +889,8 @@ creds: creds-show  ## Alias for creds-show (back-compat)
 
 # ⚠️ ONE COMMAND, because the banner's remedy used to be TWO and the operator had to type both to
 #    see a value they had merely asked to be shown. MEASURED 2026-09-22: a token expires, `make
-#    creds` prints `<not read>` for the Harbor web UI admin password and the guest node SSH
-#    address, and names the renew command -- which works, and then needs `make creds` again.
+#    creds` prints `<not read — token expired>` for the Harbor web UI admin password and the guest
+#    node SSH address, and names the renew command -- which works, and then needs `make creds` again.
 #
 # ⚠️ DELIBERATELY A SEPARATE TARGET, NOT automatic inside `creds`. Renewing SPENDS AN SSO LOGIN
 #    ATTEMPT, and vCenter SSO locks an account after repeated failures (the report says so itself).

@@ -25,11 +25,12 @@ VKS cluster:
 > environment *before* `.env` is loaded, so one forgotten line cannot silently re-arm the leak for
 > every future capture.
 
-## If a password reads `<not read>`
+## If a cell reads `<not read — token expired>`
 
 On a **real lab**, several values are read live from the Supervisor: the Harbor **web UI** admin
-password, and the guest node SSH address and password. When the Supervisor token has expired, those
-cells read `<not read>` and a banner at the top of the report says so and names the remedy.
+password, and the guest node SSH address and password. When the Supervisor token has expired,
+those cells read `<not read — token expired>` and a banner at the top of the report says so and
+names the remedy.
 
 Renew and re-print in **one step**:
 
@@ -49,9 +50,11 @@ VKS_AUTH_METHOD=vcf make vks-login   # the prefix is required
 make creds-show
 ```
 
-⚠️ `<not read>` is **not** the same as a missing value. It means *this report could not ask*, and
-the banner names which cells it affects. Other placeholders in that column (`<forbidden>`,
-`<no key>`, `<no harbor ns>`) mean different things and each carries its own footnote.
+⚠️ `<not read — token expired>` is **not** the same as a missing value. It means *this report did
+not ask*, because the token had already expired, and the banner names which cells it affects. A
+cell reading `<not read — nothing answered>` was asked and got no reply. Other placeholders in that
+column (`<forbidden>`, `<no key>`, `<no harbor ns>`) mean different things and each carries its own
+footnote.
 >
 > ⚠️ **A pty-based capture counts as a terminal and WILL show the passwords.** The test is "is stdout
 > a tty", not "is a human reading this" — so `script`, `ssh -t`, `unbuffer` and some CI runners get
