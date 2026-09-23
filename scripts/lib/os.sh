@@ -425,6 +425,34 @@ EOF
   printf '%s' "${cands%$'\n'}"
 }
 
+# vcf_use_plugin_note_ok <stderr-file> <current-context> <wanted-context>
+#   0 = the ONLY error `vcf context use` printed is the known-benign "no system Harbor registry" one,
+#       AND the kubeconfig really is on the wanted context. 1 = anything else (print no reassurance).
+# PURE: reads one file, runs nothing. test-vks-login-output.sh pins every arm.
+# ⚠️ KEYED ON THE "could not be discovered" SUFFIX, NOT the shared prefix. Broadcom's 9.1 docs
+# document a SECOND variant under the same prefix -- "...was discovered but did not pass the health
+# check" -- which means a system registry EXISTS and is BROKEN. That one is not benign, and a note
+# telling the operator to ignore it would hide a real fault (adversary round, 2026-09-23).
+# It also requires the kubeconfig's current-context to equal the wanted CTX:NS. That is NECESSARY,
+# not sufficient: `vcf context create` itself sets a CTX:NS current-context, so on a lab whose first
+# namespace is the wanted one this passes whatever `use` did (UNVERIFIED which one create picks).
+# So the note states the context it READ; it does not claim `use` selected it.
+vcf_use_plugin_note_ok() {
+  local _f="$1" _cur="$2" _want="$3" _nx
+  [ -n "$_cur" ] && [ "$_cur" = "$_want" ] || return 1
+  grep -qF 'the system Harbor registry could not be discovered' "$_f" 2>/dev/null || return 1
+  _nx="$(grep -c '^\[x\]' "$_f" 2>/dev/null || true)"
+  [ "${_nx:-0}" = 1 ]
+}
+
+# vcf_create_flag_rejected <stderr-file> -> 0 when `vcf context create` refused a FLAG or a flag VALUE
+# this script passes (an older CLI), 1 otherwise. PURE. Covers cobra's three shapes: "unknown flag",
+# "unknown shorthand flag" and "invalid argument ... for ... --type". MEASURED 2026-09-23 on vcf
+# v9.1.1.0: a bogus flag prints exactly `[x] : unknown flag: --bogus-flag`, rc=1, on stderr.
+vcf_create_flag_rejected() {
+  grep -qE 'unknown (shorthand )?flag|invalid argument .*--(type|username|auth-type)' "$1" 2>/dev/null
+}
+
 # engine_choice — which engine is the BOOTSTRAP going to install? podman unless the operator asked for
 # docker BY NAME. Pure: it prints, it installs nothing, it touches no PATH. Kept separate from
 # container_engine() (which asks "what is INSTALLED on this box?") because the gate must be able to prove
