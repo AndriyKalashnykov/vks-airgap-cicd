@@ -10395,6 +10395,21 @@ while the lab runs VKS 3.7.1.
   aggregated `data.packaging.carvel.dev` API (25 packages + 25 packagemetadatas), every 30 min —
   the aggregated-API watch timeout, not memory. etcd: 0 "took too long".
 
+**Sources (research agent, 2026-09-24; source-read at kubectl v0.34.0 / kubernetes v1.34.0 /
+metrics-server v0.8.0 / cadvisor v0.52.1 — the 1.36 builds were not re-read):** kubectl
+`pkg/cmd/top/top_node.go:198-202` uses `Allocatable` unless `--show-capacity`, and
+`pkg/metricsutil/metrics_printer.go:234-239` has no upper clamp; the numerator is the ROOT cgroup
+working set (`pkg/kubelet/server/stats/summary.go:79,108`), so system daemons count against a
+denominator that excludes them. Eviction uses capacity − workingSet
+(`pkg/kubelet/eviction/helpers_others.go:27-34`). The kubepods limit is capacity − systemReserved −
+kubeReserved, eviction NOT subtracted (`pkg/kubelet/cm/node_container_manager_linux.go:252-269`) —
+matching the measured 2933Mi. The 977Mi systemReserved is exactly 25% of capacity; its VKS source
+is NOT established. Broadcom's 9.1 "Using VM Classes with VKS Clusters" (a genuine `/9-1/` page,
+HTTP 200): *"If you cannot use the guaranteed VM class type for all production nodes, at a minimum
+use guaranteed for the control plane nodes"* — a statement about RESERVATION, not size; no page
+found requires a CP of ≥ 8Gi. So for this LAB, `best-effort-small` is a documented non-production
+choice, not a defect.
+
 **Decision:** no live resize (a 1-CP rollout has a window where etcd has 2 members and needs both).
 If wanted later: `spec.topology.controlPlane.variables.overrides: [{name: vmClass, value:
 best-effort-medium}]` is accepted by `builtin-generic-v3.7.0` (vmClass scopes
