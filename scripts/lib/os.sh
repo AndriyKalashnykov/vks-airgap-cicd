@@ -2998,3 +2998,16 @@ vks_wait_vip_release() {
   VKS_VIP_STILL="${_still:-}"
   return 1
 }
+
+# assert_tarball_platform <tarball> — refuse an image whose config is not linux/${MIRROR_ARCH:-amd64}
+# (B736). Reads the docker/OCI archive's manifest.json -> config blob with tar + jq, so it works on
+# the air-gap box, which has no container engine. Fails CLOSED on anything it cannot read.
+assert_tarball_platform() {
+  local t="$1" want="linux/${MIRROR_ARCH:-amd64}" cfg got
+  [ -s "$t" ] || die "assert_tarball_platform: ${t} is missing or empty"
+  cfg="$(tar -xOf "$t" manifest.json 2>/dev/null | jq -r '.[0].Config // empty' 2>/dev/null || true)"
+  [ -n "$cfg" ] || die "${t}: no manifest.json/Config — refusing to push an image whose platform is unknown"
+  got="$(tar -xOf "$t" "$cfg" 2>/dev/null | jq -r '"\(.os // "")/\(.architecture // "")"' 2>/dev/null || true)"
+  [ "$got" = "$want" ] || die "${t} is ${got:-an unknown platform}, but the guest nodes need ${want} — pushing it would overwrite the tag they pull.
+  Rebuild it on an ${want#linux/} engine (see B736), or set MIRROR_ARCH if the nodes really are ${got#linux/}."
+}

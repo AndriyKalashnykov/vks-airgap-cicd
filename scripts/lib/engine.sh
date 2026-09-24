@@ -223,3 +223,35 @@ engine_login_probe() {
   esac
   return 1
 }
+
+# ---------------------------------------------------------------------------
+# B736 — images we BUILD must be the guest nodes' architecture. The builder bases are already pinned
+# to MIRROR_ARCH (10-mirror-pull.sh records the linux/${MIRROR_ARCH} manifest digest), so that one
+# variable is the target; a second knob could only disagree with it. An arm64 engine (an Apple-
+# silicon podman machine or Colima VM, a Graviton box) would otherwise build arm64 or emulate, and
+# the push would overwrite the tags the amd64 nodes pull.
+target_arch() { printf '%s' "${MIRROR_ARCH:-amd64}"; }
+
+# engine_arch <engine> — the architecture the ENGINE builds for natively. On macOS that is the VM's,
+# not the host's, so `uname -m` is the wrong probe.
+engine_arch() {
+  local a=""
+  case "$1" in
+    podman) a="$(podman info --format '{{.Host.Arch}}' 2>/dev/null || true)" ;;
+    docker) a="$(docker info --format '{{.Architecture}}' 2>/dev/null || true)" ;;   # docker-ok: reads the arch of the engine the operator chose; builds already require an engine
+  esac
+  case "$a" in x86_64|amd64) printf 'amd64' ;; aarch64|arm64) printf 'arm64' ;; *) printf '%s' "$a" ;; esac
+}
+
+# require_build_arch <engine> — die before a build whose output would be the wrong architecture.
+# BUILD_EMULATE=1 opts into emulated builds (slow; Go and .NET toolchains are expected to crash
+# under QEMU/Colima — measured for Go in golang-web). Per-run flag, deliberately NOT in .env.example.
+require_build_arch() {
+  local want have
+  want="$(target_arch)"; have="$(engine_arch "$1")"
+  [ -n "$have" ] || die "cannot read the architecture of '$1' ($1 info failed) — is the engine running?"
+  [ "$have" = "$want" ] && return 0
+  [ "${BUILD_EMULATE:-0}" = "1" ] && { log_warn "building linux/${want} on a ${have} engine under EMULATION (BUILD_EMULATE=1) — slow, and Go/.NET builders are expected to crash under QEMU"; return 0; }
+  die "the ${1} engine is ${have}, but the guest nodes need linux/${want}: images built here would overwrite the tags they pull.
+  Build on an ${want} box, or accept emulation for this run: BUILD_EMULATE=1 make <target>"
+}

@@ -48,6 +48,7 @@ fi
 
 require_cmd git "install git"
 ENGINE="$(container_engine)"
+require_build_arch "$ENGINE"   # B736
 OUT_DIR="${BUNDLE_DIR}/selfbuilt"
 mkdir -p "$OUT_DIR"
 LOCK="${OUT_DIR}/selfbuilt.lock"
@@ -98,7 +99,7 @@ for name in $NAMES; do
   _sb_stamp="${OUT_DIR}/.${name}.built"
   if [ "${SELFBUILT_FORCE:-0}" != "1" ] \
      && [ -s "$tarball" ] \
-     && [ "$(head -1 "$_sb_stamp" 2>/dev/null)" = "${tag}" ]; then
+     && [ "$(head -1 "$_sb_stamp" 2>/dev/null)" = "${tag}@linux/$(target_arch)" ]; then
     log_info "[${name}] already built at ${tag} (${tarball}) — skipping. SELFBUILT_FORCE=1 to rebuild."
     # ⚠️ RE-EMIT THIS IMAGE'S LOCK RECORD. Without this the lock SELF-ERASES on every warm run, and
     # the skip is the COMMON path: line 70 truncates ${LOCK}.tmp, this `continue` jumps past the
@@ -237,7 +238,7 @@ for name in $NAMES; do
     log_warn "cgroup v1 detected — building with BUILDAH_ISOLATION=${_iso}: rootless podman cannot"
     log_warn "  create a container cgroup here. Weaker isolation, bounded — our Dockerfile, our base."
   fi
-  build_args=(build -f "${src}/${dfile}" -t "$local_ref")
+  build_args=(build --platform "linux/$(target_arch)" -f "${src}/${dfile}" -t "$local_ref")
   [ -n "$target" ] && build_args+=(--target "$target")
   build_args+=("$src")
 
@@ -254,6 +255,7 @@ for name in $NAMES; do
   # 14-builder-build.sh:124.)
   rm -f "$tarball"
   run "$ENGINE" save -o "$tarball" "$local_ref"
+  assert_tarball_platform "$tarball"
 
   # THE REPRODUCIBILITY ANCHOR. The pin is the git tag; the anchor is what that tag PRODUCED here.
   #
@@ -373,7 +375,7 @@ EOF
   # next run rebuilds rather than trusting a partial artifact.
   # LINE 1 = the tag (what the skip comparison reads, via head -1 -- so an old one-line stamp is
   # still valid). LINE 2 = this image's lock record, so a skipped image can re-emit it.
-  printf '%s\n%s\n' "$tag" "$_sb_rec" > "$_sb_stamp"
+  printf '%s\n%s\n' "${tag}@linux/$(target_arch)" "$_sb_rec" > "$_sb_stamp"   # B736: the platform is part of the identity
 
   rm -rf -- "$src"; src=""
 done
