@@ -647,27 +647,51 @@ require_gate_tool() {
 # Environment loading — .env.example (committed defaults) then .env (overrides).
 # `set -a` exports everything so child processes (crane, kubectl, curl) see it.
 # ---------------------------------------------------------------------------
-# pin_keys <repo|lab> [file] — the version pins of one class, from .env.example's markers (B738).
-#   repo = an active KEY= line directly under a `# renovate:` line (the repo owns it)
-#   lab  = an active KEY= line directly under a `# pin: lab` line (the licensed artifacts you hold)
+# _pin_scan [file] — classify .env.example's version pins in ONE pure-bash pass (B738). Sets
+#   _PIN_REPO = active KEY= lines directly under a `# renovate:` line (the repo owns them)
+#   _PIN_LAB  = active KEY= lines directly under a `# pin: lab` line (the licensed artifacts you hold)
+# as space-separated key lists. Pure bash on purpose: load_env runs in every script, including ones
+# with a curated PATH that has no awk (test-kind-down-safety measured exactly that).
 # check-pin-classes gates that every active *_VERSION / *_TAG key is exactly one of the two.
-pin_keys() {
-  awk -v want="${1:?repo|lab}" '
-    /^[A-Z_][A-Z0-9_]*=/ { if (cls == want) { k = $0; sub(/=.*/, "", k); print k } cls = ""; next }
-    /^# renovate:/        { cls = "repo"; next }
-    /^# pin: lab[[:space:]]*$/ { cls = "lab"; next }
-    { cls = "" }' "${2:-${REPO_ROOT}/.env.example}"
+_pin_scan() {
+  local _f="${1:-${REPO_ROOT}/.env.example}" _l _t _cls=""
+  _PIN_REPO=""; _PIN_LAB=""
+  while IFS= read -r _l || [ -n "$_l" ]; do
+    _l="${_l%$'\r'}"
+    _t="${_l%"${_l##*[![:space:]]}"}"
+    case "$_t" in
+      "# renovate:"*) _cls=repo; continue ;;
+      "# pin: lab")   _cls=lab;  continue ;;
+    esac
+    if [[ "$_l" =~ ^[A-Z_][A-Z0-9_]*= ]]; then
+      case "$_cls" in
+        repo) _PIN_REPO="${_PIN_REPO} ${_l%%=*}" ;;
+        lab)  _PIN_LAB="${_PIN_LAB} ${_l%%=*}" ;;
+      esac
+    fi
+    _cls=""
+  done < "$_f"
 }
 
-# _pin_get <newline-list-of-KEY=value> <KEY> <outvar> — fork-free lookup (load_env runs in every script)
+# pin_keys <repo|lab> [file] — one class, one key per line (for gates and tests).
+pin_keys() {
+  _pin_scan "${2:-}"
+  local _k _list
+  case "${1:?repo|lab}" in repo) _list="$_PIN_REPO" ;; lab) _list="$_PIN_LAB" ;; *) return 2 ;; esac
+  for _k in $_list; do printf '%s\n' "$_k"; done
+}
+
+# _pin_get <newline-list-of-KEY=value> <KEY> — fork-free lookup into the fixed global _PIN_GOT
+# (load_env runs in every script). Not `printf -v "$3"`: a DYNAMIC assignment target makes shellcheck
+# assume any variable, `$!` included, may be written, and it then flags every caller that sources this.
 _pin_get() {
-  local _l _v=""
+  local _l
+  _PIN_GOT=""
   while IFS= read -r _l; do
-    case "$_l" in "$2="*) _v="${_l#*=}"; break ;; esac
+    case "$_l" in "$2="*) _PIN_GOT="${_l#*=}"; break ;; esac
   done <<EOF_PIN
 $1
 EOF_PIN
-  printf -v "$3" '%s' "$_v"
 }
 
 load_env() {
@@ -816,14 +840,11 @@ load_env() {
   # passed because the fixture hand-supplied the input the product never supplied — a test of a mock.
   export _VKS_EXPLICIT_KUBECONFIG="${KUBECONFIG:-}"
 
-  # B738: REPO pins follow .env.example, not a copy frozen in .env at env-init time. Snapshot what
-  # the CALLER set (a per-run override), then record each value from .env.example and from .env.
-  local _pins _labpins _p _pin_caller="" _pin_ex="" _pin_env="" _pin_stale=""
-  _pins="$(pin_keys repo "$example")"
-  _labpins="$(pin_keys lab "$example")"
-  for _p in $_pins $_labpins; do
-    [ -n "${!_p:-}" ] && _pin_caller="${_pin_caller}${_p}=${!_p}"$'\n'
-  done
+  # B738: REPO pins follow .env.example, not a copy frozen in .env at env-init time. Record each
+  # repo pin's .env.example value; the shell's own value is overwritten by sourcing, as it always was
+  # (a stale export from `set -a; . ./.env` must NOT read as intent). Per-run override: PIN_OVERRIDE.
+  local _pins _labpins _p _pin_ex="" _pin_stale="" _pin_used=""
+  _pin_scan "$example"; _pins="$_PIN_REPO"; _labpins="$_PIN_LAB"
 
   set -a
   # shellcheck disable=SC1090
@@ -844,7 +865,6 @@ load_env() {
     # shellcheck disable=SC1090
     [ -f "$override" ] && . "$override"
   fi
-  for _p in $_pins $_labpins; do _pin_env="${_pin_env}${_p}=${!_p:-}"$'\n'; done
   # The STATE OVERLAY holds DISCOVERED state (LB IPs, kubeconfig, generated passwords) and overrides
   # the above so the normal scripts run unchanged against whatever cluster is up.
   #
@@ -938,27 +958,30 @@ EOF
   # the "you have no kubeconfig" gate (kubectl then silently falls back to http://localhost:8080). The
   # PRESENCE gate is env-check's `[ -f ]` (scripts/02-env.sh). Do NOT add a bare `:?` on a path-valued
   # load_env default expecting it to catch a missing file — existence-check the file instead.
-  # B738, continued. For each repo pin: a caller value that DIFFERS from the .env line is a per-run
-  # override and wins. Anything else takes .env.example's value. A caller value EQUAL to the .env
-  # line is not an override — it came from .env (the docs tell operators to `set -a; . ./.env`).
-  local _c _e _x
-  for _p in $_pins; do
-    _pin_get "$_pin_caller" "$_p" _c; _pin_get "$_pin_env" "$_p" _e; _pin_get "$_pin_ex" "$_p" _x
-    if [ -n "$_c" ] && [ "$_c" != "$_e" ]; then export "$_p=$_c"; continue; fi
-    [ "$_e" = "$_x" ] || _pin_stale="${_pin_stale} ${_p}=${_e} (repo: ${_x})"
+  # B738, continued — after .env AND the state overlays, so a stale repo pin anywhere is caught.
+  # PIN_OVERRIDE='KEY=value KEY2=value2' is the ONLY per-run override, for either class, and it is
+  # announced: an ambient shell value never is one (it is what a stale `set -a; . ./.env` leaves).
+  local _cur _x _o _w _ovr=" ${PIN_OVERRIDE:-} "
+  for _w in ${PIN_OVERRIDE:-}; do
+    case " $_pins $_labpins " in *" ${_w%%=*} "*) ;; *) _pin_used="${_pin_used} ${_w%%=*}(NOT a version pin — ignored)" ;; esac
+  done
+  for _p in $_pins $_labpins; do
+    _o=""
+    case "$_ovr" in *" ${_p}="*) _o="${_ovr#* "${_p}"=}"; _o="${_o%% *}" ;; esac
+    if [ -n "$_o" ]; then export "$_p=$_o"; _pin_used="${_pin_used} ${_p}=${_o}"; continue; fi
+    case " $_pins " in *" $_p "*) ;; *) continue ;; esac   # a LAB pin keeps .env's (or the overlay's) value
+    _cur="${!_p:-}"; _pin_get "$_pin_ex" "$_p"; _x="$_PIN_GOT"
+    if [ "$_cur" != "$_x" ]; then _pin_stale="${_pin_stale} ${_p}=${_cur} (repo: ${_x})"; fi
     export "$_p=$_x"
   done
-  # LAB pins keep .env's value (it must match the artifacts you hold); only a per-run override
-  # beats it, under the same "differs from the .env line" rule.
-  for _p in $_labpins; do
-    _pin_get "$_pin_caller" "$_p" _c; _pin_get "$_pin_env" "$_p" _e
-    if [ -n "$_c" ] && [ "$_c" != "$_e" ]; then export "$_p=$_c"; fi
-  done
-  if [ -n "$_pin_stale" ] && [ "${_VKS_PIN_WARNED:-0}" != 1 ]; then
-    log_warn "IGNORED old version pins in .env:${_pin_stale}"
-    log_warn "  These follow .env.example now (B738). Delete those lines from .env. To try another"
-    log_warn "  version for one run: KEY=value make <target>."
-    export _VKS_PIN_WARNED=1
+  if [ "${_VKS_PIN_WARNED:-0}" != 1 ]; then
+    if [ -n "$_pin_stale" ]; then
+      log_warn "IGNORED old version pins in .env (or the state overlay):${_pin_stale}"
+      log_warn "  These follow .env.example now. Delete those lines from .env. To try another version"
+      log_warn "  for one run: PIN_OVERRIDE='KEY=value' make <target>."
+    fi
+    if [ -n "$_pin_used" ]; then log_warn "PIN_OVERRIDE in effect for this run:${_pin_used}"; fi
+    if [ -n "$_pin_stale$_pin_used" ]; then export _VKS_PIN_WARNED=1; fi
   fi
 
   export KUBECONFIG="${KUBECONFIG:-${REPO_ROOT}/secrets/vks.kubeconfig}"

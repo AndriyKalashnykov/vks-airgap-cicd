@@ -10433,15 +10433,23 @@ The owner then chose "repo always wins" for the Renovate pins. Shipped:
   (the 3 licensed VCF pins). `check-pin-classes` (static-check-fast) fails on an unowned
   `*_VERSION`/`*_TAG` key or a dangling marker. `pin_keys` in `lib/os.sh` is shared by the gate
   and `load_env`.
-- **`load_env`** re-applies `.env.example` for REPO pins after `.env` and the state overlay. It warns
-  once per process tree, naming each ignored line. LAB pins keep `.env`'s value. A per-run caller
-  value wins for both classes, unless it EQUALS the `.env` line: that is `.env` leaking in through
-  `set -a; . ./.env`, not an override.
+- **`load_env`** re-applies `.env.example` for REPO pins after `.env` and the state overlays. It warns
+  once per process tree, naming each ignored line. LAB pins keep `.env`'s value.
+- **Per-run override:** `PIN_OVERRIDE='KEY=value'`, for either class, and it is announced. A value
+  merely exported in the shell is ignored. The implementation-round review REFUTED the first version,
+  which treated an ambient value that differed from the `.env` line as an override. MEASURED: once an
+  operator deleted the stale line (as the warning says), a stale `set -a; . ./.env` export won
+  silently. It also regressed `SKIP_DOTENV=1` runs and a lab pin edited in `.env`. All four are now
+  test cases, RED against that version.
+- The pin classifier is pure bash: `test-kind-down-safety` runs `load_env` with a curated PATH that
+  has no `awk`.
+- `check-image-alignment` reports a stale `.env` value for a repo pin as a NOTE (nothing uses it now)
+  instead of failing the build. The `lab-validation-plan` snippet reads the pin from `.env.example`.
 - **`env-init`** writes repo pins commented.
 - **`install-vcf-clis`**, when the pinned archive is missing but another build is in the folder,
   names it and the exact `.env` line (the incident's actual fix: the VCF pins are LAB pins); its
   `:?` messages say `.env`, not the tracked `.env.example`.
-- **`test-env-pins.sh`**: 13 checks, RED against the previous `os.sh`/`02-env.sh`. `load_env` costs
+- **`test-env-pins.sh`**: 22 checks, RED against the pre-B738 files and against the refuted first version. `load_env` costs
   34 ms instead of 23 (measured, 20 runs each).
 
 Correction to the text above: `BUILDER_IMAGE_TAG` is NOT a `.env.example` pin (it ships commented;

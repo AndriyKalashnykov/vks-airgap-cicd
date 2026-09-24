@@ -504,7 +504,7 @@ check-env-clobber: ## Gate: an UNCOMMENTED .env.example value must not shadow a 
 	@$(SCRIPTS)/check-env-clobber.sh
 
 .PHONY: check-pin-classes
-check-pin-classes: ## Gate: every version pin in .env.example is marked repo (# renovate:) or lab (# pin: lab) — load_env treats them oppositely (B738)
+check-pin-classes: ## Gate: every version pin in .env.example is marked repo (# renovate:) or lab (# pin: lab) — load_env treats them oppositely
 	@$(SCRIPTS)/check-pin-classes.sh
 
 .PHONY: check-app-gitignore
