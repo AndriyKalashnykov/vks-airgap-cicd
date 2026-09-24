@@ -95,6 +95,9 @@ ca_bundle_with_system() {
 # GODEBUG, which makes a set SSL_CERT_FILE select Go's own verifier. .mise.toml builds crane from
 # source with Go 1.27 on macOS for exactly this; the check below refuses an older build, whose
 # failure would otherwise surface later as an x509 error that reads like a lab problem.
+# SIDE EFFECT, by design: every Go >= 1.27 program started from the calling shell then verifies
+# with Go's verifier against the bundle (system cert.pem + our CA) instead of the macOS keychain.
+# A proxy CA that exists ONLY in the keychain is not in that bundle.
 crane_trust_env() {
   [ $# -eq 1 ] || { echo "crane_trust_env: needs 1 arg (<bundle>), got $#" >&2; return 2; }
   [ -s "$1" ] || { echo "crane_trust_env: bundle '$1' missing or empty" >&2; return 2; }
@@ -105,8 +108,14 @@ crane_trust_env() {
     *) export GODEBUG="${GODEBUG:+${GODEBUG},}x509sslcertoverrideplatform=1" ;;
   esac
   local bin gv minor
-  bin="$(mise which crane 2>/dev/null || command -v crane || true)"
+  # Check the crane that WILL RUN — the first on PATH — not whatever mise would pick: run outside
+  # make, an earlier Homebrew/release crane can shadow mise's. Only a mise SHIM (a link to the mise
+  # binary itself) is resolved through mise, because `go version` cannot read a shim.
+  bin="$(command -v crane || true)"
   [ -n "$bin" ] || return 0            # no crane: the caller reports that in its own terms
+  case "$(basename "$(readlink -f "$bin" 2>/dev/null || printf '%s' "$bin")")" in
+    mise) bin="$(mise which crane 2>/dev/null || true)" ;;
+  esac
   gv="$(go version "$bin" 2>/dev/null || true)"
   gv="${gv##*: go}"; gv="${gv%% *}"
   minor="$(printf '%s' "$gv" | sed -nE 's/^1\.([0-9]+).*/\1/p')"

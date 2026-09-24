@@ -71,7 +71,16 @@
 EMPTY :=
 SPACE := $(EMPTY) $(EMPTY)
 MISE_BIN := $(shell command -v mise 2>/dev/null || { [ -x "$(HOME)/.local/bin/mise" ] && printf '%s\n' "$(HOME)/.local/bin/mise"; })
-MISE_PATHS := $(if $(MISE_BIN),$(shell cd '$(CURDIR)' && '$(MISE_BIN)' bin-paths 2>/dev/null))
+MISE_PATHS := $(if $(MISE_BIN),$(shell cd '$(CURDIR)' && '$(MISE_BIN)' bin-paths 2>/dev/null || echo __MISE_FAILED__))
+# A FAILED bin-paths used to be indistinguishable from "no tools": every pinned tool silently fell
+# off PATH and recipes ran whatever the box had. Two known causes: an untrusted .mise.toml (normal
+# on the very first `make deps`, whose recipe trusts it) and a mise older than .mise.toml's
+# min_version (mise refuses with rc=1, empty stdout — measured). Say so, with mise's own words.
+ifneq ($(filter __MISE_FAILED__,$(MISE_PATHS)),)
+MISE_PATHS := $(filter-out __MISE_FAILED__,$(MISE_PATHS))
+$(warning mise bin-paths FAILED, so the pinned tools are NOT on PATH: $(shell cd '$(CURDIR)' && '$(MISE_BIN)' bin-paths 2>&1 >/dev/null | head -1))
+$(warning   fix: 'mise self-update' if it asks for a newer version, then 'make deps' (which also trusts .mise.toml))
+endif
 # macOS (B735): Apple's /usr/bin/make is GNU Make 3.81, which has no .SHELLFLAGS (3.82+), so every
 # recipe below would silently lose -eu -o pipefail. Refuse it. And the scripts are GNU-flavoured, so
 # on Darwin Homebrew's GNU tools go on PATH — AFTER the pinned mise tools, BEFORE the system ones.
