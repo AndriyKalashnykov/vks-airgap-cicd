@@ -10385,7 +10385,25 @@ landed earlier on `feat/macos-jumpbox`. Since then, each MEASURED on the rented 
 - B736 (arm64 builds): `--platform linux/$(target_arch)` + a pre-push platform assertion landed; the
   Mac's podman VM is arm64 and runs amd64 containers via qemu, so builds need `BUILD_EMULATE=1`.
 
-Still open: `install-all` + `verify` from the Mac (running), items 8, 10, 11, and B738.
+Also landed 2026-09-24: item 11 (`make bundle` refuses on macOS), item 10 (macOS block in
+common-bootstrap.md, gated in walk-doc to `WALK_OS=macos`), item 8 was already done (flock is in
+the brew set), and engine_build_isolation no longer forces chroot on macOS (the VM is cgroup v2).
+
+Still open, each recorded by an implementation-review round (2026-09-24):
+
+- **Engine-level registry trust on macOS.** Measured on podman 6.1.2 (a REMOTE client): `login`
+  and `build` take `--cert-dir`, `pull`/`push` do not. A docker VM (colima, Docker Desktop) never
+  reads this Mac's `/etc/docker/certs.d`. So `engine-trust-check` and `trust-harbor` now REFUSE on
+  macOS. Pushes to Harbor go through crane, which works; an engine pull from Harbor on a Mac is
+  unconfigured. Fix = install the CA inside the VM (`podman machine ssh` into
+  `/etc/containers/certs.d/<host>/`), with its own test.
+- **argocd on Apple Silicon.** The VCF argocd ships darwin-amd64 only, and `all` skips it on arm64.
+  Rosetta 2 could run it (`arch -x86_64 /usr/bin/true` probes it). Not done: Rosetta may be absent.
+- **The brew package list is written three times** (bootstrap-jumpbox.sh `BASE_PKGS`,
+  common-bootstrap.md, lib/os.sh's error). Nothing checks they agree.
+- **`vcf version` is now fatal after install.** Measured working on the Mac; a Linux jumpbox leg
+  with the VCF archives mounted has not been re-run since.
+- `install-all` + `verify` from the Mac: running.
 
 ## 🟡 B738 — `.env` carries every pin from `.env.example`, so a version bump never reaches an existing operator
 
