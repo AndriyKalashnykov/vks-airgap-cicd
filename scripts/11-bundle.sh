@@ -23,6 +23,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 require_cmd mise jq
 load_env
 
+# macOS (B735 item 11): the bundle carries THIS box's binaries (crane, kubectl, helm, jq, yq) to a
+# LINUX air-gap box, so on a Mac it would stage darwin binaries that cannot run there. The static-
+# binary check below would catch it only after the image export; refuse before any work.
+[ "$(os_id)" != macos ] || die "make bundle is not supported on macOS: it stages this box's binaries for a Linux
+  air-gap box, and a Mac's are darwin builds. Cut the bundle on a Linux box (the sneakernet flow is
+  Linux-only for now)."
+
 : "${BUNDLE_DIR:?}"
 [ -d "${BUNDLE_DIR}/images" ] || die "no image cache at ${BUNDLE_DIR}/images — run 'make mirror-pull' first"
 

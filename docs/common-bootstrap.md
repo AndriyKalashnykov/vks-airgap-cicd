@@ -22,6 +22,17 @@ sudo tdnf install -y git make curl curl-libs ca-certificates openssh openssh-soc
 
 Already root? Drop the `sudo`.
 
+**macOS** — needs [Homebrew](https://brew.sh); no `sudo`. The scripts are GNU-flavoured, so this
+installs the GNU tools too:
+
+```bash
+brew install git make curl bash coreutils gnu-sed findutils grep gawk gnu-tar flock gettext openssl@3 python
+```
+
+On macOS type **`gmake`** wherever this runbook says `make`, until Scenario 1 Step 1's
+`make shell-init` puts GNU make first on your PATH as `make`. Apple's `/usr/bin/make` is 3.81 and the
+Makefile refuses it.
+
 ```bash
 git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
 ```
