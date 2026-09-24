@@ -5197,7 +5197,9 @@ seconds rather than twenty minutes.
 was in flight when this was reviewed, so nothing was wired. Land the `v1.0.0` re-cut first, then wire
 BOTH paths in one change with 1–4 fixed, then run kaniko its own six-row matrix.
 
-## 🟡 B496 — a NEWER VCF plugin bundle (0500) exists, and I could not confirm whether a matching CLI does
+## ✅ B496 — a NEWER VCF plugin bundle (0500) exists, and I could not confirm whether a matching CLI does ✅ closed 2026-09-24
+
+**CLOSED 2026-09-24 by adopting the vendor's 9.1.1 pair** (`VCF_CLI_VERSION=9.1.1.0.25662425`, `VCF_PLUGINS_VERSION=9.1.1.0.25665404`): the pair the lab runs (`vcf version` → `v9.1.1.0.25662425`, 3.7.1 / 9.1.1 plugins, lab-verified in `30-vks-login.sh`), and the same build numbers exist for Linux_AMD64 and Darwin_ARM64. Residual: no Linux_ARM64 9.1.1 artifacts are in the operator's folder (the portal likely has them, UNVERIFIED).
 
 Asked to check Broadcom for newer VCF CLI / plugin / service artifacts and update the pins, I found a
 newer **plugin bundle** on the portal:
