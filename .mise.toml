@@ -9,6 +9,10 @@
 #
 # Run `mise install` on the jump box before running the Makefile.
 
+# Per-tool `os = [...]` (used for crane/go below) needs a mise that knows the key. 2026.9.2 is the
+# version CI pins and was MEASURED to honour it on a cold data dir.
+min_version = "2026.9.2"
+
 [tools]
 # REMOVED 2026-08-23: java, go, python, rust, dotnet.
 #
@@ -48,7 +52,17 @@ yq       = "4"
 # crane (google/go-containerregistry) — the image-mirror engine. Replaces skopeo, which
 # ships no static binary and isn't packaged on Photon OS 5; crane ships static amd64/arm64
 # binaries, so it installs cross-distro via mise on the jump box.
-crane    = "0.21.9"
+#
+# macOS gets crane BUILT FROM SOURCE with Go >= 1.27, not the release binary (B735). On darwin Go
+# verifies TLS through Apple's verifier, which ignores SSL_CERT_FILE and REJECTS a leaf valid for
+# more than 825 days even when its CA is trusted. Harbor's leaf is 3650 days. MEASURED on the Mac:
+# the release crane 0.21.9 (go1.26.5) cannot push to a self-signed Harbor at all; a go1.27 build
+# with GODEBUG=x509sslcertoverrideplatform=1 honours SSL_CERT_FILE and pushes. lib/tls.sh
+# crane_trust_env sets that GODEBUG on darwin.
+# KEEP THE TWO crane VERSIONS EQUAL — check-toolchain-alignment asserts it.
+crane    = { version = "0.21.9", os = ["linux"] }
+go       = { version = "1.27.1", os = ["macos"] }
+"go:github.com/google/go-containerregistry/cmd/crane" = { version = "0.21.9", os = ["macos"] }
 # node is only for `make renovate-validate` (renovate requires node ^24.11).
 node     = "24"        # INFRA, not an app toolchain: npx markdownlint (docs-lint) + npx renovate (renovate-validate)
 # go — the gowebapp toolchain. Without it, CI (which gets its toolchain from THIS file via

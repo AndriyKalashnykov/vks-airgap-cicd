@@ -147,6 +147,10 @@ engine_mode() {
 # jump box. So the fix belongs here, keyed on the condition rather than on the OS name.
 engine_build_isolation() {
   [ "$(container_engine)" = podman ] || return 0
+  # macOS (B735): builds run in the podman VM, not on this host, and the host has no
+  # /sys/fs/cgroup at all — so the probe below reads "not v2" and forced chroot on every Mac.
+  # MEASURED 2026-09-24: `podman machine ssh stat -fc %T /sys/fs/cgroup` -> cgroup2fs.
+  [ "$(uname -s)" != Darwin ] || return 0
   [ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null)" = cgroup2fs ] && return 0
   printf 'chroot'
 }
@@ -222,4 +226,36 @@ engine_login_probe() {
       log_error "  -> unclassified. The engine's own message is above; trust it over any advice here." ;;
   esac
   return 1
+}
+
+# ---------------------------------------------------------------------------
+# B736 — images we BUILD must be the guest nodes' architecture. The builder bases are already pinned
+# to MIRROR_ARCH (10-mirror-pull.sh records the linux/${MIRROR_ARCH} manifest digest), so that one
+# variable is the target; a second knob could only disagree with it. An arm64 engine (an Apple-
+# silicon podman machine or Colima VM, a Graviton box) would otherwise build arm64 or emulate, and
+# the push would overwrite the tags the amd64 nodes pull.
+target_arch() { printf '%s' "${MIRROR_ARCH:-amd64}"; }
+
+# engine_arch <engine> — the architecture the ENGINE builds for natively. On macOS that is the VM's,
+# not the host's, so `uname -m` is the wrong probe.
+engine_arch() {
+  local a=""
+  case "$1" in
+    podman) a="$(podman info --format '{{.Host.Arch}}' 2>/dev/null || true)" ;;
+    docker) a="$(docker info --format '{{.Architecture}}' 2>/dev/null || true)" ;;   # docker-ok: reads the arch of the engine the operator chose; builds already require an engine
+  esac
+  case "$a" in x86_64|amd64) printf 'amd64' ;; aarch64|arm64) printf 'arm64' ;; *) printf '%s' "$a" ;; esac
+}
+
+# require_build_arch <engine> — die before a build whose output would be the wrong architecture.
+# BUILD_EMULATE=1 opts into emulated builds (slow; Go and .NET toolchains are expected to crash
+# under QEMU/Colima — measured for Go in golang-web). Per-run flag, deliberately NOT in .env.example.
+require_build_arch() {
+  local want have
+  want="$(target_arch)"; have="$(engine_arch "$1")"
+  [ -n "$have" ] || die "cannot read the architecture of '$1' ($1 info failed) — is the engine running?"
+  [ "$have" = "$want" ] && return 0
+  [ "${BUILD_EMULATE:-0}" = "1" ] && { log_warn "building linux/${want} on a ${have} engine under EMULATION (BUILD_EMULATE=1) — slow; under QEMU the .NET builder aborts (measured on a Mac) — on Apple silicon enable Rosetta for the podman machine, engine-check says how"; return 0; }
+  die "the ${1} engine is ${have}, but the guest nodes need linux/${want}: images built here would overwrite the tags they pull.
+  Build on an ${want} box, or accept emulation for this run: BUILD_EMULATE=1 make <target>"
 }

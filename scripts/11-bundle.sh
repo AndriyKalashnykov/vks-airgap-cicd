@@ -14,6 +14,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/selfbuilt.sh
 . "${SCRIPT_DIR}/lib/selfbuilt.sh"
 
+# macOS (B735 item 11): the bundle carries THIS box's binaries (crane, kubectl, helm, jq, yq) to a
+# LINUX air-gap box, so on a Mac it would stage darwin binaries that cannot run there. The static-
+# binary check below would catch it only after the image export; refuse FIRST, before any other check,
+# so a Mac without jq hears "not supported" rather than "jq missing".
+[ "$(os_id)" != macos ] || die "make bundle is not supported on macOS: it stages this box's binaries for a Linux
+  air-gap box, and a Mac's are darwin builds. Cut the bundle on a Linux box (the sneakernet flow is
+  Linux-only for now)."
+
 # ⚠️ DECLARED because mise_pin() below now asks mise for the RESOLVED pin instead of hand-parsing
 # .mise.toml. Both run on the INTERNET side (this script cuts the bundle), so needing them here does not
 # add an air-gap dependency — `jq` remains a CARRIED tool that 03-check-tools.sh correctly expects to be
@@ -22,6 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # names the symptom instead of the missing tool.
 require_cmd mise jq
 load_env
+
 
 : "${BUNDLE_DIR:?}"
 [ -d "${BUNDLE_DIR}/images" ] || die "no image cache at ${BUNDLE_DIR}/images — run 'make mirror-pull' first"

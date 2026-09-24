@@ -140,8 +140,11 @@ should_skip() {
     *"make harbor-robot"*)      [ "$WALK_ROBOT_EXISTS" = 1 ] && printf 'a Harbor robot already exists; its secret is shown ONCE and cannot be re-read' ;;
     *"vks-cluster-create"*)     [ "$WALK_CLUSTER_EXISTS" = 1 ] && printf 'cluster already exists (this row)' ;;
     *"git clone https"*)        [ "${WALK_SKIP_CLONE:-0}" = 1 ] && printf 'already cloned by the harness' ;;
-    *"apt-get install"*)        [ "${WALK_OS:-}" = photon ] && printf 'Ubuntu block; this box is Photon' ;;
-    *"tdnf install"*)           case "${WALK_OS:-}" in ubuntu|debian) printf 'Photon block; this box is %s' "$WALK_OS" ;; esac ;;
+    *"apt-get install"*)        case "${WALK_OS:-}" in photon|macos) printf 'Ubuntu block; this box is %s' "$WALK_OS" ;; esac ;;
+    *"tdnf install"*)           case "${WALK_OS:-}" in ubuntu|debian|macos) printf 'Photon block; this box is %s' "$WALK_OS" ;; esac ;;
+    # macOS (B735): the brew block runs ONLY on a macOS row. Not gated, every Linux row ran it and
+    # died 127 (found by review of the commit that added the block to common-bootstrap.md).
+    *"brew install"*)           [ "${WALK_OS:-}" = macos ] || printf 'macOS block; this box is %s' "${WALK_OS:-linux}" ;;
   esac
 }
 

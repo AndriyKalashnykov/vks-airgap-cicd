@@ -97,6 +97,14 @@ else bad "an unconfirmed fetch must not leave a trust anchor behind"; fi
 # --- 4. NO pin, a TTY, operator declines -> refuses -------------------------------------------------------
 # The interactive branch needs a real pty; `printf 'n\n' | ...` would make [ -t 0 ] FALSE and silently
 # re-test case 3 instead. `script` allocates one. Skipped, not faked, when it is unavailable.
+# pty_run CMD -- run the bash string CMD under a pseudo-terminal. util-linux script(1) is
+# `script -qec CMD FILE`; BSD/macOS script(1) has no -c and is `script -q FILE CMD...` (it already
+# returns the child's status). MEASURED macOS 26.6: BSD script DISCARDS pending pty input once its
+# stdin reaches EOF, so a piped answer must hold stdin open until the child has read it.
+pty_run() {
+  if grep -q util-linux <<<"$(script --version 2>&1)"; then script -qec "$1" /dev/null
+  else script -q /dev/null "$BASH" -c "$1"; fi
+}
 if command -v script >/dev/null 2>&1; then
   # ⚠️ ASSERT THE DISCRIMINATOR, NOT rc + absence-of-file. MEASURED 2026-08-05: with the old assertion
   # (`rc != 0 && no file`) I mutated `if [ -t 0 ]` -> `if false`, killing the ENTIRE interactive consent
@@ -105,7 +113,7 @@ if command -v script >/dev/null 2>&1; then
   # only thing that separates the branches is WHICH MESSAGE APPEARS, so assert on that. $TMP/tty.log was
   # also captured and never read, which is what made it invisible.
   rm -f "$TMP/out.crt"
-  script -qec "HARBOR_CA_SHA256= '$FETCH' '127.0.0.1:${PORT}' '$TMP/out.crt' harbor" /dev/null \
+  pty_run "HARBOR_CA_SHA256= '$FETCH' '127.0.0.1:${PORT}' '$TMP/out.crt' harbor" \
     </dev/null >"$TMP/tty.log" 2>&1
   trc=$?
   if [ "$trc" -ne 0 ] && [ ! -e "$TMP/out.crt" ] \
@@ -119,7 +127,9 @@ if command -v script >/dev/null 2>&1; then
   # The ACCEPT branch had NO case at all: if `y|Y|yes|YES` were mistyped, every interactive operator
   # would be refused and nothing would notice. It fails closed, so this is completeness, not a hole.
   rm -f "$TMP/out.crt"
-  printf 'y\n' | script -qec "HARBOR_CA_SHA256= '$FETCH' '127.0.0.1:${PORT}' '$TMP/out.crt' harbor" /dev/null \
+  # Hold stdin open until the anchor exists (bounded, 10s): BSD script(1) drops pending pty input at
+  # stdin EOF, and a fixed sleep is both a cost on Linux and a race on a slow box.
+  { printf 'y\n'; i=0; while [ ! -s "$TMP/out.crt" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done; } | pty_run "HARBOR_CA_SHA256= '$FETCH' '127.0.0.1:${PORT}' '$TMP/out.crt' harbor" \
     >"$TMP/tty2.log" 2>&1
   arc=$?
   if [ "$arc" -eq 0 ] && [ -s "$TMP/out.crt" ]; then ok "no pin + tty + ACCEPTED writes the anchor"

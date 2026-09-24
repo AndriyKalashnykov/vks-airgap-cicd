@@ -64,7 +64,7 @@ Steps 1 and 2, where each one is listed with the exact `.env` key it goes in:
 | What | `.env` key | Example | Where to find it |
 |---|---|---|---|
 | Supervisor IP | `SUPERVISOR_HOST` | `192.168.101.128` | vCenter → Workload Management → Supervisors → *Control Plane Node IP*. **Bare host — no `https://`, no trailing slash.** |
-| vCenter FQDN | `VCENTER_HOST` | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA). **Your jump box must resolve it** — check: `getent hosts vcsa.env1.lab.test` |
+| vCenter FQDN | `VCENTER_HOST` | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA). **Your jump box must resolve it** — check: `getent hosts vcsa.env1.lab.test` (macOS: `dscacheutil -q host -a name vcsa.env1.lab.test`) |
 | your SSO user | `VKS_USERNAME` **and** `VCENTER_USERNAME` | `administrator@vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups. **Two keys, one value** — Steps 3 and 4/5 read different ones. |
 | your SSO domain | `VKS_SSO_DOMAIN` | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups, the *Domain* dropdown. Needed only if `VKS_USERNAME` is bare (no `@`) or unset. |
 | your SSO password | `VCF_CLI_VSPHERE_PASSWORD` **and** `VCENTER_PASSWORD` | — | for that login. **Two keys, one value**, and **both in single quotes** — see Step 1, where an unquoted password is silently mangled against an account repeated failed logins can lock. |
@@ -85,6 +85,7 @@ sign-in page before any of this.)
 |---|---|---|
 | `VCF-Consumption-CLI-Linux_AMD64-9.1.1.0.25662425.tar.gz` | [VCF CLI](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.1.0&os=&servicePk=545804&language=EN&groupId=545612&viewGroup=true) | `VCF_CLI_SRC_DIR` (you set it in Step 1) |
 | `VCF-Consumption-CLI-PluginBundle-Linux_AMD64-9.1.1.0.25665404.tar.gz` | [Plugins](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.1.0&os=&servicePk=545804&language=EN&groupId=545621&viewGroup=true) | `VCF_CLI_SRC_DIR` |
+| on a Mac: `VCF-Consumption-CLI-Darwin_ARM64-9.1.1.0.25662425.tar.gz` and `VCF-Consumption-CLI-PluginBundle-Darwin_ARM64-9.1.1.0.25665404.tar.gz` instead of the two above | same two links | `VCF_CLI_SRC_DIR` |
 | the amd64 `argocd` CLI | [ArgoCD](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | `VCF_CLI_SRC_DIR` |
 | `supervisor-service-argocd-legacy-1.1.0-25100889.yml` | [ArgoCD](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | `VCF_CLI_SRC_DIR` |
 | `supervisor-service-harbor-legacy-v2.14.3+vmware.2-vks.1-25292931.yml` | [Harbor](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=542081) | `VCF_CLI_SRC_DIR` |

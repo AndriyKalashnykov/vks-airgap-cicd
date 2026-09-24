@@ -85,6 +85,7 @@ for app in $_apps; do
   Re-cut the bundle on the internet box: make builder-build && make bundle"
 
   ref="$(app_builder_image "$app")"
+  assert_tarball_platform "$tarball"   # B736: never push the wrong architecture over the nodes' tag
   log_info "[${app}] pushing the carried builder -> ${ref}"
   # SAME OPERATION AS 21-mirror-push.sh:77, WHICH IS WRAPPED — and this one was not. That
   # inconsistency is the defect: a push is an IDEMPOTENT MUTATION that a transient can genuinely

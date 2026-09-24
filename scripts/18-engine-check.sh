@@ -19,6 +19,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/engine.sh
 . "${SCRIPT_DIR}/lib/engine.sh"
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
 load_env
 
 ENGINE="$(container_engine)"
@@ -30,7 +32,99 @@ problems=0
 note()  { printf '  %s\n' "$*"; }
 prob()  { printf '  PROBLEM: %s\n' "$*"; problems=$((problems + 1)); }
 
-if [ "$ENGINE" = podman ]; then
+# rosetta_check — Apple-silicon podman machine, amd64 target (B736). MEASURED on the Mac, podman 6.1.2:
+#   QEMU aborts the .NET builder's `dotnet restore` (signal 6); Rosetta runs it. The Go, Node, Python
+#   and Rust builders worked under QEMU. So QEMU is a PROBLEM only when a .NET app is enrolled.
+#   `podman machine inspect` with no name reads podman-machine-default, not the machine behind the
+#   default connection; the connection is named after its machine (a `-root` twin for rootful).
+#   A malformed containers.conf (a second [machine] table, or a table glued to a line with no
+#   trailing newline) makes EVERY podman command fail (measured), so the remedy is built for the
+#   file's actual state instead of a blind append.
+rosetta_check() {
+  local m ros f nl have_dotnet=0 a
+  m="$(podman system connection list --format '{{.Name}} {{.Default}}' 2>/dev/null \
+       | awk '$2 == "true" { print $1; exit }' || true)"
+  m="${m%-root}"
+  ros="$(podman machine inspect ${m:+"$m"} --format '{{.Rosetta}}' 2>/dev/null || true)"
+  while read -r a; do
+    [ -n "$a" ] && [ "$(app_lang "$a")" = dotnet ] && have_dotnet=1
+  done <<EOF_APPS
+$(app_names)
+EOF_APPS
+  # /usr/bin/arch by full path: on a Mac coreutils' GNU `arch` is first on PATH and has no -x86_64.
+  # ROSETTA_PROBE_BIN exists only so the offline test can stand in for it.
+  if ! "${ROSETTA_PROBE_BIN:-/usr/bin/arch}" -x86_64 /usr/bin/true 2>/dev/null; then
+    [ "$ros" != true ] || note "  Rosetta is enabled for the machine but NOT installed on this Mac"
+    if [ "$have_dotnet" = 1 ]; then
+      prob "no Rosetta 2 on this Mac, so amd64 builds use QEMU, which ABORTS the .NET builder. Install it:
+             softwareupdate --install-rosetta --agree-to-license
+           then enable it for the machine (run engine-check again for the exact lines)"
+    else
+      note "  emulation: QEMU (no Rosetta 2 on this Mac; no .NET app enrolled, so builds should work)"
+    fi
+    return 0
+  fi
+  case "$ros" in
+    true) note "  emulation: Rosetta (on, machine ${m:-default}) — amd64 builds, .NET included, run under it" ;;
+    false)
+      [ "$have_dotnet" = 1 ] || { note "  emulation: QEMU (machine ${m:-default}); no .NET app enrolled, so builds should work"; return 0; }
+      f="${XDG_CONFIG_HOME:-$HOME/.config}/containers/containers.conf"
+      if grep -qs '^[[:space:]]*\[machine\]' "$f"; then
+        prob "the machine ${m:-default} emulates amd64 with QEMU, which ABORTS the .NET builder. Use Rosetta:
+             add the line  rosetta = true  inside the EXISTING [machine] section of ${f}
+             (a second [machine] section breaks every podman command), then:
+             podman machine stop ${m} && podman machine start ${m}"
+      else
+        nl=""; [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ] && nl='\n'
+        prob "the machine ${m:-default} emulates amd64 with QEMU, which ABORTS the .NET builder. Use Rosetta:
+             mkdir -p ${f%/*} && printf '${nl}[machine]\\nrosetta = true\\n' >> ${f}
+             podman machine stop ${m} && podman machine start ${m}"
+      fi ;;
+    *) note "  cannot read the Rosetta setting of machine ${m:-default}; if a .NET builder aborts under QEMU, enable Rosetta" ;;
+  esac
+}
+
+if [ "$(os_id)" = macos ]; then
+  # macOS (B735): the engine runs in a Linux VM (podman machine, colima, Docker Desktop). Every
+  # host check below (newuidmap, /etc/subuid, cgroups, crun) is about the machine the containers
+  # run on, and on a Mac that is the VM, not this box. MEASURED on the Mac: the Linux checks
+  # reported 2 PROBLEMs for a podman machine that builds and runs fine.
+  have "$ENGINE" || prob "${ENGINE} is not installed — run 'make deps'"
+  if [ "$problems" -eq 0 ]; then
+    vm_arch="$(engine_arch "$ENGINE")"
+    if [ -z "$vm_arch" ]; then
+      # Print the engine's OWN error: "not running" is the common cause, not the only one (a default
+      # connection pointing at a removed machine, a stale DOCKER_HOST or docker context, ...).
+      # `|| true`: this branch runs BECAUSE info failed, so without it `set -e` kills the script at this
+      # assignment and the operator gets a bare rc, not the message below (found by review, RED-tested).
+      _why="$("$ENGINE" info 2>&1 >/dev/null | tail -1 || true)"   # docker-ok: the operator's chosen engine
+      if [ "$ENGINE" = podman ]; then
+        prob "podman cannot reach its machine: ${_why:-no error text}
+             not running?  podman machine init (first time) && podman machine start
+             otherwise:    podman system connection list   # is the default the machine you started?"
+      else
+        prob "docker cannot reach its daemon: ${_why:-no error text}
+             not running?  colima start, or open Docker Desktop
+             otherwise:    docker context ls               # is the active context the VM you started?"
+      fi
+    else
+      printf 'engine VM        : running, %s\n' "$vm_arch"
+      if [ "$vm_arch" != "$(target_arch)" ]; then
+        note "images are pushed as linux/$(target_arch), but this VM is ${vm_arch}: the two local builds"
+        note "  (selfbuilt-image, builder-image) run under emulation and refuse to start without:"
+        note "    BUILD_EMULATE=1 make install-all        # slow; see B736"
+        # MEASURED on the Mac (podman 6.1.2, applehv): under QEMU the .NET builder's `dotnet restore`
+        # aborts ("qemu: uncaught target signal 6"); with Rosetta the same image restores fine.
+        if [ "$ENGINE" = podman ] && [ "$vm_arch" = arm64 ]; then rosetta_check; fi
+      fi
+    fi
+  fi
+  # MEASURED on the Mac (podman 6.1.2 remote): login and build take --cert-dir, pull and push do NOT.
+  printf 'registry TLS     : crane (every push to Harbor) uses SSL_CERT_FILE -- nothing installed.\n'
+  printf '                   The engine itself (%s pull/push) trusts inside its VM, which this repo\n' "$ENGINE"
+  printf '                   does not configure on macOS: engine-trust-check / trust-harbor are Linux-only.\n'
+  printf 'sudo required    : NO\n'
+elif [ "$ENGINE" = podman ]; then
   have podman || prob "podman is not installed — run 'make deps'"
   have crun   || note "crun not found — rootless podman builds may fail (make deps installs it)"
   have newuidmap || prob "newuidmap missing (pkg 'uidmap') — rootless podman cannot map uids. Run 'make deps'."

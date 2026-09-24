@@ -71,8 +71,38 @@
 EMPTY :=
 SPACE := $(EMPTY) $(EMPTY)
 MISE_BIN := $(shell command -v mise 2>/dev/null || { [ -x "$(HOME)/.local/bin/mise" ] && printf '%s\n' "$(HOME)/.local/bin/mise"; })
-MISE_PATHS := $(if $(MISE_BIN),$(shell cd '$(CURDIR)' && '$(MISE_BIN)' bin-paths 2>/dev/null))
-export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$(if $(HOME),$(HOME)/.local/bin:,)$(PATH)
+MISE_PATHS := $(if $(MISE_BIN),$(shell cd '$(CURDIR)' && '$(MISE_BIN)' bin-paths 2>/dev/null || echo __MISE_FAILED__))
+# A FAILED bin-paths used to be indistinguishable from "no tools": every pinned tool silently fell
+# off PATH and recipes ran whatever the box had. Two known causes: an untrusted .mise.toml (normal
+# on the very first `make deps`, whose recipe trusts it) and a mise older than .mise.toml's
+# min_version (mise refuses with rc=1, empty stdout — measured). Say so, with mise's own words.
+ifneq ($(filter __MISE_FAILED__,$(MISE_PATHS)),)
+MISE_PATHS := $(filter-out __MISE_FAILED__,$(MISE_PATHS))
+$(warning mise bin-paths FAILED, so the pinned tools are NOT on PATH: $(shell cd '$(CURDIR)' && '$(MISE_BIN)' bin-paths 2>&1 >/dev/null | head -1))
+$(warning   fix: 'mise self-update' if it asks for a newer version, then 'make deps' (which also trusts .mise.toml))
+endif
+# macOS (B735): Apple's /usr/bin/make is GNU Make 3.81, which has no .SHELLFLAGS (3.82+), so every
+# recipe below would silently lose -eu -o pipefail. Refuse it. And the scripts are GNU-flavoured, so
+# on Darwin Homebrew's GNU tools go on PATH — AFTER the pinned mise tools, BEFORE the system ones.
+# Test the FEATURE, not the version string: `oneshell` arrived in 3.82 together with .SHELLFLAGS
+# (a string sort would also refuse a future make 10.x).
+ifeq ($(filter oneshell,$(.FEATURES)),)
+$(error GNU make >= 3.82 is required; this is $(MAKE_VERSION). On macOS: brew install make, then use gmake)
+endif
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+BREW_PREFIX := $(or $(HOMEBREW_PREFIX),$(if $(wildcard /opt/homebrew/bin/brew),/opt/homebrew,/usr/local))
+# foreach joins with SPACES — strip them, or every entry after the first is invalid (measured).
+DARWIN_GNU_PATH := $(subst $(SPACE),,$(foreach f,coreutils gnu-sed findutils grep gnu-tar gawk make,$(BREW_PREFIX)/opt/$(f)/libexec/gnubin:))
+# /usr/bin/openssl on macOS is LibreSSL (no -ext, a different x509 text dump, s_server differences);
+# Homebrew's openssl@3 is KEG-ONLY, so it is never on PATH unless put there.
+DARWIN_GNU_PATH := $(DARWIN_GNU_PATH)$(BREW_PREFIX)/opt/openssl@3/bin:
+# The getent shim os.sh appends, so a recipe/test that does not source os.sh sees the same tools.
+DARWIN_COMPAT := :$(CURDIR)/scripts/compat/darwin
+# Homebrew's bin goes AFTER ~/.local/bin, so a Homebrew tkn/argocd never shadows the pinned ones.
+DARWIN_BREW_BIN := $(BREW_PREFIX)/bin:
+endif
+export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$(DARWIN_GNU_PATH)$(if $(HOME),$(HOME)/.local/bin:,)$(DARWIN_BREW_BIN)$(PATH)$(DARWIN_COMPAT)
 
 # ⚠️ THE INCLUDE ORDER BELOW IS REVERSED RELATIVE TO load_env's, AND THAT IS THE POINT.
 # `load_env` SOURCES the files, so the LAST one read wins (.env.example → .env → .env.state →
@@ -339,7 +369,7 @@ deps-prereqs: ## Install non-mise CLIs + OS packages (git, tkn, argocd, podman, 
 	@$(SCRIPTS)/00-install-prereqs.sh
 
 .PHONY: install-vcf-clis install-argocd-vcf install-vcf-cli install-vcf-plugins
-install-vcf-clis: ## Install the Broadcom VCF/VKS lab CLIs (argocd-vcf + vcf + plugins), OS/arch-aware, sudo-free. Licensed artifacts from a folder: VCF_CLI_SRC_DIR=<dir>. Lab-only — not needed for local KinD.
+install-vcf-clis: ## Install the Broadcom VCF/VKS lab CLIs (argocd-vcf + vcf + plugins; argocd-vcf is amd64-only, skipped with a warning on arm64), OS/arch-aware, sudo-free. Licensed artifacts from a folder: VCF_CLI_SRC_DIR=<dir>. Lab-only — not needed for local KinD.
 	@$(SCRIPTS)/01-install-vcf-clis.sh all
 install-argocd-vcf: ## Install ONLY the VCF-flavored argocd CLI (ARGOCD_VCF_VERSION) for a real lab's ArgoCD
 	@$(SCRIPTS)/01-install-vcf-clis.sh argocd
@@ -1404,7 +1434,7 @@ check-pod-inject-label: ## Gate: every workload we ship declines sidecar injecti
 	@$(SCRIPTS)/check-pod-inject-label.sh
 
 .PHONY: check-toolchain-alignment
-check-toolchain-alignment: ## Fail if the kubectl/go pins in .mise.toml disagree with .env.example / images.txt
+check-toolchain-alignment: ## Fail if the kubectl pins (.mise.toml vs .env.example) or the two crane pins in .mise.toml disagree
 # B198, REDESIGNED 2026-08-21 after its idea round refuted BOTH the row and the fix it prescribed:
 #  - the row said this printed `go aligned ()` and EXITED 0. Measured: it did not. `.SHELLFLAGS` is
 #    `-eu -o pipefail -c`, so a non-matching grep exits 1 and killed the recipe AT THE ASSIGNMENT
@@ -1427,6 +1457,15 @@ check-toolchain-alignment: ## Fail if the kubectl/go pins in .mise.toml disagree
 	fi; \
 	echo "check-toolchain-alignment: kubectl aligned ($$mise_v)"
 	@echo "check-toolchain-alignment: go arm retired (see check-image-alignment)"
+	@lin=$$(grep -E '^crane[[:space:]]*=' .mise.toml | head -1 | sed -nE 's/.*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' || true); \
+	mac=$$(grep -E '^"go:github.com/google/go-containerregistry/cmd/crane"[[:space:]]*=' .mise.toml | head -1 | sed -nE 's/.*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' || true); \
+	[ -n "$$lin" ] || { echo "ERROR: could not read the linux crane pin from .mise.toml - the extractor is blind, not the pin absent."; exit 1; }; \
+	if [ "$$lin" != "$$mac" ]; then \
+	  echo "ERROR: crane version drift (BLOCKING) - .mise.toml linux crane=$$lin vs macOS go:…/cmd/crane=$${mac:-<none>}."; \
+	  echo "       Same tool, two pins: release binary (linux) + source build (macOS, B735). Align them."; \
+	  exit 1; \
+	fi; \
+	echo "check-toolchain-alignment: crane aligned ($$lin, linux release + macOS source build)"
 
 # GO ARM RETIRED 2026-08-23. It compared .mise.toml go against images/images.txt. That mise pin is
 # GONE: go is not installed on the host any more, because app-test, check-ui-contract, trivy-fs and

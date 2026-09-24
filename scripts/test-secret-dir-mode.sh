@@ -66,6 +66,12 @@ chk 'a fake $HOME (shell-init)'             "$FAKEHOME"                    SKIP 
 chk 'a fake ~/.kube (KUBECONFIG)'           "$FAKEHOME/.kube"              SKIP   755
 chk 'a mktemp dir (lib/tls.sh)'             "$T/scratch"                   SKIP   700
 chk 'traversal OUT of secrets/'             "$REPO/secrets/../../fakehome2" SKIP  755
+# A repo reached through a SYMLINK (macOS /var -> /private/var; a Linux ~/src -> /data/src): the
+# secrets path is resolved physically, so REPO_ROOT must be too, or secrets/ is silently left open.
+mkdir -p "$T/real/repo2"; ln -s "$T/real" "$T/link"
+REPO_ROOT="$T/link/repo2"
+chk 'secrets/ in a repo reached through a SYMLINK' "$T/link/repo2/secrets" HARDEN 775
+REPO_ROOT="$REPO"
 
 # REPO_ROOT unset must CREATE and never harden: the patterns would degrade to `/secrets/`, which
 # could match a real system path. Refusing to guess is the correct behaviour.

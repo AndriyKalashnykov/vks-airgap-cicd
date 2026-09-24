@@ -74,6 +74,7 @@ for name in $NAMES; do
   [ -f "$tarball" ] || die "'${name}' is listed in images/selfbuilt.tsv but the bundle carries no ${tarball}.
   Re-cut the bundle on the internet box: make selfbuilt-build && make bundle"
 
+  assert_tarball_platform "$tarball"   # B736
   log_info "[${name}] pushing the carried image -> ${ref}"
   mirror_retry "${MIRROR_RETRIES:-5}" run crane push "$tarball" "$ref" "${CRANE_INSECURE[@]}"
   pushed="${pushed} ${name}"

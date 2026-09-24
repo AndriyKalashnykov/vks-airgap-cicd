@@ -34,6 +34,16 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # --- (0) OS detection + supported-OS gate (self-contained; runs before the clone) ---
 os_gate() {
   local id="" ver=""
+  # macOS (B735): Homebrew, never sudo (brew refuses root). This script runs under Apple's bash 3.2
+  # (`curl | bash`), so everything here stays 3.2-safe; the GNU tools it installs are what the repo needs.
+  if [ "$(uname -s)" = Darwin ]; then
+    have brew || die "Homebrew is required on macOS: https://brew.sh (then re-run this)"
+    PKG=brew; SUDO=""; MAKE_CMD=gmake
+    BASE_PKGS="git curl make bash coreutils gnu-sed findutils grep gawk gnu-tar flock gettext openssl@3 python"
+    ok "Detected macOS $(sw_vers -productVersion 2>/dev/null) — supported (brew)"
+    return 0
+  fi
+  # shellcheck source=/dev/null  # read at runtime; absent on macOS
   if [ -r /etc/os-release ]; then . /etc/os-release; id="${ID:-}"; ver="${VERSION_ID:-}"; fi
   case "$id" in
     ubuntu|debian) PKG=apt-get; ok "Detected ${id} ${ver} — supported (apt)";;
@@ -45,6 +55,7 @@ os_gate() {
   # calls os_gate as a standalone command under `set -e`, that would exit the script right
   # after the gate. Use an if so os_gate always returns 0.
   SUDO=""; if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; fi
+  MAKE_CMD="make"
 }
 
 pkg_refresh() {
@@ -57,6 +68,7 @@ pkg_install() {  # pkg_install <pkg...>
   case "$PKG" in
     apt-get) DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y --no-install-recommends "$@" >/dev/null 2>&1;;
     tdnf)    $SUDO tdnf install -y "$@" >/dev/null 2>&1;;
+    brew)    HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_UPGRADE=1 brew install "$@" >/dev/null;;   # errors stay visible
   esac
 }
 
@@ -65,6 +77,15 @@ ensure_base() {
   say "Base packages"
   pkg_refresh
   local p missing=()
+  if [ "$PKG" = brew ]; then   # formula names != command names here, and brew install is idempotent
+    say "installing (brew, skips what is present): $BASE_PKGS"
+    # shellcheck disable=SC2086
+    pkg_install $BASE_PKGS || die "brew install failed: $BASE_PKGS"
+    for p in gmake gsed gtimeout; do
+      if have "$p"; then ok "$p present"; else die "$p missing after brew install"; fi
+    done
+    return 0
+  fi
   for p in $BASE_PKGS; do
     # the command name matches the pkg name for this set (git/curl/make/tar); ca-certificates has no cmd
     case "$p" in ca-certificates) if [ -d /etc/ssl/certs ]; then ok "ca-certificates present"; continue; fi;; esac
@@ -109,7 +130,7 @@ ensure_repo() {
 # --- (4) make deps (mise install + scripts/00-install-prereqs.sh) ---
 run_deps() {
   say "make deps (toolchain + rootless-podman prereqs)"
-  ( cd "$DIR" && make deps ) || die "'make deps' failed"
+  ( cd "$DIR" && "$MAKE_CMD" deps ) || die "'$MAKE_CMD deps' failed"
   ok "make deps completed"
 }
 
@@ -117,7 +138,7 @@ run_deps() {
 verify_report() {
   say "Toolchain verification"
   export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-  local tools="git mise kubectl helm kustomize jq yq crane tkn argocd make" t v miss=0
+  local tools="git mise kubectl helm kustomize jq yq crane tkn argocd ${MAKE_CMD:-make}" t v miss=0
   printf '  %-10s %-8s %s\n' "TOOL" "STATUS" "VERSION"
   printf '  %-10s %-8s %s\n' "----" "------" "-------"
   for t in $tools; do
@@ -149,7 +170,7 @@ main() {
   ensure_repo
   run_deps
   verify_report
-  say "Done. Next:  cd $DIR  &&  see the README 'Quick Start' / 'Run against a real VKS lab'."
+  say "Done. Next:  cd $DIR  &&  use '${MAKE_CMD:-make}' for every make command  &&  see the README 'Quick Start' / 'Run against a real VKS lab'."
 }
 
 main "$@"

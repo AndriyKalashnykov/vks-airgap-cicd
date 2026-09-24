@@ -84,6 +84,53 @@ ca_bundle_with_system() {
   cat "$ca" >> "$out"
 }
 
+# crane_trust_env <bundle>
+#   Make crane (go-containerregistry) trust <bundle> in the CURRENT shell: exports SSL_CERT_FILE,
+#   and on macOS also GODEBUG=x509sslcertoverrideplatform=1. Call it in a subshell to scope it.
+#
+# WHY macOS NEEDS MORE (B735). On darwin Go hands TLS verification to Apple's verifier, which
+# IGNORES SSL_CERT_FILE and rejects any leaf valid for more than 825 days even under a trusted CA.
+# Harbor's leaf is 3650 days. MEASURED on the Mac: `security verify-cert` passes an 800-day leaf and
+# fails the real Harbor leaf; the release crane (go1.26) cannot push at all. Go 1.27 added that
+# GODEBUG, which makes a set SSL_CERT_FILE select Go's own verifier. .mise.toml builds crane from
+# source with Go 1.27 on macOS for exactly this; the check below refuses an older build, whose
+# failure would otherwise surface later as an x509 error that reads like a lab problem.
+# SIDE EFFECT, by design: every Go >= 1.27 program started from the calling shell then verifies
+# with Go's verifier against the bundle (system cert.pem + our CA) instead of the macOS keychain.
+# A proxy CA that exists ONLY in the keychain is not in that bundle.
+crane_trust_env() {
+  [ $# -eq 1 ] || { echo "crane_trust_env: needs 1 arg (<bundle>), got $#" >&2; return 2; }
+  [ -s "$1" ] || { echo "crane_trust_env: bundle '$1' missing or empty" >&2; return 2; }
+  export SSL_CERT_FILE="$1"
+  [ "$(uname -s)" = Darwin ] || return 0
+  case ",${GODEBUG:-}," in
+    *,x509sslcertoverrideplatform=1,*) ;;
+    *) export GODEBUG="${GODEBUG:+${GODEBUG},}x509sslcertoverrideplatform=1" ;;
+  esac
+  local bin gv minor
+  # Check the crane that WILL RUN — the first on PATH — not whatever mise would pick: run outside
+  # make, an earlier Homebrew/release crane can shadow mise's. Only a mise SHIM (a link to the mise
+  # binary itself) is resolved through mise, because `go version` cannot read a shim.
+  bin="$(command -v crane || true)"
+  [ -n "$bin" ] || return 0            # no crane: the caller reports that in its own terms
+  case "$(basename "$(readlink -f "$bin" 2>/dev/null || printf '%s' "$bin")")" in
+    mise) bin="$(mise which crane 2>/dev/null || true)" ;;
+  esac
+  gv="$(go version "$bin" 2>/dev/null || true)"
+  gv="${gv##*: go}"; gv="${gv%% *}"
+  minor="$(printf '%s' "$gv" | sed -nE 's/^1\.([0-9]+).*/\1/p')"
+  if [ -z "$minor" ]; then
+    echo "crane_trust_env: cannot read the Go version of ${bin} (is go on PATH? run 'make deps')" >&2
+    echo "  crane on macOS must be built with Go >= 1.27, or it cannot verify Harbor's certificate" >&2
+    return 1
+  fi
+  if [ "$minor" -lt 27 ]; then
+    echo "crane_trust_env: ${bin} was built with go${gv}; macOS needs a Go >= 1.27 build." >&2
+    echo "  Fix: make deps   (installs crane from source with the pinned Go, per .mise.toml)" >&2
+    return 1
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # ca_verifies_endpoint <host> <port> <ca-file>
 #   0 = the CA verifies what the endpoint presents

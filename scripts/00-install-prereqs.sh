@@ -85,7 +85,15 @@ esac
 # on `tr` alone (state.sh, mirror.sh, tls.sh, istio.sh, os.sh), and 11-bundle.sh's integrity check
 # needs sha256sum. A box provisioned without the engine packages passed every earlier check and then
 # printed `tr: command not found` from lib/state.sh on the operator's very first command.
-pkg_install ca-certificates coreutils curl file git jq tar gzip unzip findutils gawk openssl "$GETTEXT_PKG"
+if [ "$(pkg_mgr)" = brew ]; then
+  # macOS (B735): curl, file, unzip, tar and gzip come with macOS; these are the GNU tools the
+  # scripts assume (lib/os.sh puts them first on PATH), plus flock (with_registry_lock) and bash >= 4.
+  # openssl@3: macOS's /usr/bin/openssl is LibreSSL, not OpenSSL (keg-only; os.sh/Makefile add its bin).
+  # python: /usr/bin/python3 is 3.9; check-secrets-untracked.sh needs >= 3.11 (tomllib).
+  pkg_install bash coreutils gnu-sed findutils grep gawk gnu-tar make flock gettext jq git openssl@3 python
+else
+  pkg_install ca-certificates coreutils curl file git jq tar gzip unzip findutils gawk openssl "$GETTEXT_PKG"
+fi
 
 # MEASURED on a fresh Photon 5.0 VM 2026-08-11, off the broken guest's own disk:
 #     MESSAGE=OpenSSL version mismatch. Built against 30000080, you have 30500070
@@ -140,7 +148,23 @@ pkg_install $(engine_packages "$ENGINE_CHOICE" "$(pkg_mgr)") \
 # Photon ships only a COMMENTED unqualified-search-registries example, so a `podman build` of a
 # short-named base fails "short-name … did not resolve". Match only an ACTIVE (uncommented) setting —
 # a loose grep matches the commented example and wrongly concludes it is already configured.
-if [ "$ENGINE_CHOICE" = podman ] && have podman; then
+# macOS (B735): podman and docker run in a Linux VM. The Linux-only host setup below (registries.conf,
+# subuid/subgid, userns probes) does not apply; instead make sure the VM exists and runs.
+if [ "$(pkg_mgr)" = brew ]; then
+  if [ "$ENGINE_CHOICE" = podman ] && have podman; then
+    podman machine inspect >/dev/null 2>&1 || podman machine init \
+      || log_warn "podman machine init failed — run it by hand, then 'podman machine start'"
+    if ! podman info >/dev/null 2>&1; then
+      podman machine start || log_warn "podman machine start failed — run 'podman machine start'"
+    fi
+  elif [ "$ENGINE_CHOICE" = docker ] && have colima; then
+    # Homebrew's buildx is a docker plugin docker cannot find on its own (measured, golang-web).
+    mkdir -p "$HOME/.docker/cli-plugins"
+    ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" "$HOME/.docker/cli-plugins/docker-buildx"
+    docker info >/dev/null 2>&1 || colima start || log_warn "colima start failed — run 'colima start'"   # docker-ok: macOS only, and only when the operator CHOSE CONTAINER_ENGINE=docker (Colima); the default podman path never reaches it.
+  fi
+fi
+if [ "$ENGINE_CHOICE" = podman ] && have podman && [ "$(pkg_mgr)" != brew ]; then
   if ! grep -qsE '^[[:space:]]*unqualified-search-registries' /etc/containers/registries.conf 2>/dev/null; then
     log_info "configuring podman unqualified-search-registries = [\"docker.io\"]"
     printf 'unqualified-search-registries = ["docker.io"]\n' \
@@ -337,6 +361,11 @@ case "$arch" in
   aarch64|arm64) go_arch=arm64; uname_arch=aarch64 ;;
   *) die "unsupported CPU arch '$arch'" ;;
 esac
+# Download OS token (B735): Go-style for argocd/kubectl, and tkn's own (Linux_<arch> | Darwin_all).
+case "$(uname -s)" in
+  Darwin) go_os=darwin; tkn_asset="Darwin_all" ;;
+  *)      go_os=linux;  tkn_asset="Linux_${uname_arch}" ;;
+esac
 
 # The transfer cap for the three LARGE pinned-CLI downloads. Own knob, own default — see the note
 # in install_tkn for why it cannot be HTTP_GET_MAX_TIME_SECONDS.
@@ -346,7 +375,7 @@ install_tkn() {
   have tkn && { log_info "tkn present: $(tkn version --client 2>/dev/null | head -1)"; return 0; }
   local v="${TKN_VERSION:?TKN_VERSION unset}" url tmp
   # tkn assets use uname -m arch names (x86_64/aarch64), NOT Go arch (amd64/arm64).
-  url="https://github.com/tektoncd/cli/releases/download/v${v}/tkn_${v}_Linux_${uname_arch}.tar.gz"
+  url="https://github.com/tektoncd/cli/releases/download/v${v}/tkn_${v}_${tkn_asset}.tar.gz"
   tmp="$(mktemp -d)"
   log_info "downloading tkn ${v}"
   # http_get_retry (lib/os.sh, sourced at the top of this file) — NOT a hand-rolled curl. It already
@@ -376,7 +405,7 @@ install_tkn() {
 install_argocd() {
   have argocd && { log_info "argocd present: $(argocd version --client --short 2>/dev/null | head -1)"; return 0; }
   local v="${ARGOCD_CLI_VERSION:?ARGOCD_CLI_VERSION unset}" url
-  url="https://github.com/argoproj/argo-cd/releases/download/${v}/argocd-linux-${go_arch}"
+  url="https://github.com/argoproj/argo-cd/releases/download/${v}/argocd-${go_os}-${go_arch}"
   log_info "downloading argocd ${v}"
   # 238 MiB — see the max-time note above; this is the download that makes the override mandatory.
   HTTP_GET_MAX_TIME_SECONDS="$(prereq_dl_max_time)" http_get_retry "$url" "${BIN_DIR}/argocd"
@@ -392,7 +421,7 @@ install_kubectl() {
   local v="${KUBECTL_VERSION:?KUBECTL_VERSION unset}"
   log_info "kubectl not found — downloading ${v}"
   HTTP_GET_MAX_TIME_SECONDS="$(prereq_dl_max_time)" http_get_retry \
-    "https://dl.k8s.io/release/${v}/bin/linux/${go_arch}/kubectl" "${BIN_DIR}/kubectl"
+    "https://dl.k8s.io/release/${v}/bin/${go_os}/${go_arch}/kubectl" "${BIN_DIR}/kubectl"
   chmod 0755 "${BIN_DIR}/kubectl"
 }
 

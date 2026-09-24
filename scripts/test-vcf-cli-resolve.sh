@@ -144,6 +144,7 @@ tar -C "$d" -czf "${src}/VCF-Consumption-CLI-Linux_AMD64-${VV}-portal.tar.gz" "v
 rm -f "$d/vcf-cli-linux_amd64"
 mkfake "$d/vcf-cli-linux_arm64" "VCF-BOTH-ARM64"
 tar -C "$d" -czf "${src}/VCF-Consumption-CLI-Linux_ARM64-${VV}-portal.tar.gz" "vcf-cli-linux_arm64"
+# shellcheck disable=SC2031  # os.sh assigns PATH on macOS only; this per-command PATH is intended
 if PATH="$_fakebin:$PATH" run_installer vcf "$src" "$bin" "$err"; then
   eq "on a simulated arm64 box, installs the ARM64 CLI (not the AMD64 one that sorts first)" \
      "$("$bin/vcf" 2>/dev/null || true)" "VCF-BOTH-ARM64"

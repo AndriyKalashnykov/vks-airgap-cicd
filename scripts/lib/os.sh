@@ -30,6 +30,40 @@ if [ -z "${REPO_ROOT:-}" ]; then
 fi
 export REPO_ROOT
 
+# macOS jump box (B735). The scripts are GNU-flavoured (timeout, sed -i, stat -c, mapfile, ...), so on
+# Darwin Homebrew's GNU tools go FIRST on PATH — only when a caller (make) has not already put them
+# there, so a test's stub dirs keep their order — and a `getent` shim is APPENDED, so it is used only
+# where no real or stub getent exists. Linux: this block does not run.
+if [ "$(uname -s)" = Darwin ]; then
+  if [ -n "${HOMEBREW_PREFIX:-}" ]; then _brew="$HOMEBREW_PREFIX"
+  elif [ -x /opt/homebrew/bin/brew ]; then _brew=/opt/homebrew
+  else _brew=/usr/local; fi
+  for _d in "$_brew/opt/make/libexec/gnubin" "$_brew/opt/gawk/libexec/gnubin" \
+            "$_brew/opt/gnu-tar/libexec/gnubin" "$_brew/opt/grep/libexec/gnubin" \
+            "$_brew/opt/findutils/libexec/gnubin" "$_brew/opt/gnu-sed/libexec/gnubin" \
+            "$_brew/opt/coreutils/libexec/gnubin"; do
+    case ":$PATH:" in *":$_d:"*) ;; *) if [ -d "$_d" ]; then PATH="$_d:$PATH"; fi ;; esac
+  done
+  # openssl@3 (keg-only; /usr/bin/openssl is LibreSSL) replaces the SYSTEM openssl only — never a
+  # caller's, e.g. a test's stub dir that is already ahead on PATH.
+  case "$(command -v openssl 2>/dev/null)" in
+    ''|/usr/bin/openssl) if [ -d "$_brew/opt/openssl@3/bin" ]; then PATH="$_brew/opt/openssl@3/bin:$PATH"; fi ;;
+  esac
+  # Homebrew's bin (bash 5, flock, envsubst, gmake) and the getent shim are APPENDED: they must never
+  # shadow the pinned tools in ~/.local/bin or a test's stub dirs.
+  case ":$PATH:" in *":$_brew/bin:"*) ;; *) PATH="$PATH:$_brew/bin" ;; esac
+  case ":$PATH:" in *":$REPO_ROOT/scripts/compat/darwin:"*) ;; *) PATH="$PATH:$REPO_ROOT/scripts/compat/darwin" ;; esac
+  export PATH
+  if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] || ! sed --version >/dev/null 2>&1 || ! command -v timeout >/dev/null 2>&1; then
+    printf '%s\n' "ERROR: macOS needs Homebrew's bash and GNU tools for these scripts (running bash ${BASH_VERSION:-?})." \
+      "  brew install bash coreutils gnu-sed findutils grep gawk gnu-tar make flock gettext" \
+      "  then run the targets with gmake (or run 'gmake shell-init' so plain 'make' is GNU make)." >&2
+    # exit, not return: a sourcing script without `set -e` would carry on with no os.sh functions.
+    exit 1
+  fi
+  unset _brew _d
+fi
+
 
 # ---------------------------------------------------------------------------
 # with_registry_lock — serialize every registry-MUTATING operation IN THIS REPOSITORY.
@@ -196,8 +230,11 @@ die()       { _log FATAL "$*"; exit 1; }
 # ---------------------------------------------------------------------------
 # Returns the /etc/os-release ID: ubuntu | photon | debian | rhel | ...
 os_id() {
-  if [ -r /etc/os-release ]; then
+  if [ "$(uname -s)" = Darwin ]; then
+    printf 'macos'
+  elif [ -r /etc/os-release ]; then
     # shellcheck disable=SC1091
+    # shellcheck source=/dev/null  # absent on macOS, where this branch never runs
     . /etc/os-release
     printf '%s' "${ID:-unknown}"
   else
@@ -210,6 +247,7 @@ pkg_mgr() {
   case "$(os_id)" in
     ubuntu|debian) printf 'apt-get' ;;
     photon)        printf 'tdnf' ;;
+    macos)         printf 'brew' ;;
     rhel|centos|fedora|rocky|almalinux) printf 'dnf' ;;
     *)             printf '' ;;
   esac
@@ -497,6 +535,8 @@ engine_packages() {
   case "${eng}:${mgr}" in
     podman:apt-get) printf 'podman crun uidmap passt slirp4netns' ;;
     podman:tdnf|podman:dnf) printf 'podman crun' ;;
+    podman:brew) printf 'podman' ;;                       # macOS: runs in a podman machine VM
+    docker:brew) printf 'colima docker docker-buildx' ;;  # macOS: dockerd runs in a Colima VM
     docker:apt-get) printf 'docker.io rootlesskit uidmap dbus-user-session slirp4netns fuse-overlayfs' ;;
     # util-linux is NOT optional on Photon: rootlesskit shells out to `unshare` to build the detached
     # netns, and Photon's base image does not ship it. Without it rootless dockerd dies with
@@ -519,6 +559,7 @@ pkg_install() {
     apt-get) DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y --no-install-recommends "$@" ;;
     tdnf)    $SUDO tdnf install -y "$@" ;;
     dnf)     $SUDO dnf install -y "$@" ;;
+    brew)    HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_UPGRADE=1 brew install "$@" ;;  # never sudo: brew refuses root
   esac
 }
 
@@ -1516,8 +1557,12 @@ ensure_secret_dir() {
   # An unset REPO_ROOT would make the patterns below `/secrets/`, which could match a real
   # system path. Refuse to guess: create only.
   [ -n "${REPO_ROOT:-}" ] || return 0
+  # rp is PHYSICAL (pwd -P) and REPO_ROOT is LOGICAL (os.sh uses plain pwd), so a repo reached
+  # through a symlink never matched and was silently left unhardened. MEASURED on macOS, where
+  # mktemp/TMPDIR live under /var -> /private/var. Resolve the root the same way before comparing.
+  local root; root="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P)" || root="$REPO_ROOT"
   case "${rp}/" in
-    "${REPO_ROOT}"/secrets/|"${REPO_ROOT}"/*/secrets/)
+    "${root}"/secrets/|"${root}"/*/secrets/)
       chmod 700 "$rp" || log_warn "ensure_secret_dir: could not harden ${rp} (not the owner?) — leaving its mode as-is" ;;
     *) : ;;
   esac
@@ -2962,4 +3007,17 @@ vks_wait_vip_release() {
   # 98-uninstall-all.sh to render their timeout messages. Not unused — used by the callers.
   VKS_VIP_STILL="${_still:-}"
   return 1
+}
+
+# assert_tarball_platform <tarball> — refuse an image whose config is not linux/${MIRROR_ARCH:-amd64}
+# (B736). Reads the docker/OCI archive's manifest.json -> config blob with tar + jq, so it works on
+# the air-gap box, which has no container engine. Fails CLOSED on anything it cannot read.
+assert_tarball_platform() {
+  local t="$1" want="linux/${MIRROR_ARCH:-amd64}" cfg got
+  [ -s "$t" ] || die "assert_tarball_platform: ${t} is missing or empty"
+  cfg="$(tar -xOf "$t" manifest.json 2>/dev/null | jq -r '.[0].Config // empty' 2>/dev/null || true)"
+  [ -n "$cfg" ] || die "${t}: no manifest.json/Config — refusing to push an image whose platform is unknown"
+  got="$(tar -xOf "$t" "$cfg" 2>/dev/null | jq -r '"\(.os // "")/\(.architecture // "")"' 2>/dev/null || true)"
+  [ "$got" = "$want" ] || die "${t} is ${got:-an unknown platform}, but the guest nodes need ${want} — pushing it would overwrite the tag they pull.
+  Rebuild it on an ${want#linux/} engine (see B736), or set MIRROR_ARCH if the nodes really are ${got#linux/}."
 }

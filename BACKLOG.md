@@ -10302,3 +10302,183 @@ that PR to keep it to one script.
   RED-prove the gate again.
 
 **Done when:** 31 prints no claim its run contradicts, and the gate's class no longer depends on filenames.
+
+## 🔴 B735 — macOS jump box: the Makefile + scripts assume GNU/Linux; port it (Ubuntu + Photon must not regress)
+
+Owner decision 2026-09-23: support a macOS jump box by putting **Homebrew's GNU tools** first on PATH
+(not by rewriting scripts for BSD). kind / bundle / sneakernet stay OUT of scope on macOS for now.
+MEASURED on a rented Mac (macOS 26.6.2, arm64, stock repo `d39938c`):
+
+- `make env-init`, `make help`: work. `make deps`: dies `unsupported OS 'unknown': no known package
+  manager` (`deps-prereqs`); its mise half installs all 15 tools.
+- With `bash coreutils gnu-sed findutils grep gawk gnu-tar` from Homebrew first on PATH:
+  `check-tools` green, `static-check-fast` exit 0 (**not trusted** — see Apple make below),
+  `test-scripts-fast` **141/151**, failing: `test-argocd-addr-verdict`, `test-ca-anchor-validation`,
+  `test-ca-verifies-endpoint`, `test-check-secrets-untracked`, `test-creds-reach-ingress`,
+  `test-creds-show`, `test-fetch-ca-name`, `test-fetch-ca-pin`, `test-registry-lock`,
+  `test-secret-dir-mode`.
+- **crane cannot trust Harbor on macOS.** The pinned crane 0.21.9 is built with go1.26.5; on Darwin Go
+  ignores `SSL_CERT_FILE` before 1.27. MEASURED with a throwaway CA + `openssl s_server`: go1.26.5 →
+  `tls: failed to verify certificate`; go1.27.1 build → same; go1.27.1 build **+
+  `GODEBUG=x509sslcertoverrideplatform=1`** → TLS OK (also for a 3650-day leaf). The Keychain is no
+  substitute: adding a CA needs an on-screen admin, and Apple rejects Harbor's 3650-day leaf (>825 days)
+  even when the CA is trusted (measured with `security verify-cert -r <ca>`). Owner decision: on Darwin,
+  build the SAME pinned crane from source with Go >= 1.27 and set that GODEBUG wherever
+  `SSL_CERT_FILE` is set.
+
+Source-read by two adversary rounds (2026-09-23), to fix:
+
+1. Apple `/usr/bin/make` is GNU Make **3.81**, which has no `.SHELLFLAGS` (added in 3.82): recipes lose
+   `-eu -o pipefail` silently. `$(error)` on MAKE_VERSION < 3.82 naming `brew install make` / `gmake`.
+2. `getent` has no macOS/Homebrew equivalent: `lib/harbor.sh:588` (so `make harbor-reachable` waits
+   forever), `creds.sh:1136,1747`, `70-configure-argocd.sh:445`. One `resolve_host()` helper
+   (`getent`, else `dscacheutil -q host -a name`, same output contract).
+3. bash-4 syntax in ~30 files (`mapfile`, `declare -A`, `${x,,}`): enforce bash >= 4 on Darwin with a
+   fail-fast message; keep bootstrap-jumpbox.sh / 00-install-prereqs.sh / os.sh 3.2-clean.
+4. `pkg_mgr`/`pkg_install`: a `brew` arm with NO sudo; bootstrap-jumpbox.sh has no Darwin arm.
+5. `00-install-prereqs.sh:150-270` (subuid/subgid, `podman system migrate`, `podman unshare`,
+   `/etc/containers/registries.conf`) and `18-engine-check.sh`/`lib/engine.sh` (cgroups, subuid) are
+   Linux-only: on Darwin validate the `podman machine` instead.
+6. Image builds pass no `--platform` (`14-builder-build.sh:111`, `14-selfbuilt-build.sh:240-249`): on an
+   arm64 host they build arm64 and push over the SAME tags the amd64 guest nodes pull → see B736.
+7. `01-install-vcf-clis.sh` refuses Darwin (`:165`, `:178`), hardcodes `Linux_` (`:50-51,101,103`) and
+   `vcf-*-linux_*` (`:187`); the Darwin bundle is `…Darwin_ARM64-9.1.1.0.25662425` /
+   `…PluginBundle-Darwin_ARM64-9.1.1.0.25665404`, while `.env.example` pins 9.1.0.0400 (the lab is 9.1.1).
+8. `flock` absent on macOS and `with_registry_lock` fails OPEN: add the `flock` formula, die without it.
+9. `shell-init` writes `~/.bashrc` for bash (a macOS login bash reads `~/.bash_profile`) and is not
+   idempotent per line, so a gnubin PATH line never reaches existing users.
+10. Docs: `scenario-1.md:733` (`timeout`), `:913` (`sed -i`), `:67` (`getent`) are typed in the
+   operator's shell — portable forms, or gnubin on the interactive PATH as a stated macOS prerequisite.
+11. `make bundle` on a Mac stages darwin binaries (`11-bundle.sh:186-189`): die on Darwin.
+
+**Done when:** a macOS jump box runs scenario-1 §0-§11 (re-run, idempotent, against an existing guest
+cluster) with every block verbatim, AND `make static-check` + `test-scripts` stay green on Ubuntu and
+Photon (the jumpbox harness), AND the Mac run is under GNU make, not Apple's 3.81.
+
+## 🔴 B736 — an arm64 build host overwrites Harbor's amd64 tags; the builds pass no `--platform`
+
+Source-read (vks-adversary, 2026-09-23): `14-builder-build.sh:111` and `14-selfbuilt-build.sh:240-249`
+call `$ENGINE build` without `--platform`; `15-build-push-builder.sh` then crane-pushes to the fixed
+tag (`BUILDER_IMAGE_TAG=0.3.0`), and the selfbuilt skip checks only a LOCAL tarball. On an arm64 box
+(Apple silicon, Graviton, an arm64 Linux jump box) `install-all` would push arm64 images over the tags
+the amd64 guest nodes use — breaking a HEALTHY deployment's next Tekton run, not just the new walk.
+Mirroring is already safe (`lib/mirror.sh:76-84` forces `linux/${MIRROR_ARCH:-amd64}`).
+
+**Fix:** `--platform linux/${BUILD_ARCH:-amd64}` on both builds + a pre-push assertion that the
+image's architecture is the target, `die` otherwise. **Done when:** RED-proven on an arm64 host (the
+assertion refuses an arm64 image) and the Mac's build yields `linux/amd64`.
+
+**Progress 2026-09-24 (branch `feat/macos-vcf-cli`, which carries the whole stack):** items 1-4, 7, 9
+landed earlier on `feat/macos-jumpbox`. Since then, each MEASURED on the rented Mac:
+
+- crane: `.mise.toml` builds crane 0.21.9 from source with Go 1.27.1 on macOS (release binary on
+  Linux); `lib/tls.sh crane_trust_env` sets `GODEBUG=x509sslcertoverrideplatform=1`. Against the live
+  Harbor: SSL_CERT_FILE alone → Apple rejects the leaf ("not standards compliant"); through
+  `crane_trust_env` → TLS OK (NOT_FOUND from Harbor); wrong CA → "unknown authority".
+- item 7: the VCF CLI + plugin bundle install from the Darwin archives (`make install-vcf-clis` on the
+  Mac: vcf v9.1.1.0.25662425 arm64 + 10 plugins; the amd64-only VCF argocd is skipped with a warning).
+- item 5: `engine-check` checks the engine VM on macOS (it reported 2 false PROBLEMs and stopped
+  `install-all` at preflight).
+- scenario-1 Steps 2-7 walked on the Mac against the live lab, every step rc=0 (one SSO login).
+  Harness notes, not product defects: the operator `.env` needed `VKS_AUTH_METHOD=vcf` for Step 3
+  (Step 6 switches it), and the Harbor CA comes from `make harbor-ca-from-cluster` here.
+- B736 (arm64 builds): `--platform linux/$(target_arch)` + a pre-push platform assertion landed; the
+  Mac's podman VM is arm64 and runs amd64 containers via qemu, so builds need `BUILD_EMULATE=1`.
+
+Also landed 2026-09-24: item 11 (`make bundle` refuses on macOS), item 10 (macOS block in
+common-bootstrap.md, gated in walk-doc to `WALK_OS=macos`), item 8 was already done (flock is in
+the brew set), and engine_build_isolation no longer forces chroot on macOS (the VM is cgroup v2).
+
+Still open, each recorded by an implementation-review round (2026-09-24):
+
+- **Engine-level registry trust on macOS.** Measured on podman 6.1.2 (a REMOTE client): `login`
+  and `build` take `--cert-dir`, `pull`/`push` do not. A docker VM (colima, Docker Desktop) never
+  reads this Mac's `/etc/docker/certs.d`. So `engine-trust-check` and `trust-harbor` now REFUSE on
+  macOS. Pushes to Harbor go through crane, which works; an engine pull from Harbor on a Mac is
+  unconfigured. Fix = install the CA inside the VM (`podman machine ssh` into
+  `/etc/containers/certs.d/<host>/`), with its own test.
+- **argocd on Apple Silicon.** The VCF argocd ships darwin-amd64 only, and `all` skips it on arm64.
+  Rosetta 2 could run it (`arch -x86_64 /usr/bin/true` probes it). Not done: Rosetta may be absent.
+- **The brew package list is written three times** (bootstrap-jumpbox.sh `BASE_PKGS`,
+  common-bootstrap.md, lib/os.sh's error). Nothing checks they agree.
+- **`vcf version` is now fatal after install.** Measured working on the Mac; a Linux jumpbox leg
+  with the VCF archives mounted has not been re-run since.
+- `install-all` + `verify` from the Mac: **DONE 2026-09-24** — rc=0 in 25 min + `verify` rc=0 for all
+  six apps, with `BUILD_EMULATE=1` and Rosetta enabled for the podman machine (QEMU aborted the .NET
+  builder; engine-check now requires Rosetta when a .NET app is enrolled).
+- **walk-doc on a macOS row runs `make` literally**, i.e. Apple's 3.81, which the Makefile refuses; it
+  does not translate to `gmake`. And an unset `WALK_OS` falls through to the Linux blocks (walkbox.sh
+  always sets it, so only hand runs). A macOS walk row needs both before it can be automated.
+
+## 🟡 B738 — `.env` carries every pin from `.env.example`, so a version bump never reaches an existing operator
+
+`make env-init` copies `.env.example` → `.env` whole, and `.env` outranks `.env.example` in
+`load_env`. So a pin bumped later in `.env.example` is invisible to anyone who ran `env-init` before
+the bump. MEASURED 2026-09-24: after #1282 moved `VCF_CLI_VERSION` / `VCF_PLUGINS_VERSION` to 9.1.1,
+the lab host's `.env` still pinned `9.1.0.0400.*`, and `make install-vcf-clis` on the Mac looked for
+`…Darwin_ARM64-9.1.0.0400.25509669.tar.gz`. Of the `*_VERSION`/`*_TAG` keys in that `.env`, 3 differ
+from `origin/main`'s `.env.example`: the two VCF pins and `BUILDER_IMAGE_TAG` (commented in
+`.env.example`).
+
+**Fix, not yet designed:** either `env-init` writes only operator-supplied keys (and pins stay in
+`.env.example`), or a check (`env-check`?) warns when a `.env` pin differs from `.env.example`'s.
+Design review before choosing: some operators pin deliberately.
+
+**Done when:** a pin bump in `.env.example` reaches an operator who ran `env-init` before it, or they
+are told it did not.
+
+## 🟡 B737 — the handoff says PAUSED, but scenario-1 was walked on the 2026-09-17 cut and is RUNNING
+
+MEASURED 2026-09-23: `secrets/cicd-gc3.kubeconfig` → cicd-gc3 (1 CP + 2 workers, v1.36.2, age 6d),
+namespaces ci/gitea/tekton/istio/headlamp + all six apps Running; `.env.state` (Sep 17 15:35) holds
+`GITEA_LB_IP=192.168.101.135`, `INGRESS_LB_IP=192.168.101.136`. None of it is recorded in the handoff,
+which still says "PAUSED for a fresh lab cut … Not contacted". Also: cicd-gc3's control plane is at
+**102% memory** (`kubectl top nodes`), and `.env` still pins `VKS_CLUSTERCLASS=builtin-generic-v3.6.0`
+while the lab runs VKS 3.7.1.
+
+**The 102% is NOT pressure — MEASURED 2026-09-24, reviewed by `vks-adversary`:**
+
+- `kubectl top node` divides by ALLOCATABLE (`--help`: "Print node resources based on Capacity
+  instead of Allocatable(default)"). CP: capacity 3910Mi, allocatable 2833Mi (systemReserved 977Mi),
+  working set 3011Mi → 106% of allocatable, **76%** with `--show-capacity`.
+- 0 kernel OOM kills in the node journal across ALL 7 boots since creation (2026-09-17 → today;
+  kernel log complete per boot — one `Linux version` + `Memory:` line each; the grep
+  positive-controlled on a planted line). 0 kubelet evictions/MemoryPressure lines. cadvisor
+  `container_oom_events_total` 0 of 72 series, kubepods `container_memory_failcnt` 0.
+- Control: `lab-gc1` (same `best-effort-small`, 32 pods vs 68, 73 CRDs vs 89) reads 104%, and both
+  CPs carry ~2.47Gi of pod working set — the CI/CD workload does not run on the CP.
+- The margin that matters: kubepods cgroup limit **2933Mi** (= capacity − systemReserved), usage
+  2828Mi of which **1177Mi is reclaimable cache**, rss 1608Mi, mapped files 419Mi. Roughly 0.9–1.3Gi
+  of process growth before a cgroup OOM; BestEffort pods (vsphere-csi-controller, kapp-controller,
+  secretgen) would die first, the static apiserver/etcd last.
+- Every CP container restart is `lastState Unknown exit=255` at a lab restart, not an OOM.
+- apiserver log: 50 "Timeout or abort while handling" lines, ALL on watches of kapp-controller's
+  aggregated `data.packaging.carvel.dev` API (25 packages + 25 packagemetadatas), every 30 min —
+  the aggregated-API watch timeout, not memory. etcd: 0 "took too long".
+
+**Sources (research agent, 2026-09-24; source-read at kubectl v0.34.0 / kubernetes v1.34.0 /
+metrics-server v0.8.0 / cadvisor v0.52.1 — the 1.36 builds were not re-read):** kubectl
+`pkg/cmd/top/top_node.go:198-202` uses `Allocatable` unless `--show-capacity`, and
+`pkg/metricsutil/metrics_printer.go:234-239` has no upper clamp; the numerator is the ROOT cgroup
+working set (`pkg/kubelet/server/stats/summary.go:79,108`), so system daemons count against a
+denominator that excludes them. Eviction uses capacity − workingSet
+(`pkg/kubelet/eviction/helpers_others.go:27-34`). The kubepods limit is capacity − systemReserved −
+kubeReserved, eviction NOT subtracted (`pkg/kubelet/cm/node_container_manager_linux.go:252-269`) —
+matching the measured 2933Mi. The 977Mi systemReserved is exactly 25% of capacity; its VKS source
+is NOT established. Broadcom's 9.1 "Using VM Classes with VKS Clusters" (a genuine `/9-1/` page,
+HTTP 200): *"If you cannot use the guaranteed VM class type for all production nodes, at a minimum
+use guaranteed for the control plane nodes"* — a statement about RESERVATION, not size; no page
+found requires a CP of ≥ 8Gi. So for this LAB, `best-effort-small` is a documented non-production
+choice, not a defect.
+
+**Decision:** no live resize (a 1-CP rollout has a window where etcd has 2 members and needs both).
+If wanted later: `spec.topology.controlPlane.variables.overrides: [{name: vmClass, value:
+best-effort-medium}]` is accepted by `builtin-generic-v3.7.0` (vmClass scopes
+cluster,controlPlane,workers); `--dry-run=server` first, quiet window, watch `EtcdClusterHealthy`.
+Repo: an optional `VKS_CP_VM_CLASS` defaulting to `${VKS_VM_CLASS}` (a no-op unless set — a
+`best-effort-medium` default would break a tenant namespace that does not bind that class; also
+add it to 25-vks-cluster-create.sh's export loop, `check-cluster-template-vars`, and its
+`vm class … not found` mapping).
+
+**Done when:** the handoff records the walk (done 2026-09-24), and — if `VKS_CP_VM_CLASS` ships —
+it is RED-proven that the default renders the same class as today.

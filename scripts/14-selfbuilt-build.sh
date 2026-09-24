@@ -48,6 +48,7 @@ fi
 
 require_cmd git "install git"
 ENGINE="$(container_engine)"
+_arch_checked=0   # B736: checked lazily, right before the first real build — the skip path needs no engine
 OUT_DIR="${BUNDLE_DIR}/selfbuilt"
 mkdir -p "$OUT_DIR"
 LOCK="${OUT_DIR}/selfbuilt.lock"
@@ -237,7 +238,8 @@ for name in $NAMES; do
     log_warn "cgroup v1 detected — building with BUILDAH_ISOLATION=${_iso}: rootless podman cannot"
     log_warn "  create a container cgroup here. Weaker isolation, bounded — our Dockerfile, our base."
   fi
-  build_args=(build -f "${src}/${dfile}" -t "$local_ref")
+  if [ "$_arch_checked" = 0 ]; then require_build_arch "$ENGINE"; _arch_checked=1; fi
+  build_args=(build --platform "linux/$(target_arch)" -f "${src}/${dfile}" -t "$local_ref")
   [ -n "$target" ] && build_args+=(--target "$target")
   build_args+=("$src")
 
@@ -254,6 +256,7 @@ for name in $NAMES; do
   # 14-builder-build.sh:124.)
   rm -f "$tarball"
   run "$ENGINE" save -o "$tarball" "$local_ref"
+  assert_tarball_platform "$tarball"
 
   # THE REPRODUCIBILITY ANCHOR. The pin is the git tag; the anchor is what that tag PRODUCED here.
   #

@@ -30,10 +30,14 @@ harbor_setup() {
     HARBOR_TLS_VERIFY="false"; log_warn "HARBOR_INSECURE=1 — skipping TLS verification (demo only)"
   elif [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "$HARBOR_CA_FILE" ]; then
     # crane (go-containerregistry) honors SSL_CERT_FILE — point it at system CAs + the Harbor CA
+    # (on macOS crane_trust_env also sets the GODEBUG that makes Go honour it; see lib/tls.sh)
     # so pushes verify the self-signed cert WITHOUT modifying the root-owned trust store (no sudo).
     local bundle="${tmp}/ca-bundle.crt"
     ca_bundle_with_system "$HARBOR_CA_FILE" "$bundle"
-    export SSL_CERT_FILE="$bundle"
+    # WARN, not die: some callers (22-harbor-robot, 75-build-apps) never run crane, and must not
+    # fail because the crane on this box is the wrong build. The ones that do run crane still
+    # fail — later, with the x509 error — and this warning is what names the cause.
+    crane_trust_env "$bundle" || log_warn "crane on this box cannot verify Harbor's certificate (see above) — crane pushes will fail until 'make deps' rebuilds it"
     log_info "trusting Harbor CA via SSL_CERT_FILE=$bundle (no system-store change, no sudo)"
   fi
   CURL_CACERT=(); [ -f "${HARBOR_CA_FILE:-/nonexistent}" ] && CURL_CACERT=(--cacert "$HARBOR_CA_FILE")

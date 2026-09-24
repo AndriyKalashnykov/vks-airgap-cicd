@@ -33,6 +33,27 @@ fi
 
 log_info "shell: $(basename "$SHELL")   rc file: $RC"
 
+# macOS (B735): Homebrew's GNU tools FIRST on PATH, so `make` is GNU make (Apple's 3.81 is refused by
+# the Makefile) and sed/stat/timeout/find/tar/awk/grep behave as the scripts expect. Its OWN marker, so
+# a box that already ran shell-init (and hit the "already activated" exit below) still gets it.
+if [ "$(uname -s)" = Darwin ] && ! grep -qs 'vks-airgap-cicd: macOS GNU tools' "$RC"; then
+  _bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+  _gnu=""
+  for _f in coreutils gnu-sed findutils grep gnu-tar gawk make; do _gnu="${_gnu}${_bp}/opt/${_f}/libexec/gnubin:"; done
+  _gnu="${_gnu%:}"   # gnubin only: brew shellenv already puts brew/bin on PATH, AFTER nothing we pin
+  mkdir -p "$(dirname "$RC")"
+  # shellcheck disable=SC2016  # literal $PATH on purpose: expanded by the operator's shell at login
+  {
+    printf '\n# vks-airgap-cicd: macOS GNU tools first on PATH (GNU make as `make`) — added by `make shell-init`\n'
+    case "$(basename "$SHELL")" in
+      fish) printf 'set -gx PATH %s $PATH\n' "$(printf '%s' "$_gnu" | tr ':' ' ')" ;;
+      *)    printf 'export PATH="%s:$PATH"\n' "$_gnu" ;;
+    esac
+  } >> "$RC"
+  log_info "appended the macOS GNU-tools PATH line to $RC"
+  unset _bp _gnu _f
+fi
+
 # A `mise activate` line already present (ours or the operator's own) means there is nothing to do.
 # Match the COMMAND, not our exact spelling — an operator who wrote their own activation with
 # different quoting must not get a second, redundant one appended.
