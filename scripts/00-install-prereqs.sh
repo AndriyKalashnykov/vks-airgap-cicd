@@ -159,7 +159,7 @@ if [ "$(pkg_mgr)" = brew ]; then
     # Homebrew's buildx is a docker plugin docker cannot find on its own (measured, golang-web).
     mkdir -p "$HOME/.docker/cli-plugins"
     ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" "$HOME/.docker/cli-plugins/docker-buildx"
-    docker info >/dev/null 2>&1 || colima start || log_warn "colima start failed — run 'colima start'"
+    docker info >/dev/null 2>&1 || colima start || log_warn "colima start failed — run 'colima start'"   # docker-ok: macOS only, and only when the operator CHOSE CONTAINER_ENGINE=docker (Colima); the default podman path never reaches it.
   fi
 fi
 if [ "$ENGINE_CHOICE" = podman ] && have podman && [ "$(pkg_mgr)" != brew ]; then
