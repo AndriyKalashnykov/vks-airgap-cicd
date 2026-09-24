@@ -57,6 +57,18 @@ if [ "$(os_id)" = macos ]; then
         note "images are pushed as linux/$(target_arch), but this VM is ${vm_arch}: the two local builds"
         note "  (selfbuilt-image, builder-image) run under emulation and refuse to start without:"
         note "    BUILD_EMULATE=1 make install-all        # slow; see B736"
+        # MEASURED on the Mac (podman 6.1.2, applehv): under QEMU the .NET builder's `dotnet restore`
+        # aborts ("qemu: uncaught target signal 6"); with Rosetta the same image restores fine.
+        if [ "$ENGINE" = podman ] && [ "$vm_arch" = arm64 ]; then
+          if [ "$(podman machine inspect --format '{{.Rosetta}}' 2>/dev/null)" = true ]; then
+            note "  emulation: Rosetta (on) — amd64 builds, .NET included, run under it"
+          else
+            prob "this podman machine emulates amd64 with QEMU, which ABORTS the .NET builder. Use Rosetta:
+             printf '[machine]\\nrosetta = true\\n' >> ~/.config/containers/containers.conf
+             podman machine stop && podman machine start
+           (append only if that file has no [machine] section yet; otherwise add the key there)"
+          fi
+        fi
       fi
     fi
   fi
