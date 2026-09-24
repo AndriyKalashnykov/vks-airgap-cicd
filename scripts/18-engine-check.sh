@@ -30,7 +30,34 @@ problems=0
 note()  { printf '  %s\n' "$*"; }
 prob()  { printf '  PROBLEM: %s\n' "$*"; problems=$((problems + 1)); }
 
-if [ "$ENGINE" = podman ]; then
+if [ "$(os_id)" = macos ]; then
+  # macOS (B735): the engine runs in a Linux VM (podman machine, colima, Docker Desktop). Every
+  # host check below (newuidmap, /etc/subuid, cgroups, crun) is about the machine the containers
+  # run on, and on a Mac that is the VM, not this box. MEASURED on the Mac: the Linux checks
+  # reported 2 PROBLEMs for a podman machine that builds and runs fine.
+  have "$ENGINE" || prob "${ENGINE} is not installed — run 'make deps'"
+  if [ "$problems" -eq 0 ]; then
+    vm_arch="$(engine_arch "$ENGINE")"
+    if [ -z "$vm_arch" ]; then
+      if [ "$ENGINE" = podman ]; then
+        prob "the podman machine is not running (podman info failed). Start it:
+             podman machine init    # first time only
+             podman machine start"
+      else
+        prob "the docker VM is not running (docker info failed). Start it: colima start, or open Docker Desktop"
+      fi
+    else
+      printf 'engine VM        : running, %s\n' "$vm_arch"
+      if [ "$vm_arch" != "$(target_arch)" ]; then
+        note "images are pushed as linux/$(target_arch), but this VM is ${vm_arch}: the two local builds"
+        note "  (selfbuilt-image, builder-image) run under emulation and refuse to start without:"
+        note "    BUILD_EMULATE=1 make install-all        # slow; see B736"
+      fi
+    fi
+  fi
+  printf 'registry TLS     : --cert-dir / SSL_CERT_FILE, PER COMMAND (nothing installed on this Mac)\n'
+  printf 'sudo required    : NO\n'
+elif [ "$ENGINE" = podman ]; then
   have podman || prob "podman is not installed — run 'make deps'"
   have crun   || note "crun not found — rootless podman builds may fail (make deps installs it)"
   have newuidmap || prob "newuidmap missing (pkg 'uidmap') — rootless podman cannot map uids. Run 'make deps'."
