@@ -41,9 +41,14 @@ if [ "$(uname -s)" = Darwin ]; then
   for _d in "$_brew/opt/make/libexec/gnubin" "$_brew/opt/gawk/libexec/gnubin" \
             "$_brew/opt/gnu-tar/libexec/gnubin" "$_brew/opt/grep/libexec/gnubin" \
             "$_brew/opt/findutils/libexec/gnubin" "$_brew/opt/gnu-sed/libexec/gnubin" \
-            "$_brew/opt/coreutils/libexec/gnubin" "$_brew/opt/openssl@3/bin"; do
+            "$_brew/opt/coreutils/libexec/gnubin"; do
     case ":$PATH:" in *":$_d:"*) ;; *) if [ -d "$_d" ]; then PATH="$_d:$PATH"; fi ;; esac
   done
+  # openssl@3 (keg-only; /usr/bin/openssl is LibreSSL) replaces the SYSTEM openssl only — never a
+  # caller's, e.g. a test's stub dir that is already ahead on PATH.
+  case "$(command -v openssl 2>/dev/null)" in
+    ''|/usr/bin/openssl) if [ -d "$_brew/opt/openssl@3/bin" ]; then PATH="$_brew/opt/openssl@3/bin:$PATH"; fi ;;
+  esac
   # Homebrew's bin (bash 5, flock, envsubst, gmake) and the getent shim are APPENDED: they must never
   # shadow the pinned tools in ~/.local/bin or a test's stub dirs.
   case ":$PATH:" in *":$_brew/bin:"*) ;; *) PATH="$PATH:$_brew/bin" ;; esac
@@ -229,6 +234,7 @@ os_id() {
     printf 'macos'
   elif [ -r /etc/os-release ]; then
     # shellcheck disable=SC1091
+    # shellcheck source=/dev/null  # absent on macOS, where this branch never runs
     . /etc/os-release
     printf '%s' "${ID:-unknown}"
   else

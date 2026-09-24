@@ -977,7 +977,7 @@ else
   # stdin reaches EOF, so a piped answer must hold stdin open until the child has read it.
   pty_run() {
     if grep -q util-linux <<<"$(script --version 2>&1)"; then script -qec "$1" /dev/null
-    else script -q /dev/null bash -c "$1"; fi
+    else script -q /dev/null "$BASH" -c "$1"; fi
   }
   # (util-linux form) -q quiet, -e return the child's status, -c command, output to /dev/null.
   # \r strip: a pty terminates lines with CRLF, which would defeat a plain grep -F on the tail.

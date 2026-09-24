@@ -103,7 +103,7 @@ else bad "an unconfirmed fetch must not leave a trust anchor behind"; fi
 # stdin reaches EOF, so a piped answer must hold stdin open until the child has read it.
 pty_run() {
   if grep -q util-linux <<<"$(script --version 2>&1)"; then script -qec "$1" /dev/null
-  else script -q /dev/null bash -c "$1"; fi
+  else script -q /dev/null "$BASH" -c "$1"; fi
 }
 if command -v script >/dev/null 2>&1; then
   # ⚠️ ASSERT THE DISCRIMINATOR, NOT rc + absence-of-file. MEASURED 2026-08-05: with the old assertion
@@ -127,7 +127,9 @@ if command -v script >/dev/null 2>&1; then
   # The ACCEPT branch had NO case at all: if `y|Y|yes|YES` were mistyped, every interactive operator
   # would be refused and nothing would notice. It fails closed, so this is completeness, not a hole.
   rm -f "$TMP/out.crt"
-  { printf 'y\n'; sleep 5; } | pty_run "HARBOR_CA_SHA256= '$FETCH' '127.0.0.1:${PORT}' '$TMP/out.crt' harbor" \
+  # Hold stdin open until the anchor exists (bounded, 10s): BSD script(1) drops pending pty input at
+  # stdin EOF, and a fixed sleep is both a cost on Linux and a race on a slow box.
+  { printf 'y\n'; i=0; while [ ! -s "$TMP/out.crt" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done; } | pty_run "HARBOR_CA_SHA256= '$FETCH' '127.0.0.1:${PORT}' '$TMP/out.crt' harbor" \
     >"$TMP/tty2.log" 2>&1
   arc=$?
   if [ "$arc" -eq 0 ] && [ -s "$TMP/out.crt" ]; then ok "no pin + tty + ACCEPTED writes the anchor"

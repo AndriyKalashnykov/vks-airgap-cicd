@@ -43,6 +43,7 @@ os_gate() {
     ok "Detected macOS $(sw_vers -productVersion 2>/dev/null) — supported (brew)"
     return 0
   fi
+  # shellcheck source=/dev/null  # read at runtime; absent on macOS
   if [ -r /etc/os-release ]; then . /etc/os-release; id="${ID:-}"; ver="${VERSION_ID:-}"; fi
   case "$id" in
     ubuntu|debian) PKG=apt-get; ok "Detected ${id} ${ver} — supported (apt)";;

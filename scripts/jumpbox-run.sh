@@ -38,6 +38,7 @@ tar -C /src --exclude-from="$EXCL" -cf - . | tar -C "$WORK" -xf -
 rm -f "$EXCL"
 cd "$WORK"
 
+# shellcheck source=/dev/null  # read at runtime (Linux jump box)
 . /etc/os-release
 # Container engine — mirror the repo's CONTAINER_ENGINE (podman-preferred, docker fallback);
 # override with JUMPBOX_ENGINE. This harness targets the README's rootless-podman path.

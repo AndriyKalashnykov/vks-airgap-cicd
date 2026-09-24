@@ -57,7 +57,7 @@ try:
 except ModuleNotFoundError:                      # py<3.11
     # DIE rather than fall back to a hand parser: a silent fallback would reintroduce the exact
     # quoting gap this file exists to close, and it would do it invisibly.
-    sys.exit("ERROR: python3 >= 3.11 required (tomllib). Do NOT substitute a hand-written TOML parser.")
+    sys.exit("ERROR: python3 >= 3.11 required (tomllib). Do NOT substitute a hand-written TOML parser. (macOS: run it via gmake, or put Homebrew bin first on PATH.)")
 
 cfg, = sys.argv[1:]
 with open(cfg, "rb") as fh:
