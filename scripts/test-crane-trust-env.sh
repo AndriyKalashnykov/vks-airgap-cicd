@@ -63,6 +63,19 @@ expect "empty bundle: rc 2"                 "rc=2 "                             
 out="$(probe Linux 1.27.1 "" "$T/missing.crt")"
 expect "missing bundle: rc 2"               "rc=2 "                              "$out"
 
+echo "== darwin: a mise SHIM on PATH is resolved through 'mise which' (go version cannot read a shim)"
+mkdir -p "$T/shim/bin" "$T/shim/real"
+printf '#!/bin/sh\nexit 0\n' > "$T/shim/real/mise"; chmod +x "$T/shim/real/mise"
+ln -s "$T/shim/real/mise" "$T/shim/bin/crane"            # what a mise shim is: a link to mise
+printf '#!/bin/sh\necho v0.21.9\n' > "$T/shim/real/crane-built"; chmod +x "$T/shim/real/crane-built"
+# `mise which crane` -> the real build; the go stub answers per binary path
+printf '#!/bin/sh\n[ "$1" = which ] && echo %s\n' "$T/shim/real/crane-built" > "$T/shim/bin/mise"; chmod +x "$T/shim/bin/mise"
+printf '#!/bin/sh\ncase "$2" in *crane-built) echo "$2: go1.27.1" ;; *) exit 1 ;; esac\n' > "$T/shim/bin/go"; chmod +x "$T/shim/bin/go"
+cp "$T/bin/uname" "$T/shim/bin/uname"
+out="$(PATH="$T/shim/bin:/usr/bin:/bin" STUB_OS=Darwin GODEBUG="" bash -c \
+  '. "$1/scripts/lib/tls.sh"; crane_trust_env "$2" 2>/dev/null; echo "rc=$? "' _ "$REPO_ROOT" "$T/bundle.crt")"
+expect "darwin shim: resolved via mise which, go1.27 build accepted" "rc=0 " "$out"
+
 rc=0; PATH="$T/bin:/usr/bin:/bin" bash -c '. "$1/scripts/lib/tls.sh"; crane_trust_env' _ "$REPO_ROOT" 2>/dev/null || rc=$?
 if [ "$rc" -eq 2 ]; then ok "no argument: rc 2"; else bad "no argument: want rc 2, got $rc"; fi
 
@@ -74,7 +87,7 @@ if grep -q 'crane_trust_env "\${CRANE_TMP}/ca-bundle.crt" && r[u]n crane validat
   ok "16-engine-trust-check.sh"
 else bad "16-engine-trust-check.sh does not call crane_trust_env"; fi
 # A crane call site that sets SSL_CERT_FILE by hand would bypass the macOS GODEBUG.
-if grep -rnE 'SSL_CERT_FILE=[^ ]+ +(r[u]n +)?crane' "$REPO_ROOT/scripts" --include='*.sh' | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' | grep -q .; then
+if grep -rnE 'SSL_CERT_FILE=[^ ]+ +(r[u]n +)?crane' "$REPO_ROOT/scripts" --include='*.sh' | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' | grep . >/dev/null; then
   bad "a crane call sets SSL_CERT_FILE inline (bypasses crane_trust_env): $(grep -rnE 'SSL_CERT_FILE=[^ ]+ +(r[u]n +)?crane' "$REPO_ROOT/scripts" --include='*.sh' | head -1)"
 else ok "no crane call sets SSL_CERT_FILE inline"; fi
 
