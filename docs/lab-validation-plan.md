@@ -506,6 +506,7 @@ secret in the Supervisor's vSphere Namespace).
 
 ```bash
 set -a; . ./.env; set +a
+TEMURIN_JRE_TAG="$(grep -E '^TEMURIN_JRE_TAG=' .env.example | cut -d= -f2-)"   # a repo pin: .env.example owns it
 export KUBECONFIG=$PWD/secrets/vks.kubeconfig
 kubectl create ns trust-probe 2>/dev/null || true
 kubectl label ns trust-probe pod-security.kubernetes.io/enforce=baseline --overwrite  # so PSA can't masquerade as TLS

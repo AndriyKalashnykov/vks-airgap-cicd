@@ -177,10 +177,22 @@ while read -r repo var; do
   # Eight further version pins were stale the same way (9 of 106 values), each one a latent
   # NOT_FOUND. `.env` is gitignored, so on a fresh clone or in CI it is simply ABSENT — skip
   # cleanly there rather than false-RED, and count what we actually checked.
+  #
+  # SINCE 2026-09-24 a REPO pin (a `# renovate:` line directly above it in .env.example) is NOT taken
+  # from `.env` any more: load_env re-applies .env.example's value and warns. So a stale `.env` line for
+  # one drives nothing, and failing the build on it would send the reader to fix a value no run uses.
+  # It is reported, not failed. Any other tag var is still checked, since `.env` does drive it.
+  # A trailing `# ...` (what env-init appends to the lines it comments) is stripped before comparing.
   if [ -f .env ]; then
-    actual_env="$(grep -E "^${var}=" .env | head -1 | cut -d= -f2- || true)"
+    actual_env="$(grep -E "^${var}=" .env | tail -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//' || true)"
     if [ -n "$actual_env" ]; then
-      check_pinned "${var} (.env → ${repo})" "$actual_env" "$expected"
+      if grep -B1 -E "^${var}=" .env.example | head -1 | grep -q '^# renovate:'; then
+        if [ "$actual_env" != "$expected" ]; then
+          echo "NOTE  ${var} in .env (${actual_env}) is IGNORED at runtime: it is a repo pin, load_env uses .env.example (${expected}). Delete that line from .env."
+        fi
+      else
+        check_pinned "${var} (.env → ${repo})" "$actual_env" "$expected"
+      fi
       dotenv_checked=$((dotenv_checked + 1))
     fi
   fi

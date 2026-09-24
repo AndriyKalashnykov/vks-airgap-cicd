@@ -63,9 +63,14 @@ env_init() {
     chmod 600 "${ENV_FILE}.bak" 2>/dev/null || true   # a FULL credential copy; it inherits cp's mode
     log_warn "existing .env backed up to .env.bak (your previous overrides are preserved there)"
   fi
-  cp "$EXAMPLE_FILE" "$ENV_FILE"
+  # B738: REPO pins (a `# renovate:` line above the key) are written COMMENTED. load_env takes them
+  # from .env.example anyway; a live copy here would only show a version the run does not use, and
+  # go stale on the next bump. LAB pins (`# pin: lab`) stay active: they are yours to set.
+  awk '/^# renovate:/ { print; r = 1; next }
+       r && /^[A-Z_][A-Z0-9_]*=/ { print "# " $0 "    # repo pin: follows .env.example (B738)"; r = 0; next }
+       { r = 0; print }' "$EXAMPLE_FILE" > "$ENV_FILE"
   chmod 600 "$ENV_FILE" 2>/dev/null || true
-  log_info "wrote a fresh .env from .env.example"
+  log_info "wrote a fresh .env from .env.example ($(pin_keys repo "$EXAMPLE_FILE" | wc -l | tr -d ' ') repo version pins left commented: they follow .env.example)"
   echo
   echo "Next:"
   echo "  make env-populate   # generate the secrets we can + print what only you can provide"
