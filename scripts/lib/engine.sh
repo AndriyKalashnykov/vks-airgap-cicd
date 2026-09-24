@@ -147,6 +147,10 @@ engine_mode() {
 # jump box. So the fix belongs here, keyed on the condition rather than on the OS name.
 engine_build_isolation() {
   [ "$(container_engine)" = podman ] || return 0
+  # macOS (B735): builds run in the podman VM, not on this host, and the host has no
+  # /sys/fs/cgroup at all — so the probe below reads "not v2" and forced chroot on every Mac.
+  # MEASURED 2026-09-24: `podman machine ssh stat -fc %T /sys/fs/cgroup` -> cgroup2fs.
+  [ "$(uname -s)" != Darwin ] || return 0
   [ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null)" = cgroup2fs ] && return 0
   printf 'chroot'
 }

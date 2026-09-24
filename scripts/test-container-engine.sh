@@ -243,6 +243,8 @@ _bi() ( . "${REPO_ROOT}/scripts/lib/engine.sh" 2>/dev/null
         stat() { printf '%s\n' "$FAKE_CG"; }
         # shellcheck disable=SC2317
         container_engine() { printf '%s\n' "$FAKE_ENG"; }
+        # shellcheck disable=SC2317
+        uname() { printf '%s\n' "${FAKE_OS:-Linux}"; }
         engine_build_isolation )
 
 r="$(FAKE_CG=cgroup2fs FAKE_ENG=podman _bi)"
@@ -252,6 +254,10 @@ else bad "engine_build_isolation fired on cgroup v2 ('$r') — weakens isolation
 r="$(FAKE_CG=tmpfs FAKE_ENG=podman _bi)"
 if [ "$r" = chroot ]; then ok "engine_build_isolation: chroot on cgroup v1 + podman (the measured fix)"
 else bad "engine_build_isolation silent on cgroup v1 ('$r') — the builder build cannot work there"; fi
+
+r="$(FAKE_OS=Darwin FAKE_CG='' FAKE_ENG=podman _bi)"
+if [ -z "$r" ]; then ok "engine_build_isolation: SILENT on macOS (builds run in the VM, which is cgroup v2)"
+else bad "engine_build_isolation fired on macOS ('$r') — the host has no /sys/fs/cgroup; the VM does"; fi
 
 r="$(FAKE_CG=tmpfs FAKE_ENG=docker _bi)"
 if [ -z "$r" ]; then ok "engine_build_isolation: SILENT for docker (BUILDAH_ISOLATION is a buildah knob)"
