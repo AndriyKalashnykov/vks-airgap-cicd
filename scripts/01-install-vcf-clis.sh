@@ -143,8 +143,6 @@ resolve_archive() {
 # warning, not a death, so `all` still installs vcf + plugins on arm64 (Apple Silicon included).
 install_argocd_vcf() {
   local skip_ok="${1:-}"
-  log_info "installing argocd (VCF ${ARGOCD_VCF_VERSION}, ${os}/${go_arch}) -> ${BIN_DIR}/argocd"
-  log_warn "this is the VCF-flavored argocd for a real lab; it shadows any upstream argocd in ${BIN_DIR}"
   # argocd-vcf is amd64-only (Broadcom ships linux-amd64 and darwin-amd64, no arm64). If this arch's archive isn't in the
   # folder, point at the upstream argocd `make deps` installs — the generic resolve die would tell
   # the operator to fetch a file that does not exist. (Skipped if an arch build IS present, so a
@@ -157,6 +155,10 @@ install_argocd_vcf() {
     fi
     die "the VCF-flavored argocd is amd64-only — no ${os}/${go_arch} build exists. Use the upstream argocd from 'make deps' and run 'make install-vcf-cli' + 'make install-vcf-plugins' (not 'all'). See docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives"
   fi
+  # Announced AFTER the arm64 check: printed first, it said "installing" and "it shadows" and was
+  # then contradicted by the SKIPPING line (measured on the Mac).
+  log_info "installing argocd (VCF ${ARGOCD_VCF_VERSION}, ${os}/${go_arch}) -> ${BIN_DIR}/argocd"
+  log_warn "this is the VCF-flavored argocd for a real lab; it shadows any upstream argocd in ${BIN_DIR}"
   local ar d bin; resolve_archive argocd; ar="$RESOLVED_ARCHIVE"
   # The argocd artifact is either a bare .gz of the binary OR a tarball/bundle. Detect
   # robustly: try to extract it as a tar.gz — if that yields at least one file, it's a bundle

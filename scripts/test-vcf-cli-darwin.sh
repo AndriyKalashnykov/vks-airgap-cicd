@@ -91,7 +91,7 @@ cp /dev/null "$src/argocd-cli-darwin-amd64-${AV}.gz"   # only the amd64 argocd, 
 pack "$src/VCF-Consumption-CLI-Darwin_ARM64-${VV}.tar.gz" "vcf-cli-darwin_arm64" "VCF-DARWIN-ARM64"
 pack "$src/VCF-Consumption-CLI-PluginBundle-Darwin_ARM64-${PV}.tar.gz" "cluster/v3.7.1/vcf-cluster-darwin_arm64" "PLUGIN-DARWIN"
 if run_as Darwin arm64 all "$src" "$bin" "$err"; then
-  if grep -q 'SKIPPING the VCF-flavored argocd' "$err" && [ ! -e "$bin/argocd" ] && [ "$("$bin/vcf" 2>/dev/null || true)" = VCF-DARWIN-ARM64 ]; then
+  if grep -q 'SKIPPING the VCF-flavored argocd' "$err" && ! grep -q 'installing argocd' "$err" && [ ! -e "$bin/argocd" ] && [ "$("$bin/vcf" 2>/dev/null || true)" = VCF-DARWIN-ARM64 ]; then
     ok "argocd skipped (warned, not installed), vcf installed"
   else bad "all: rc 0 but skip/install state wrong"; sed 's/^/      /' "$err"; fi
 else bad "all on darwin/arm64: installer exited non-zero"; sed 's/^/      /' "$err"; fi
