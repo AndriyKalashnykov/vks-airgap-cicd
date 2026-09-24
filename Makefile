@@ -369,7 +369,7 @@ deps-prereqs: ## Install non-mise CLIs + OS packages (git, tkn, argocd, podman, 
 	@$(SCRIPTS)/00-install-prereqs.sh
 
 .PHONY: install-vcf-clis install-argocd-vcf install-vcf-cli install-vcf-plugins
-install-vcf-clis: ## Install the Broadcom VCF/VKS lab CLIs (argocd-vcf + vcf + plugins), OS/arch-aware, sudo-free. Licensed artifacts from a folder: VCF_CLI_SRC_DIR=<dir>. Lab-only — not needed for local KinD.
+install-vcf-clis: ## Install the Broadcom VCF/VKS lab CLIs (argocd-vcf + vcf + plugins; argocd-vcf is amd64-only, skipped with a warning on arm64), OS/arch-aware, sudo-free. Licensed artifacts from a folder: VCF_CLI_SRC_DIR=<dir>. Lab-only — not needed for local KinD.
 	@$(SCRIPTS)/01-install-vcf-clis.sh all
 install-argocd-vcf: ## Install ONLY the VCF-flavored argocd CLI (ARGOCD_VCF_VERSION) for a real lab's ArgoCD
 	@$(SCRIPTS)/01-install-vcf-clis.sh argocd

@@ -39,12 +39,17 @@ if [ "$(os_id)" = macos ]; then
   if [ "$problems" -eq 0 ]; then
     vm_arch="$(engine_arch "$ENGINE")"
     if [ -z "$vm_arch" ]; then
+      # Print the engine's OWN error: "not running" is the common cause, not the only one (a default
+      # connection pointing at a removed machine, a stale DOCKER_HOST or docker context, ...).
+      _why="$("$ENGINE" info 2>&1 >/dev/null | tail -1)"   # docker-ok: the operator's chosen engine
       if [ "$ENGINE" = podman ]; then
-        prob "the podman machine is not running (podman info failed). Start it:
-             podman machine init    # first time only
-             podman machine start"
+        prob "podman cannot reach its machine: ${_why:-no error text}
+             not running?  podman machine init (first time) && podman machine start
+             otherwise:    podman system connection list   # is the default the machine you started?"
       else
-        prob "the docker VM is not running (docker info failed). Start it: colima start, or open Docker Desktop"
+        prob "docker cannot reach its daemon: ${_why:-no error text}
+             not running?  colima start, or open Docker Desktop
+             otherwise:    docker context ls               # is the active context the VM you started?"
       fi
     else
       printf 'engine VM        : running, %s\n' "$vm_arch"
@@ -55,7 +60,10 @@ if [ "$(os_id)" = macos ]; then
       fi
     fi
   fi
-  printf 'registry TLS     : --cert-dir / SSL_CERT_FILE, PER COMMAND (nothing installed on this Mac)\n'
+  # MEASURED on the Mac (podman 6.1.2 remote): login and build take --cert-dir, pull and push do NOT.
+  printf 'registry TLS     : crane (every push to Harbor) uses SSL_CERT_FILE -- nothing installed.\n'
+  printf '                   The engine itself (%s pull/push) trusts inside its VM, which this repo\n' "$ENGINE"
+  printf '                   does not configure on macOS: engine-trust-check / trust-harbor are Linux-only.\n'
   printf 'sudo required    : NO\n'
 elif [ "$ENGINE" = podman ]; then
   have podman || prob "podman is not installed — run 'make deps'"

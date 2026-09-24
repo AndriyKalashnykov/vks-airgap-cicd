@@ -28,6 +28,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/tls.sh"
 load_env
 
+# macOS (B735): this check drives the ENGINE against Harbor with --cert-dir. MEASURED on the Mac (podman 6.1.2, a REMOTE client): `pull` and `push` take
+# no --cert-dir, and a docker VM's daemon never reads this Mac's /etc/docker/certs.d. So here this
+# would die on an unknown flag, or sudo-install a CA nothing reads. Pushes to Harbor go through crane
+# (SSL_CERT_FILE), which works on macOS; engine-level trust inside the VM is not configured yet.
+[ "$(os_id)" != macos ] || die "make engine-trust-check is Linux-only for now: on macOS the engine trusts registries inside its VM,
+  which this repo does not configure. Pushes to Harbor use crane and do not need it."
+
 # THIS SCRIPT PUSHES — so it takes the registry lock, exactly like 15-build-push-builder.sh. A matrix of
 # engine legs is a QUEUE OF PUSHERS by construction, and a concurrent pusher is what this repo has already
 # blamed for a wrecked Harbor. The second caller fails fast instead of racing.

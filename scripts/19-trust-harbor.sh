@@ -20,6 +20,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/engine.sh"
 load_env
 
+# macOS (B735): this installs Harbor's CA for the ENGINE and proves it with a login. MEASURED on the Mac (podman 6.1.2, a REMOTE client): `pull` and `push` take
+# no --cert-dir, and a docker VM's daemon never reads this Mac's /etc/docker/certs.d. So here this
+# would die on an unknown flag, or sudo-install a CA nothing reads. Pushes to Harbor go through crane
+# (SSL_CERT_FILE), which works on macOS; engine-level trust inside the VM is not configured yet.
+[ "$(os_id)" != macos ] || die "make trust-harbor is Linux-only for now: on macOS the engine trusts registries inside its VM,
+  which this repo does not configure. Pushes to Harbor use crane and do not need it."
+
 : "${HARBOR_URL:?HARBOR_URL is not set — run 'make install-harbor' (KinD) or set it in .env (real lab)}"
 : "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env (admin for scenario 1, your robot for scenario 2)}"
 : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env (never on argv)}"

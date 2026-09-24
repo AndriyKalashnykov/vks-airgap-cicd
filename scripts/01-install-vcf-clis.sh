@@ -151,6 +151,11 @@ install_argocd_vcf() {
      && [ -z "$(find "$SRC_DIR" -maxdepth 1 -type f -name "argocd-cli-${os}-${go_arch}-${ARGOCD_VCF_VERSION}*" -print -quit 2>/dev/null)" ]; then
     if [ -n "$skip_ok" ]; then
       log_warn "SKIPPING the VCF-flavored argocd: Broadcom ships no ${os}/${go_arch} build. The upstream argocd from 'make deps' is used instead; installing vcf + plugins."
+      # The fallback is a claim: say so if it is not actually there.
+      have argocd || log_warn "  ...but there is NO argocd on PATH at all: run 'make deps' for the upstream one."
+      # A newer arm64 build under a DIFFERENT version would be skipped by the pinned glob above; show it.
+      local other; other="$(find "$SRC_DIR" -maxdepth 1 -type f -name "argocd-cli-${os}-*" 2>/dev/null | sort | tr '\n' ' ')"
+      [ -z "$other" ] || log_warn "  argocd archives in ${SRC_DIR} for ${os}: ${other}(pinned: ${ARGOCD_VCF_VERSION})"
       return 0
     fi
     die "the VCF-flavored argocd is amd64-only — no ${os}/${go_arch} build exists. Use the upstream argocd from 'make deps' and run 'make install-vcf-cli' + 'make install-vcf-plugins' (not 'all'). See docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives"
