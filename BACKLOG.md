@@ -10410,7 +10410,7 @@ Still open, each recorded by an implementation-review round (2026-09-24):
   does not translate to `gmake`. And an unset `WALK_OS` falls through to the Linux blocks (walkbox.sh
   always sets it, so only hand runs). A macOS walk row needs both before it can be automated.
 
-## 🟡 B738 — `.env` carries every pin from `.env.example`, so a version bump never reaches an existing operator
+## ✅ B738 — `.env` carried every pin from `.env.example`, so a version bump never reached an existing operator
 
 `make env-init` copies `.env.example` → `.env` whole, and `.env` outranks `.env.example` in
 `load_env`. So a pin bumped later in `.env.example` is invisible to anyone who ran `env-init` before
@@ -10420,12 +10420,48 @@ the lab host's `.env` still pinned `9.1.0.0400.*`, and `make install-vcf-clis` o
 from `origin/main`'s `.env.example`: the two VCF pins and `BUILDER_IMAGE_TAG` (commented in
 `.env.example`).
 
-**Fix, not yet designed:** either `env-init` writes only operator-supplied keys (and pins stay in
-`.env.example`), or a check (`env-check`?) warns when a `.env` pin differs from `.env.example`'s.
-Design review before choosing: some operators pin deliberately.
+**DONE 2026-09-24 (branch `fix/b738-repo-pins`).** The first design, "env-init comments pins,
+env-check warns, `env-unpin` repairs", was REFUTED by the idea-round review:
 
-**Done when:** a pin bump in `.env.example` reaches an operator who ran `env-init` before it, or they
-are told it did not.
+- env-check runs only inside `preflight`, and `install-vcf-clis` (the incident) is not behind it;
+- the 19 pins are two classes with OPPOSITE correct policies;
+- a writer racing `set_env_var` over a secrets file is a hazard of its own.
+
+The owner then chose "repo always wins" for the Renovate pins. Shipped:
+
+- **Two marked classes.** `repo` = a `# renovate:` line above the key (16); `lab` = `# pin: lab`
+  (the 3 licensed VCF pins). `check-pin-classes` (static-check-fast) fails on an unowned
+  `*_VERSION`/`*_TAG` key or a dangling marker. `pin_keys` in `lib/os.sh` is shared by the gate
+  and `load_env`.
+- **`load_env`** re-applies `.env.example` for REPO pins after `.env` and the state overlay. It warns
+  once per process tree, naming each ignored line. LAB pins keep `.env`'s value. A per-run caller
+  value wins for both classes, unless it EQUALS the `.env` line: that is `.env` leaking in through
+  `set -a; . ./.env`, not an override.
+- **`env-init`** writes repo pins commented.
+- **`install-vcf-clis`**, when the pinned archive is missing but another build is in the folder,
+  names it and the exact `.env` line (the incident's actual fix: the VCF pins are LAB pins); its
+  `:?` messages say `.env`, not the tracked `.env.example`.
+- **`test-env-pins.sh`**: 13 checks, RED against the previous `os.sh`/`02-env.sh`. `load_env` costs
+  34 ms instead of 23 (measured, 20 runs each).
+
+Correction to the text above: `BUILDER_IMAGE_TAG` is NOT a `.env.example` pin (it ships commented;
+its default lives in `lib/apps.sh`), so no `.env.example`-keyed design covers it. B739 covers it,
+with the other values that go stale in `.env`.
+
+## 🟡 B739 — values the TOOLS write into `.env` go stale when the lab moves on
+
+B738 covers pins that `.env.example` owns. A second class of frozen value is written into `.env` by
+the flow itself and never refreshed:
+
+- `VKS_K8S_VERSION`, written by `24-vks-k8s-version.sh`;
+- `VKS_CLUSTERCLASS`, written by `vks-shape.sh`. B737 measured `builtin-generic-v3.6.0` against a
+  VKS 3.7.1 lab;
+- `BUILDER_IMAGE_TAG`, whose default lives in `lib/apps.sh`.
+
+None is re-checked at the point of use.
+
+**Done when:** each is compared with the live lab (or its default) where it is used, and a
+mismatch is named with the command that refreshes it.
 
 ## 🟡 B737 — the handoff says PAUSED, but scenario-1 was walked on the 2026-09-17 cut and is RUNNING
 

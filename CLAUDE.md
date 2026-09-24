@@ -1088,7 +1088,7 @@ MEASURED on a rented Apple-silicon Mac (podman 6.1.2) against cicd-gc3: scenario
 `BUILD_EMULATE=1 make install-all` (rc=0, 25 min) and `make verify` (rc=0, all six apps). It needs
 Rosetta for the podman machine (QEMU aborts the .NET builder; engine-check says how). The Mac and its
 tunnels were torn down; a re-test needs a new Mac plus `ssh -R` tunnels to .128/.130/.131/.134-.136
-and vcsa. Open residuals are listed in B735; B738 is new.
+and vcsa. Open residuals are listed in B735.
 
 ### 🔴 DISTRUST FIRST
 
@@ -1103,7 +1103,8 @@ and vcsa. Open residuals are listed in B735; B738 is new.
 ### NOT done — next work, ranked
 
 1. **B735 residuals** (engine trust inside the podman VM, argocd via Rosetta, walk-doc on a macOS
-   row, the brew list written 3x) and **B738** (`.env` pins never see a bump).
+   row, the brew list written 3x) and **B739** (values the tools write into `.env` go stale). B738 is
+   done: repo version pins follow `.env.example` (load_env), lab pins stay in `.env`.
 2. **B725** (🔴 HIGH) — `02-env.sh:90` fabricates `HARBOR_PASSWORD`; `env-validate` goes green on it.
 3. **B722**, **B723** (now 9 `.env.state.stale-*` files), **B734**, then the tier-3 list.
 

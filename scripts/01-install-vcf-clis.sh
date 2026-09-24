@@ -26,9 +26,9 @@ SRC_DIR="${VCF_CLI_SRC_DIR:?set VCF_CLI_SRC_DIR to the directory holding the dow
 
 # Pinned versions (operator-supplied — track whatever licensed artifacts you hold; Renovate
 # cannot bump a licensed download, so they live in .env.example, not renovate).
-ARGOCD_VCF_VERSION="${ARGOCD_VCF_VERSION:?set ARGOCD_VCF_VERSION in .env.example (e.g. v3.0.19-vcf)}"
-VCF_CLI_VERSION="${VCF_CLI_VERSION:?set VCF_CLI_VERSION in .env.example (e.g. 9.1.1.0.25662425)}"
-VCF_PLUGINS_VERSION="${VCF_PLUGINS_VERSION:?set VCF_PLUGINS_VERSION in .env.example (e.g. 9.1.1.0.25665404)}"
+ARGOCD_VCF_VERSION="${ARGOCD_VCF_VERSION:?set ARGOCD_VCF_VERSION in .env (e.g. v3.0.19-vcf)}"
+VCF_CLI_VERSION="${VCF_CLI_VERSION:?set VCF_CLI_VERSION in .env (e.g. 9.1.1.0.25662425)}"
+VCF_PLUGINS_VERSION="${VCF_PLUGINS_VERSION:?set VCF_PLUGINS_VERSION in .env (e.g. 9.1.1.0.25665404)}"
 
 [ -d "$SRC_DIR" ] || die "VCF_CLI_SRC_DIR '$SRC_DIR' is not a directory"
 mkdir -p "$BIN_DIR"
@@ -128,6 +128,24 @@ resolve_archive() {
   else
     _looked="'${name}', '${glob}'"
     if [ -n "$glob_fallback" ]; then _looked="${_looked}, then '${glob_fallback}'"; fi
+    # B738: the usual cause is not a missing download but a pin that does not match the one you have.
+    # These pins are LAB pins (.env wins), so name what IS there and the exact .env line to write.
+    local _key _pat _have
+    case "$cli" in
+      vcf)     _key=VCF_CLI_VERSION;     _pat="VCF-Consumption-CLI-${vcf_os}_${vcf_arch}-*.tar.gz" ;;
+      plugins) _key=VCF_PLUGINS_VERSION; _pat="VCF-Consumption-CLI-PluginBundle-${vcf_os}_${vcf_arch}-*.tar.gz" ;;
+      *)       _key="" ;;
+    esac
+    if [ -n "$_key" ]; then
+      _have="$(find "$SRC_DIR" -maxdepth 1 -type f -name "$_pat" 2>/dev/null \
+               | sed -E "s#.*_${vcf_arch}-(.*)\.tar\.gz\$#\1#" | sort -u | tr '\n' ' ' || true)"
+      if [ -n "$_have" ]; then
+        die "no ${cli} artifact for ${_key}=${!_key} in ${SRC_DIR}, but it holds ${vcf_os}_${vcf_arch} build(s): ${_have}
+  If your lab is on one of those, put it in .env (a LAB pin — .env wins), e.g.:
+    ${_key}=${_have%% *}
+  Otherwise download the ${!_key} archive into ${SRC_DIR}."
+      fi
+    fi
     die "no ${cli} artifact for ${os}/${go_arch} in ${SRC_DIR} (looked for ${_looked}) — put that archive in the folder"
   fi
   [ -s "$out" ] || die "the ${cli} archive is empty"
