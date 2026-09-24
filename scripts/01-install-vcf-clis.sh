@@ -39,6 +39,14 @@ trap 'rm -rf "$WORK"' EXIT
 
 # --- OS/arch of THIS jump box → the tokens used in the artifact filenames ------
 os="$(uname -s)"; os="${os,,}"                         # linux | darwin (bash lowercase, no `tr`)
+# Broadcom's archive names spell the OS capitalised (…-CLI-Linux_AMD64-…, …-CLI-Darwin_ARM64-…);
+# the binaries inside use the lowercase form (vcf-cli-darwin_arm64). Both layouts are identical
+# across OSes -- MEASURED on the 9.1.1 Linux_AMD64 and Darwin_ARM64 downloads.
+case "$os" in
+  linux)  vcf_os=Linux ;;
+  darwin) vcf_os=Darwin ;;
+  *) die "unsupported OS: $(uname -s) (the VCF Consumption CLI ships for Linux and Darwin)" ;;
+esac
 case "$(uname -m)" in
   x86_64|amd64)  go_arch=amd64; vcf_arch=AMD64 ;;
   aarch64|arm64) go_arch=arm64; vcf_arch=ARM64 ;;
@@ -47,8 +55,8 @@ esac
 
 # Expected vendor filenames for this OS/arch, parameterized by the pinned versions.
 argocd_file="argocd-cli-${os}-${go_arch}-${ARGOCD_VCF_VERSION}.gz"
-vcf_file="VCF-Consumption-CLI-Linux_${vcf_arch}-${VCF_CLI_VERSION}.tar.gz"
-plugins_file="VCF-Consumption-CLI-PluginBundle-Linux_${vcf_arch}-${VCF_PLUGINS_VERSION}.tar.gz"
+vcf_file="VCF-Consumption-CLI-${vcf_os}_${vcf_arch}-${VCF_CLI_VERSION}.tar.gz"
+plugins_file="VCF-Consumption-CLI-PluginBundle-${vcf_os}_${vcf_arch}-${VCF_PLUGINS_VERSION}.tar.gz"
 
 RESOLVED_ARCHIVE=""
 
@@ -98,9 +106,9 @@ resolve_archive() {
     # exists; the premise is refuted by measurement -- the real per-arch bundle nests under
     # <plugin>/<version>/ (cluster/v3.6.1/vcf-cluster-linux_amd64), NOT <os>/<arch>/, so the nested
     # handler's find never fires for it and its existence proves nothing about an agnostic bundle.
-    vcf)     name="$vcf_file";     glob="VCF-Consumption-CLI-*Linux_${vcf_arch}*${VCF_CLI_VERSION}*.tar.gz"
+    vcf)     name="$vcf_file";     glob="VCF-Consumption-CLI-*${vcf_os}_${vcf_arch}*${VCF_CLI_VERSION}*.tar.gz"
                                    glob_fallback="VCF-Consumption-CLI-*${VCF_CLI_VERSION}*.tar.gz" ;;
-    plugins) name="$plugins_file"; glob="VCF-Consumption-CLI-*Plugin*Linux_${vcf_arch}*${VCF_PLUGINS_VERSION}*.tar.gz" ;;
+    plugins) name="$plugins_file"; glob="VCF-Consumption-CLI-*Plugin*${vcf_os}_${vcf_arch}*${VCF_PLUGINS_VERSION}*.tar.gz" ;;
     *) die "resolve_archive: unknown cli '$cli'" ;;
   esac
   out="${WORK}/${cli}-archive"
@@ -131,15 +139,22 @@ resolve_archive() {
 
 # --- Installers --------------------------------------------------------------
 
+# install_argocd_vcf [skip-if-no-build] — with the argument, a missing build for this arch is a
+# warning, not a death, so `all` still installs vcf + plugins on arm64 (Apple Silicon included).
 install_argocd_vcf() {
+  local skip_ok="${1:-}"
   log_info "installing argocd (VCF ${ARGOCD_VCF_VERSION}, ${os}/${go_arch}) -> ${BIN_DIR}/argocd"
   log_warn "this is the VCF-flavored argocd for a real lab; it shadows any upstream argocd in ${BIN_DIR}"
-  # argocd-vcf is amd64-only (Broadcom ships no linux-arm64). If this arch's archive isn't in the
+  # argocd-vcf is amd64-only (Broadcom ships linux-amd64 and darwin-amd64, no arm64). If this arch's archive isn't in the
   # folder, point at the upstream argocd `make deps` installs — the generic resolve die would tell
   # the operator to fetch a file that does not exist. (Skipped if an arch build IS present, so a
   # future arm64 argocd-vcf still installs normally.)
   if [ "$go_arch" != amd64 ] && [ ! -f "${SRC_DIR}/${argocd_file}" ] \
      && [ -z "$(find "$SRC_DIR" -maxdepth 1 -type f -name "argocd-cli-${os}-${go_arch}-${ARGOCD_VCF_VERSION}*" -print -quit 2>/dev/null)" ]; then
+    if [ -n "$skip_ok" ]; then
+      log_warn "SKIPPING the VCF-flavored argocd: Broadcom ships no ${os}/${go_arch} build. The upstream argocd from 'make deps' is used instead; installing vcf + plugins."
+      return 0
+    fi
     die "the VCF-flavored argocd is amd64-only — no ${os}/${go_arch} build exists. Use the upstream argocd from 'make deps' and run 'make install-vcf-cli' + 'make install-vcf-plugins' (not 'all'). See docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives"
   fi
   local ar d bin; resolve_archive argocd; ar="$RESOLVED_ARCHIVE"
@@ -162,7 +177,6 @@ install_argocd_vcf() {
 }
 
 install_vcf_cli() {
-  [ "$os" = linux ] || die "the VCF Consumption CLI is Linux-only for this installer (no ${os} target)"
   log_info "installing vcf (VCF Consumption CLI ${VCF_CLI_VERSION}, ${os}/${go_arch}) -> ${BIN_DIR}/vcf"
   local ar d bin; resolve_archive vcf; ar="$RESOLVED_ARCHIVE"
   d="$(mktemp -d)"; tar -xzf "$ar" -C "$d"
@@ -171,21 +185,22 @@ install_vcf_cli() {
   bin="$(find "$d" -type f -name "vcf-cli-${os}_${go_arch}" -print -quit)"
   [ -n "$bin" ] || { rm -rf "$d"; die "vcf-cli-${os}_${go_arch} not found inside the archive"; }
   install -m 0755 "$bin" "${BIN_DIR}/vcf"; rm -rf "$d"
-  "${BIN_DIR}/vcf" version || log_warn "vcf installed but 'vcf version' failed"
+  # A HARD failure, not a warning: a binary that cannot run (wrong arch, or refused by macOS
+  # Gatekeeper) would otherwise surface much later, at `vcf context create`, as a login problem.
+  "${BIN_DIR}/vcf" version || die "vcf was installed to ${BIN_DIR}/vcf but does not run ('vcf version' failed)"
 }
 
 install_vcf_plugins() {
-  [ "$os" = linux ] || die "the VCF Consumption CLI plugin bundle is Linux-only for this installer (no ${os} target)"
   have vcf || [ -x "${BIN_DIR}/vcf" ] || die "install the vcf CLI first (make install-vcf-cli)"
   local vcf_bin; vcf_bin="$(command -v vcf || echo "${BIN_DIR}/vcf")"
   log_info "installing vcf plugins (bundle ${VCF_PLUGINS_VERSION}, ${os}/${go_arch})"
   local ar pdir src; resolve_archive plugins; ar="$RESOLVED_ARCHIVE"
   pdir="${WORK}/plugins"; mkdir -p "$pdir"; tar -xzf "$ar" -C "$pdir"
-  # Fail-safe (mirrors install_vcf_cli's exact-arch check): a wrong-arch plugin bundle would install
-  # binaries that only fail at plugin-exec time. Assert the extracted bundle holds linux_${go_arch}
-  # binaries (named vcf-<plugin>-linux_<arch>) before `plugin install all`.
-  [ -n "$(find "$pdir" -type f -name "vcf-*-linux_${go_arch}" -print -quit 2>/dev/null)" ] \
-    || die "the plugin bundle in ${SRC_DIR} holds no linux_${go_arch} binaries (wrong-arch bundle?) — supply the Linux_${vcf_arch} plugin bundle"
+  # Fail-safe (mirrors install_vcf_cli's exact-arch check): a wrong-arch or wrong-OS plugin bundle
+  # would install binaries that only fail at plugin-exec time. Assert the extracted bundle holds
+  # ${os}_${go_arch} binaries (named vcf-<plugin>-<os>_<arch>) before `plugin install all`.
+  [ -n "$(find "$pdir" -type f -name "vcf-*-${os}_${go_arch}" -print -quit 2>/dev/null)" ] \
+    || die "the plugin bundle in ${SRC_DIR} holds no ${os}_${go_arch} binaries (wrong-arch or wrong-OS bundle?) — supply the ${vcf_os}_${vcf_arch} plugin bundle"
   # A multi-arch bundle nests the plugins under <os>/<arch>/...; point --local-source there.
   src="$pdir"
   local archdir; archdir="$(find "$pdir" -type d -path "*/${os}/${go_arch}" -print -quit)"
@@ -207,7 +222,7 @@ case "$WHAT" in
   argocd)  install_argocd_vcf ;;
   vcf)     install_vcf_cli ;;
   plugins) install_vcf_plugins ;;
-  all)     install_argocd_vcf; install_vcf_cli; install_vcf_plugins ;;
+  all)     install_argocd_vcf skip-if-no-build; install_vcf_cli; install_vcf_plugins ;;
   *) die "usage: $0 [all|argocd|vcf|plugins]" ;;
 esac
 

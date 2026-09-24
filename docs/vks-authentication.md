@@ -115,9 +115,9 @@ Scenario 2's [Step 3b](scenario-2.md) has the full "just dump everything in ther
 
 | Artifact | Filename shape | Arches |
 |---|---|---|
-| VCF Consumption CLI (`vcf`) | `VCF-Consumption-CLI-Linux_<ARCH>-<VCF_CLI_VERSION>.tar.gz`, or the multi-arch `…-Binaries-…` bundle | linux amd64 + arm64 |
-| Plugin bundle | `VCF-Consumption-CLI-PluginBundle-Linux_<ARCH>-<VCF_PLUGINS_VERSION>.tar.gz` | linux amd64 + arm64 (Linux only) |
-| VCF-flavored argocd | `argocd-cli-linux-<arch>-<ARGOCD_VCF_VERSION>.gz` | **amd64 only** (see below) |
+| VCF Consumption CLI (`vcf`) | `VCF-Consumption-CLI-<OS>_<ARCH>-<VCF_CLI_VERSION>.tar.gz` (`<OS>` = `Linux` or `Darwin`), or the multi-arch `…-Binaries-…` bundle | linux + darwin, amd64 + arm64 |
+| Plugin bundle | `VCF-Consumption-CLI-PluginBundle-<OS>_<ARCH>-<VCF_PLUGINS_VERSION>.tar.gz` | linux + darwin, amd64 + arm64 |
+| VCF-flavored argocd | `argocd-cli-<os>-<arch>-<ARGOCD_VCF_VERSION>.gz` (`<os>` = `linux` or `darwin`) | **amd64 only** (see below) |
 
 **Where — the portal (9.1+ is entitled).** The 9.1 artifacts come from the
 **[Broadcom support portal](https://support.broadcom.com)** (with your entitlement) or the
@@ -127,14 +127,15 @@ and does not carry our pinned 9.1 so there is no no-auth public download for
 9.1 — use the portal, and keep `.env.example`'s pins in sync with what you place in the folder.
 
 **arm64 jump box — the VCF-flavored argocd is amd64-only.** Broadcom ships `argocd-vcf` for
-`linux-amd64` (and `darwin-amd64`), not `linux-arm64`, so on an arm64 box `make install-vcf-clis`
-dies at `install-argocd-vcf` with "no argocd artifact for linux/arm64". Use the **upstream argocd
+`linux-amd64` and `darwin-amd64`, no arm64 (including Apple Silicon). On an arm64 box
+`make install-vcf-clis` (`all`) SKIPS it with a warning and installs `vcf` + plugins; asking for
+it alone (`install-argocd-vcf`) dies. Use the **upstream argocd
 that `make deps` already installs** (arm64-native; Broadcom ships a **3.x** argocd CLI, and
 .1.0 publishes a **3.0.19** SERVER — so on that lab the CLI
 and server are the same generation. A CLI is deliberately tolerant across a server range either way;
 this specific upstream build against the lab server is not lab-verified), and install the rest with `make install-vcf-cli` +
-`make install-vcf-plugins` instead of `all`. The `vcf` CLI and plugin bundle are available for both
-linux amd64 and arm64.
+`make install-vcf-plugins` if you want to skip the warning. The `vcf` CLI and plugin bundle are
+available for linux and darwin, amd64 and arm64.
 
 ---
 
