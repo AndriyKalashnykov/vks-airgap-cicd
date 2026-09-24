@@ -114,9 +114,17 @@ exit 0
 FAKEGIT
   cat > "$d/bin/podman" <<'FAKEENGINE'
 #!/usr/bin/env bash
+# `info`: report an amd64 engine (B736's require_build_arch). `save -o f`: a minimal VALID
+# docker-archive, because the script now asserts the saved image's platform (assert_tarball_platform).
+[ "${1:-}" = info ] && { echo x86_64; exit 0; }
 prev=""
 for a in "$@"; do
-  [ "$prev" = "-o" ] && printf 'tar\n' > "$a"
+  if [ "$prev" = "-o" ]; then
+    d="$(mktemp -d)"
+    printf '{"architecture":"amd64","os":"linux"}' > "$d/c.json"
+    printf '[{"Config":"c.json","RepoTags":[],"Layers":[]}]' > "$d/manifest.json"
+    tar -C "$d" -cf "$a" manifest.json c.json; rm -rf "$d"
+  fi
   prev="$a"
 done
 exit 0

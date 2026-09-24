@@ -56,7 +56,7 @@ LOCK="${BUNDLE_DIR}/images.lock"
 
 
 ENGINE="$(container_engine)"
-require_build_arch "$ENGINE"   # B736: never build (and later push) the wrong architecture
+_arch_checked=0   # B736: checked lazily, right before the first real build
 log_info "engine=${ENGINE} · builder base(s) pinned by digest from images.lock (resolved PER APP below)"
 
 OUT_DIR="${BUNDLE_DIR}/builders"
@@ -109,6 +109,7 @@ for app in $BUILDER_APPS; do
   # so the air-gap side inherits the provenance for free, no second mechanism to carry it.
   #   inputs = the tree recipe  -> checkable OFFLINE, on a fresh box, which is where the defect lives
   #   base   = the resolved digest -> checkable only where bundle/images.lock exists (gitignored)
+  if [ "$_arch_checked" = 0 ]; then require_build_arch "$ENGINE"; _arch_checked=1; fi   # B736
   run "$ENGINE" build --platform "linux/$(target_arch)" \
     --build-arg "${builder_arg}=${build_base}" \
     --label "io.vks.builder.inputs=$(builder_inputs_hash "$app")" \
