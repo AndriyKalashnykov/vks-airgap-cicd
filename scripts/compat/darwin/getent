@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# getent — macOS stand-in for `getent hosts NAME...` (B735). macOS has no getent and Homebrew has no
+# GNU one. Resolves through the SYSTEM resolver (dscacheutil = getaddrinfo, honours /etc/hosts and
+# /etc/resolver/*), prints getent's `ADDR NAME` lines, exits 2 when a name does not resolve (getent's
+# "key not found"). scripts/lib/os.sh APPENDS this dir to PATH on Darwin only.
+set -uo pipefail
+[ "${1:-}" = hosts ] || { echo "getent (macOS shim): only 'getent hosts NAME...' is supported" >&2; exit 1; }
+shift
+rc=0
+for name in "$@"; do
+  addrs="$(dscacheutil -q host -a name "$name" 2>/dev/null | awk '/^ipv6_address:|^ip_address:/{print $2}')"
+  if [ -z "$addrs" ]; then rc=2; continue; fi
+  while IFS= read -r a; do printf '%-15s %s\n' "$a" "$name"; done <<< "$addrs"
+done
+exit "$rc"

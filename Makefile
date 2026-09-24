@@ -72,7 +72,18 @@ EMPTY :=
 SPACE := $(EMPTY) $(EMPTY)
 MISE_BIN := $(shell command -v mise 2>/dev/null || { [ -x "$(HOME)/.local/bin/mise" ] && printf '%s\n' "$(HOME)/.local/bin/mise"; })
 MISE_PATHS := $(if $(MISE_BIN),$(shell cd '$(CURDIR)' && '$(MISE_BIN)' bin-paths 2>/dev/null))
-export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$(if $(HOME),$(HOME)/.local/bin:,)$(PATH)
+# macOS (B735): Apple's /usr/bin/make is GNU Make 3.81, which has no .SHELLFLAGS (3.82+), so every
+# recipe below would silently lose -eu -o pipefail. Refuse it. And the scripts are GNU-flavoured, so
+# on Darwin Homebrew's GNU tools go on PATH — AFTER the pinned mise tools, BEFORE the system ones.
+ifneq ($(firstword $(sort $(MAKE_VERSION) 3.82)),3.82)
+$(error GNU make >= 3.82 is required; this is $(MAKE_VERSION). On macOS: brew install make, then use gmake)
+endif
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+BREW_PREFIX := $(or $(HOMEBREW_PREFIX),$(if $(wildcard /opt/homebrew/bin/brew),/opt/homebrew,/usr/local))
+DARWIN_GNU_PATH := $(foreach f,coreutils gnu-sed findutils grep gnu-tar gawk make,$(BREW_PREFIX)/opt/$(f)/libexec/gnubin:)$(BREW_PREFIX)/bin:
+endif
+export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$(DARWIN_GNU_PATH)$(if $(HOME),$(HOME)/.local/bin:,)$(PATH)
 
 # ⚠️ THE INCLUDE ORDER BELOW IS REVERSED RELATIVE TO load_env's, AND THAT IS THE POINT.
 # `load_env` SOURCES the files, so the LAST one read wins (.env.example → .env → .env.state →
