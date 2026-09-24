@@ -10403,7 +10403,12 @@ Still open, each recorded by an implementation-review round (2026-09-24):
   common-bootstrap.md, lib/os.sh's error). Nothing checks they agree.
 - **`vcf version` is now fatal after install.** Measured working on the Mac; a Linux jumpbox leg
   with the VCF archives mounted has not been re-run since.
-- `install-all` + `verify` from the Mac: running.
+- `install-all` + `verify` from the Mac: **DONE 2026-09-24** — rc=0 in 25 min + `verify` rc=0 for all
+  six apps, with `BUILD_EMULATE=1` and Rosetta enabled for the podman machine (QEMU aborted the .NET
+  builder; engine-check now requires Rosetta when a .NET app is enrolled).
+- **walk-doc on a macOS row runs `make` literally**, i.e. Apple's 3.81, which the Makefile refuses; it
+  does not translate to `gmake`. And an unset `WALK_OS` falls through to the Linux blocks (walkbox.sh
+  always sets it, so only hand runs). A macOS walk row needs both before it can be automated.
 
 ## 🟡 B738 — `.env` carries every pin from `.env.example`, so a version bump never reaches an existing operator
 
