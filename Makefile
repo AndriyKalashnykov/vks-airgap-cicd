@@ -1425,7 +1425,7 @@ check-pod-inject-label: ## Gate: every workload we ship declines sidecar injecti
 	@$(SCRIPTS)/check-pod-inject-label.sh
 
 .PHONY: check-toolchain-alignment
-check-toolchain-alignment: ## Fail if the kubectl/go pins in .mise.toml disagree with .env.example / images.txt
+check-toolchain-alignment: ## Fail if the kubectl pins (.mise.toml vs .env.example) or the two crane pins in .mise.toml disagree
 # B198, REDESIGNED 2026-08-21 after its idea round refuted BOTH the row and the fix it prescribed:
 #  - the row said this printed `go aligned ()` and EXITED 0. Measured: it did not. `.SHELLFLAGS` is
 #    `-eu -o pipefail -c`, so a non-matching grep exits 1 and killed the recipe AT THE ASSIGNMENT
@@ -1448,6 +1448,15 @@ check-toolchain-alignment: ## Fail if the kubectl/go pins in .mise.toml disagree
 	fi; \
 	echo "check-toolchain-alignment: kubectl aligned ($$mise_v)"
 	@echo "check-toolchain-alignment: go arm retired (see check-image-alignment)"
+	@lin=$$(grep -E '^crane[[:space:]]*=' .mise.toml | head -1 | sed -nE 's/.*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' || true); \
+	mac=$$(grep -E '^"go:github.com/google/go-containerregistry/cmd/crane"[[:space:]]*=' .mise.toml | head -1 | sed -nE 's/.*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' || true); \
+	[ -n "$$lin" ] || { echo "ERROR: could not read the linux crane pin from .mise.toml - the extractor is blind, not the pin absent."; exit 1; }; \
+	if [ "$$lin" != "$$mac" ]; then \
+	  echo "ERROR: crane version drift (BLOCKING) - .mise.toml linux crane=$$lin vs macOS go:…/cmd/crane=$${mac:-<none>}."; \
+	  echo "       Same tool, two pins: release binary (linux) + source build (macOS, B735). Align them."; \
+	  exit 1; \
+	fi; \
+	echo "check-toolchain-alignment: crane aligned ($$lin, linux release + macOS source build)"
 
 # GO ARM RETIRED 2026-08-23. It compared .mise.toml go against images/images.txt. That mise pin is
 # GONE: go is not installed on the host any more, because app-test, check-ui-contract, trivy-fs and

@@ -30,10 +30,11 @@ harbor_setup() {
     HARBOR_TLS_VERIFY="false"; log_warn "HARBOR_INSECURE=1 — skipping TLS verification (demo only)"
   elif [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "$HARBOR_CA_FILE" ]; then
     # crane (go-containerregistry) honors SSL_CERT_FILE — point it at system CAs + the Harbor CA
+    # (on macOS crane_trust_env also sets the GODEBUG that makes Go honour it; see lib/tls.sh)
     # so pushes verify the self-signed cert WITHOUT modifying the root-owned trust store (no sudo).
     local bundle="${tmp}/ca-bundle.crt"
     ca_bundle_with_system "$HARBOR_CA_FILE" "$bundle"
-    export SSL_CERT_FILE="$bundle"
+    crane_trust_env "$bundle" || die "crane cannot be made to trust the Harbor CA (see above)"
     log_info "trusting Harbor CA via SSL_CERT_FILE=$bundle (no system-store change, no sudo)"
   fi
   CURL_CACERT=(); [ -f "${HARBOR_CA_FILE:-/nonexistent}" ] && CURL_CACERT=(--cacert "$HARBOR_CA_FILE")

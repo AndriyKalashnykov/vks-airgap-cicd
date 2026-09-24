@@ -176,7 +176,7 @@ if have crane; then
     # pulls here — and, more importantly, SSL_CERT_FILE is NOT a way to make this box trust ONLY
     # our CA. See claude-config rules/common/version-discipline.md.
     CRANE_TMP="$(mktemp -d)"; ca_bundle_with_system "$CA" "${CRANE_TMP}/ca-bundle.crt"
-    SSL_CERT_FILE="${CRANE_TMP}/ca-bundle.crt" run crane validate --remote "$TAG"
+    ( crane_trust_env "${CRANE_TMP}/ca-bundle.crt" && run crane validate --remote "$TAG" )
     rm -rf "$CRANE_TMP"
   fi
 else
