@@ -1060,7 +1060,7 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-24 — scenario-1 IS RUNNING on the 2026-09-17 cut; macOS jump-box port in flight
+## ▶️ HANDOFF 2026-09-24 — scenario-1 IS RUNNING on the 2026-09-17 cut; macOS jump-box port MERGED
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
@@ -1082,14 +1082,13 @@ is what those PRs actually touched, and rewriting them would falsify the record.
   Details + how to watch it: B737.
 - All CP container restarts are `Unknown exit=255` at the lab restarts, not OOMs.
 
-### In flight — branch `feat/macos-jumpbox` (worktree `../vks-airgap-cicd-macos`)
+### macOS jump box — MERGED (#1283 → `8e862c2`), B736 closed by it
 
-B735 (macOS jump box), B736 (arm64 build host overwrites amd64 tags — a real hazard for ANY arm64
-box), B737 (this state). Owner decisions 2026-09-23: Homebrew GNU tools on PATH (not a BSD
-rewrite); crane built from source with Go ≥ 1.27 + `GODEBUG=x509sslcertoverrideplatform=1` on
-Darwin; re-run scenario-1 from the Mac against the EXISTING cicd-gc3 only AFTER the port (no new
-cluster, no teardown). A rented Mac (Scaleway, `ssh m1@51.159.120.46`, reaches the lab only through
-`ssh -R` tunnels) is available until the owner deletes it.
+MEASURED on a rented Apple-silicon Mac (podman 6.1.2) against cicd-gc3: scenario-1 Steps 2-7, then
+`BUILD_EMULATE=1 make install-all` (rc=0, 25 min) and `make verify` (rc=0, all six apps). It needs
+Rosetta for the podman machine (QEMU aborts the .NET builder; engine-check says how). The Mac and its
+tunnels were torn down; a re-test needs a new Mac plus `ssh -R` tunnels to .128/.130/.131/.134-.136
+and vcsa. Open residuals are listed in B735; B738 is new.
 
 ### 🔴 DISTRUST FIRST
 
@@ -1103,8 +1102,8 @@ cluster, no teardown). A rented Mac (Scaleway, `ssh m1@51.159.120.46`, reaches t
 
 ### NOT done — next work, ranked
 
-1. **B735 + B736** on `feat/macos-jumpbox` (design reviewed by `vks-adversary` +
-   `adversary-bash-git-cli` 2026-09-23; the numbered list in B735 is the work).
+1. **B735 residuals** (engine trust inside the podman VM, argocd via Rosetta, walk-doc on a macOS
+   row, the brew list written 3x) and **B738** (`.env` pins never see a bump).
 2. **B725** (🔴 HIGH) — `02-env.sh:90` fabricates `HARBOR_PASSWORD`; `env-validate` goes green on it.
 3. **B722**, **B723** (now 9 `.env.state.stale-*` files), **B734**, then the tier-3 list.
 
