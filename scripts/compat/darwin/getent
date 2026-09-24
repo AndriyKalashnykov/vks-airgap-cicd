@@ -8,7 +8,10 @@ set -uo pipefail
 shift
 rc=0
 for name in "$@"; do
-  addrs="$(dscacheutil -q host -a name "$name" 2>/dev/null | awk '/^ipv6_address:|^ip_address:/{print $2}')"
+  out="$(dscacheutil -q host -a name "$name" 2>/dev/null)"
+  # IPv4 first, like glibc's getent, so `awk '{print $1; exit}'` callers see an IPv4 address.
+  addrs="$(printf '%s\n' "$out" | awk '/^ip_address:/{print $2}'; printf '%s\n' "$out" | awk '/^ipv6_address:/{print $2}')"
+  addrs="$(printf '%s\n' "$addrs" | sed '/^$/d')"
   if [ -z "$addrs" ]; then rc=2; continue; fi
   while IFS= read -r a; do printf '%-15s %s\n' "$a" "$name"; done <<< "$addrs"
 done

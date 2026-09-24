@@ -75,15 +75,20 @@ MISE_PATHS := $(if $(MISE_BIN),$(shell cd '$(CURDIR)' && '$(MISE_BIN)' bin-paths
 # macOS (B735): Apple's /usr/bin/make is GNU Make 3.81, which has no .SHELLFLAGS (3.82+), so every
 # recipe below would silently lose -eu -o pipefail. Refuse it. And the scripts are GNU-flavoured, so
 # on Darwin Homebrew's GNU tools go on PATH — AFTER the pinned mise tools, BEFORE the system ones.
-ifneq ($(firstword $(sort $(MAKE_VERSION) 3.82)),3.82)
+# Test the FEATURE, not the version string: `oneshell` arrived in 3.82 together with .SHELLFLAGS
+# (a string sort would also refuse a future make 10.x).
+ifeq ($(filter oneshell,$(.FEATURES)),)
 $(error GNU make >= 3.82 is required; this is $(MAKE_VERSION). On macOS: brew install make, then use gmake)
 endif
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
 BREW_PREFIX := $(or $(HOMEBREW_PREFIX),$(if $(wildcard /opt/homebrew/bin/brew),/opt/homebrew,/usr/local))
-DARWIN_GNU_PATH := $(foreach f,coreutils gnu-sed findutils grep gnu-tar gawk make,$(BREW_PREFIX)/opt/$(f)/libexec/gnubin:)$(BREW_PREFIX)/bin:
+# foreach joins with SPACES — strip them, or every entry after the first is invalid (measured).
+DARWIN_GNU_PATH := $(subst $(SPACE),,$(foreach f,coreutils gnu-sed findutils grep gnu-tar gawk make,$(BREW_PREFIX)/opt/$(f)/libexec/gnubin:))
+# Homebrew's bin goes AFTER ~/.local/bin, so a Homebrew tkn/argocd never shadows the pinned ones.
+DARWIN_BREW_BIN := $(BREW_PREFIX)/bin:
 endif
-export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$(DARWIN_GNU_PATH)$(if $(HOME),$(HOME)/.local/bin:,)$(PATH)
+export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$(DARWIN_GNU_PATH)$(if $(HOME),$(HOME)/.local/bin:,)$(DARWIN_BREW_BIN)$(PATH)
 
 # ⚠️ THE INCLUDE ORDER BELOW IS REVERSED RELATIVE TO load_env's, AND THAT IS THE POINT.
 # `load_env` SOURCES the files, so the LAST one read wins (.env.example → .env → .env.state →

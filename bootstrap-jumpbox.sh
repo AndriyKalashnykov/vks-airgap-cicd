@@ -67,7 +67,7 @@ pkg_install() {  # pkg_install <pkg...>
   case "$PKG" in
     apt-get) DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y --no-install-recommends "$@" >/dev/null 2>&1;;
     tdnf)    $SUDO tdnf install -y "$@" >/dev/null 2>&1;;
-    brew)    brew install "$@" >/dev/null 2>&1;;
+    brew)    HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_UPGRADE=1 brew install "$@" >/dev/null;;   # errors stay visible
   esac
 }
 
@@ -137,7 +137,7 @@ run_deps() {
 verify_report() {
   say "Toolchain verification"
   export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-  local tools="git mise kubectl helm kustomize jq yq crane tkn argocd make" t v miss=0
+  local tools="git mise kubectl helm kustomize jq yq crane tkn argocd ${MAKE_CMD:-make}" t v miss=0
   printf '  %-10s %-8s %s\n' "TOOL" "STATUS" "VERSION"
   printf '  %-10s %-8s %s\n' "----" "------" "-------"
   for t in $tools; do
@@ -169,7 +169,7 @@ main() {
   ensure_repo
   run_deps
   verify_report
-  say "Done. Next:  cd $DIR  &&  see the README 'Quick Start' / 'Run against a real VKS lab'."
+  say "Done. Next:  cd $DIR  &&  use '${MAKE_CMD:-make}' for every make command  &&  see the README 'Quick Start' / 'Run against a real VKS lab'."
 }
 
 main "$@"

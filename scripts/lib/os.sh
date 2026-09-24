@@ -38,21 +38,23 @@ if [ "$(uname -s)" = Darwin ]; then
   if [ -n "${HOMEBREW_PREFIX:-}" ]; then _brew="$HOMEBREW_PREFIX"
   elif [ -x /opt/homebrew/bin/brew ]; then _brew=/opt/homebrew
   else _brew=/usr/local; fi
-  for _d in "$_brew/bin" "$_brew/opt/make/libexec/gnubin" "$_brew/opt/gawk/libexec/gnubin" \
+  for _d in "$_brew/opt/make/libexec/gnubin" "$_brew/opt/gawk/libexec/gnubin" \
             "$_brew/opt/gnu-tar/libexec/gnubin" "$_brew/opt/grep/libexec/gnubin" \
             "$_brew/opt/findutils/libexec/gnubin" "$_brew/opt/gnu-sed/libexec/gnubin" \
             "$_brew/opt/coreutils/libexec/gnubin"; do
     case ":$PATH:" in *":$_d:"*) ;; *) if [ -d "$_d" ]; then PATH="$_d:$PATH"; fi ;; esac
   done
+  # Homebrew's bin (bash 5, flock, envsubst, gmake) and the getent shim are APPENDED: they must never
+  # shadow the pinned tools in ~/.local/bin or a test's stub dirs.
+  case ":$PATH:" in *":$_brew/bin:"*) ;; *) PATH="$PATH:$_brew/bin" ;; esac
   case ":$PATH:" in *":$REPO_ROOT/scripts/compat/darwin:"*) ;; *) PATH="$PATH:$REPO_ROOT/scripts/compat/darwin" ;; esac
   export PATH
   if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] || ! sed --version >/dev/null 2>&1 || ! command -v timeout >/dev/null 2>&1; then
     printf '%s\n' "ERROR: macOS needs Homebrew's bash and GNU tools for these scripts (running bash ${BASH_VERSION:-?})." \
       "  brew install bash coreutils gnu-sed findutils grep gawk gnu-tar make flock gettext" \
       "  then run the targets with gmake (or run 'gmake shell-init' so plain 'make' is GNU make)." >&2
-    unset _brew _d
-    # shellcheck disable=SC2317  # exit is reached only when os.sh is executed instead of sourced
-    return 1 2>/dev/null || exit 1
+    # exit, not return: a sourcing script without `set -e` would carry on with no os.sh functions.
+    exit 1
   fi
   unset _brew _d
 fi
@@ -551,7 +553,7 @@ pkg_install() {
     apt-get) DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y --no-install-recommends "$@" ;;
     tdnf)    $SUDO tdnf install -y "$@" ;;
     dnf)     $SUDO dnf install -y "$@" ;;
-    brew)    brew install "$@" ;;       # never with sudo: brew refuses to run as root
+    brew)    HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_UPGRADE=1 brew install "$@" ;;  # never sudo: brew refuses root
   esac
 }
 

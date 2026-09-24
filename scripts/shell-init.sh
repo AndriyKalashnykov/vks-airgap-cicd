@@ -40,7 +40,7 @@ if [ "$(uname -s)" = Darwin ] && ! grep -qs 'vks-airgap-cicd: macOS GNU tools' "
   _bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
   _gnu=""
   for _f in coreutils gnu-sed findutils grep gnu-tar gawk make; do _gnu="${_gnu}${_bp}/opt/${_f}/libexec/gnubin:"; done
-  _gnu="${_gnu}${_bp}/bin"
+  _gnu="${_gnu%:}"   # gnubin only: brew shellenv already puts brew/bin on PATH, AFTER nothing we pin
   mkdir -p "$(dirname "$RC")"
   # shellcheck disable=SC2016  # literal $PATH on purpose: expanded by the operator's shell at login
   {
