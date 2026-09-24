@@ -10368,6 +10368,42 @@ Mirroring is already safe (`lib/mirror.sh:76-84` forces `linux/${MIRROR_ARCH:-am
 image's architecture is the target, `die` otherwise. **Done when:** RED-proven on an arm64 host (the
 assertion refuses an arm64 image) and the Mac's build yields `linux/amd64`.
 
+**Progress 2026-09-24 (branch `feat/macos-vcf-cli`, which carries the whole stack):** items 1-4, 7, 9
+landed earlier on `feat/macos-jumpbox`. Since then, each MEASURED on the rented Mac:
+
+- crane: `.mise.toml` builds crane 0.21.9 from source with Go 1.27.1 on macOS (release binary on
+  Linux); `lib/tls.sh crane_trust_env` sets `GODEBUG=x509sslcertoverrideplatform=1`. Against the live
+  Harbor: SSL_CERT_FILE alone → Apple rejects the leaf ("not standards compliant"); through
+  `crane_trust_env` → TLS OK (NOT_FOUND from Harbor); wrong CA → "unknown authority".
+- item 7: the VCF CLI + plugin bundle install from the Darwin archives (`make install-vcf-clis` on the
+  Mac: vcf v9.1.1.0.25662425 arm64 + 10 plugins; the amd64-only VCF argocd is skipped with a warning).
+- item 5: `engine-check` checks the engine VM on macOS (it reported 2 false PROBLEMs and stopped
+  `install-all` at preflight).
+- scenario-1 Steps 2-7 walked on the Mac against the live lab, every step rc=0 (one SSO login).
+  Harness notes, not product defects: the operator `.env` needed `VKS_AUTH_METHOD=vcf` for Step 3
+  (Step 6 switches it), and the Harbor CA comes from `make harbor-ca-from-cluster` here.
+- B736 (arm64 builds): `--platform linux/$(target_arch)` + a pre-push platform assertion landed; the
+  Mac's podman VM is arm64 and runs amd64 containers via qemu, so builds need `BUILD_EMULATE=1`.
+
+Still open: `install-all` + `verify` from the Mac (running), items 8, 10, 11, and B738.
+
+## 🟡 B738 — `.env` carries every pin from `.env.example`, so a version bump never reaches an existing operator
+
+`make env-init` copies `.env.example` → `.env` whole, and `.env` outranks `.env.example` in
+`load_env`. So a pin bumped later in `.env.example` is invisible to anyone who ran `env-init` before
+the bump. MEASURED 2026-09-24: after #1282 moved `VCF_CLI_VERSION` / `VCF_PLUGINS_VERSION` to 9.1.1,
+the lab host's `.env` still pinned `9.1.0.0400.*`, and `make install-vcf-clis` on the Mac looked for
+`…Darwin_ARM64-9.1.0.0400.25509669.tar.gz`. Of the `*_VERSION`/`*_TAG` keys in that `.env`, 3 differ
+from `origin/main`'s `.env.example`: the two VCF pins and `BUILDER_IMAGE_TAG` (commented in
+`.env.example`).
+
+**Fix, not yet designed:** either `env-init` writes only operator-supplied keys (and pins stay in
+`.env.example`), or a check (`env-check`?) warns when a `.env` pin differs from `.env.example`'s.
+Design review before choosing: some operators pin deliberately.
+
+**Done when:** a pin bump in `.env.example` reaches an operator who ran `env-init` before it, or they
+are told it did not.
+
 ## 🟡 B737 — the handoff says PAUSED, but scenario-1 was walked on the 2026-09-17 cut and is RUNNING
 
 MEASURED 2026-09-23: `secrets/cicd-gc3.kubeconfig` → cicd-gc3 (1 CP + 2 workers, v1.36.2, age 6d),
