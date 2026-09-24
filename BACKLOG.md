@@ -10443,13 +10443,17 @@ The owner then chose "repo always wins" for the Renovate pins. Shipped:
   test cases, RED against that version.
 - The pin classifier is pure bash: `test-kind-down-safety` runs `load_env` with a curated PATH that
   has no `awk`.
+- `PIN_OVERRIDE` parsing (review round 2, each case measured wrong before): tabs and newlines count as
+  separators (a CI block scalar), `read -a` splits without glob expansion, `KEY=` is named and
+  ignored, the LAST value of a repeated key wins and the repeat is named. Separate warn-once flags
+  for the two kinds of message.
 - `check-image-alignment` reports a stale `.env` value for a repo pin as a NOTE (nothing uses it now)
   instead of failing the build. The `lab-validation-plan` snippet reads the pin from `.env.example`.
 - **`env-init`** writes repo pins commented.
 - **`install-vcf-clis`**, when the pinned archive is missing but another build is in the folder,
   names it and the exact `.env` line (the incident's actual fix: the VCF pins are LAB pins); its
   `:?` messages say `.env`, not the tracked `.env.example`.
-- **`test-env-pins.sh`**: 22 checks, RED against the pre-B738 files and against the refuted first version. `load_env` costs
+- **`test-env-pins.sh`**: 30 checks, RED against the pre-B738 files and against both refuted versions. `load_env` costs
   34 ms instead of 23 (measured, 20 runs each).
 
 Correction to the text above: `BUILDER_IMAGE_TAG` is NOT a `.env.example` pin (it ships commented;

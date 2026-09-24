@@ -843,7 +843,7 @@ load_env() {
   # B738: REPO pins follow .env.example, not a copy frozen in .env at env-init time. Record each
   # repo pin's .env.example value; the shell's own value is overwritten by sourcing, as it always was
   # (a stale export from `set -a; . ./.env` must NOT read as intent). Per-run override: PIN_OVERRIDE.
-  local _pins _labpins _p _pin_ex="" _pin_stale="" _pin_used=""
+  local _pins _labpins _p _pin_ex="" _pin_stale="" _pin_used="" _pin_bad=""
   _pin_scan "$example"; _pins="$_PIN_REPO"; _labpins="$_PIN_LAB"
 
   set -a
@@ -961,27 +961,48 @@ EOF
   # B738, continued — after .env AND the state overlays, so a stale repo pin anywhere is caught.
   # PIN_OVERRIDE='KEY=value KEY2=value2' is the ONLY per-run override, for either class, and it is
   # announced: an ambient shell value never is one (it is what a stale `set -a; . ./.env` leaves).
-  local _cur _x _o _w _ovr=" ${PIN_OVERRIDE:-} "
-  for _w in ${PIN_OVERRIDE:-}; do
-    case " $_pins $_labpins " in *" ${_w%%=*} "*) ;; *) _pin_used="${_pin_used} ${_w%%=*}(NOT a version pin — ignored)" ;; esac
+  # Parsing: tabs/newlines count as spaces (a CI block scalar yields newlines); `read -a` splits
+  # without glob expansion; KEY needs a non-empty value; the LAST occurrence of a KEY wins, and a
+  # repeat is announced. Every malformed word is named, never silently dropped.
+  local _cur _x _o _w _k _ovmap="" _ws=()
+  local _norm="${PIN_OVERRIDE:-}"
+  _norm="${_norm//[$'\t\n\r']/ }"
+  read -r -a _ws <<< "$_norm" || true
+  for _w in ${_ws[@]+"${_ws[@]}"}; do
+    _k="${_w%%=*}"
+    case "$_w" in
+      *=?*) ;;
+      *) _pin_bad="${_pin_bad:-} ${_w}(no value — ignored)"; continue ;;
+    esac
+    case " $_pins $_labpins " in
+      *" ${_k} "*) ;;
+      *) _pin_bad="${_pin_bad:-} ${_k}(NOT a version pin — ignored)"; continue ;;
+    esac
+    _pin_get "$_ovmap" "$_k"
+    if [ -n "$_PIN_GOT" ] && [ "$_PIN_GOT" != "${_w#*=}" ]; then
+      _pin_bad="${_pin_bad:-} ${_k}(given twice — the LAST value, ${_w#*=}, is used)"
+    fi
+    _ovmap="${_k}=${_w#*=}"$'\n'"${_ovmap}"      # newest first: _pin_get returns the LAST occurrence
   done
   for _p in $_pins $_labpins; do
-    _o=""
-    case "$_ovr" in *" ${_p}="*) _o="${_ovr#* "${_p}"=}"; _o="${_o%% *}" ;; esac
+    _pin_get "$_ovmap" "$_p"; _o="$_PIN_GOT"
     if [ -n "$_o" ]; then export "$_p=$_o"; _pin_used="${_pin_used} ${_p}=${_o}"; continue; fi
     case " $_pins " in *" $_p "*) ;; *) continue ;; esac   # a LAB pin keeps .env's (or the overlay's) value
     _cur="${!_p:-}"; _pin_get "$_pin_ex" "$_p"; _x="$_PIN_GOT"
     if [ "$_cur" != "$_x" ]; then _pin_stale="${_pin_stale} ${_p}=${_cur} (repo: ${_x})"; fi
     export "$_p=$_x"
   done
-  if [ "${_VKS_PIN_WARNED:-0}" != 1 ]; then
-    if [ -n "$_pin_stale" ]; then
-      log_warn "IGNORED old version pins in .env (or the state overlay):${_pin_stale}"
-      log_warn "  These follow .env.example now. Delete those lines from .env. To try another version"
-      log_warn "  for one run: PIN_OVERRIDE='KEY=value' make <target>."
-    fi
-    if [ -n "$_pin_used" ]; then log_warn "PIN_OVERRIDE in effect for this run:${_pin_used}"; fi
-    if [ -n "$_pin_stale$_pin_used" ]; then export _VKS_PIN_WARNED=1; fi
+  # Two flags, so a child that finds a DIFFERENT problem is not silenced by the parent's other one.
+  if [ -n "$_pin_stale" ] && [ "${_VKS_PIN_STALE_WARNED:-0}" != 1 ]; then
+    log_warn "IGNORED old version pins in .env (or the state overlay):${_pin_stale}"
+    log_warn "  These follow .env.example now. Delete those lines from .env. To try another version"
+    log_warn "  for one run: PIN_OVERRIDE='KEY=value' make <target>."
+    export _VKS_PIN_STALE_WARNED=1
+  fi
+  if [ -n "$_pin_used${_pin_bad:-}" ] && [ "${_VKS_PIN_OVERRIDE_WARNED:-0}" != 1 ]; then
+    [ -z "$_pin_used" ] || log_warn "PIN_OVERRIDE in effect for this run:${_pin_used}"
+    [ -z "${_pin_bad:-}" ] || log_warn "PIN_OVERRIDE problems:${_pin_bad}"
+    export _VKS_PIN_OVERRIDE_WARNED=1
   fi
 
   export KUBECONFIG="${KUBECONFIG:-${REPO_ROOT}/secrets/vks.kubeconfig}"

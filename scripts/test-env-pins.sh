@@ -29,7 +29,7 @@ REPO_X="$(ex "$REPO_PIN")"; LAB_X="$(ex "$LAB_PIN")"
 # le [VAR=value ...] — load_env in the scratch repo; prints "<repo>|<lab>", warnings to $T/err.
 # The given VAR=value pairs are the CALLER'S environment (e.g. a stale export from `. ./.env`).
 le() {
-  (cd "$T" && env -u "$REPO_PIN" -u "$LAB_PIN" -u _VKS_PIN_WARNED -u PIN_OVERRIDE "$@" \
+  (cd "$T" && env -u "$REPO_PIN" -u "$LAB_PIN" -u _VKS_PIN_STALE_WARNED -u _VKS_PIN_OVERRIDE_WARNED -u PIN_OVERRIDE "$@" \
      bash -c '. scripts/lib/os.sh; load_env; printf "%s|%s\n" "$'"$REPO_PIN"'" "$'"$LAB_PIN"'"') 2>"$T/err"
 }
 chk() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 — want [$2] got [$3]"; fi; }
@@ -64,6 +64,24 @@ if err_has "PIN_OVERRIDE in effect for this run: ${REPO_PIN}=9.9.9 ${LAB_PIN}=7.
 le "PIN_OVERRIDE=NOT_A_PIN=1" >/dev/null
 if err_has "NOT_A_PIN(NOT a version pin"; then ok "a non-pin key in PIN_OVERRIDE is named, not silently used"; else bad "non-pin key not reported: $(cat "$T/err")"; fi
 
+echo "== PIN_OVERRIDE parsing (round-2 review): tab/newline separators, KEY=, duplicates, globs"
+TWO_REPO="$(grep -B1 -E '^[A-Z_]+_VERSION=' "$T/.env.example" | grep -A1 '^# renovate:' | grep -oE '^[A-Z_]+_VERSION' | grep -v "^${REPO_PIN}$" | head -1)"
+chk_pair() {   # chk_pair <label> <PIN_OVERRIDE value>: want REPO_PIN=1.1.1 and TWO_REPO=v9, no whitespace
+  local got
+  got="$(cd "$T" && env -u "$REPO_PIN" -u "$TWO_REPO" -u _VKS_PIN_OVERRIDE_WARNED PIN_OVERRIDE="$2" \
+         bash -c '. scripts/lib/os.sh; load_env; printf "[%s][%s]" "$'"$REPO_PIN"'" "$'"$TWO_REPO"'"' 2>"$T/err")"
+  chk "$1" "[1.1.1][v9]" "$got"
+}
+rm -f "$T/.env"
+chk_pair "tab-separated"     "${REPO_PIN}=1.1.1"$'\t'"${TWO_REPO}=v9"
+chk_pair "newline-separated" "${REPO_PIN}=1.1.1"$'\n'"${TWO_REPO}=v9"
+chk "KEY= is ignored (repo value kept)" "${REPO_X}|${LAB_X}" "$(le "PIN_OVERRIDE=${REPO_PIN}=")"
+if err_has "${REPO_PIN}=(no value"; then ok "KEY= is named, not silently dropped"; else bad "KEY= not reported: $(cat "$T/err")"; fi
+chk "duplicate KEY: the LAST value wins" "2.2.2|${LAB_X}" "$(le "PIN_OVERRIDE=${REPO_PIN}=1.1.1 ${REPO_PIN}=2.2.2")"
+if err_has "given twice"; then ok "the duplicate is announced"; else bad "duplicate not reported: $(cat "$T/err")"; fi
+le "PIN_OVERRIDE=*" >/dev/null
+if err_has "\*(no value"; then ok "a glob is not expanded against the current directory"; else bad "glob handling: $(cat "$T/err")"; fi
+
 echo "== a stale repo pin in the legacy .env.kind overlay is caught too"
 rm -f "$T/.env"; printf '%s=0.0.3\n' "$REPO_PIN" > "$T/.env.kind"
 chk "legacy overlay" "${REPO_X}|${LAB_X}" "$(le)"
@@ -72,8 +90,10 @@ rm -f "$T/.env.kind"
 
 echo "== warn once per process tree"
 printf '%s=0.0.1\n' "$REPO_PIN" > "$T/.env"
-le _VKS_PIN_WARNED=1 >/dev/null
-if err_has IGNORED; then bad "warned again with _VKS_PIN_WARNED=1"; else ok "silent when already warned"; fi
+le _VKS_PIN_STALE_WARNED=1 >/dev/null
+if err_has IGNORED; then bad "warned again with _VKS_PIN_STALE_WARNED=1"; else ok "silent when already warned"; fi
+le _VKS_PIN_OVERRIDE_WARNED=1 >/dev/null
+if err_has IGNORED; then ok "a parent's PIN_OVERRIDE notice does not silence a stale-pin warning"; else bad "stale warning suppressed by the override flag"; fi
 
 echo "== env-init: repo pins written commented, lab pins active"
 rm -f "$T/.env"
