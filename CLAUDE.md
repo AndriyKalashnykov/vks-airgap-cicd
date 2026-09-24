@@ -1060,53 +1060,53 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-16 — B727 shipped + a B574-gap lint fix; PAUSED for a fresh lab cut
+## ▶️ HANDOFF 2026-09-24 — scenario-1 IS RUNNING on the 2026-09-17 cut; macOS jump-box port in flight
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### Shipped this session (both merged on green, post-merge CI success, branches deleted)
+### State of the lab (MEASURED 2026-09-23/24 — re-measure, do not trust)
 
-- **PR #1273** (`4af5474`) — **B727**: replaced `98-uninstall-all.sh`'s data-losing
-  `sed '/${APP_DOMAIN}/d' /etc/hosts` (deleted the `127.0.0.1 localhost` line) with an LB-IP-anchored
-  `_hosts_teardown_advice()` in `lib/apps.sh` (`/^<escaped-ip>[[:space:]]/d`; empty LB IP → no sed +
-  by-hand removal naming the hosts). New `scripts/test-hosts-teardown-advice.sh` (10/10, fast tier,
-  auto-discovered): applies the *emitted* sed to a fixture; TWO RED-proofs (naive `/<domain>/d`
-  destroys localhost+corp; dropped-`^` deletes the indented LB-IP line). Fixture hosts DERIVED from
-  the registry. `adversary-bash-git-cli` impl-round: **cleared** (all claims ran-it; its one LOW —
-  the `^` anchor wasn't itself under test — is the indented-LB-IP assertion). B727 row → CLOSED.
-- **PR #1274** (`d30e6a0`) — fixed a **pre-existing** `test-b561-kind-provenance.sh:29` SC2115
-  lint-red that merged via #1269 because CI's `static-check-fast` **omits `lint`** (the B574 gap);
-  `"${T:?}/$1"`. `make lint` now `OK`.
+- The "PAUSED for a fresh lab cut" state is OVER. Scenario-1 was walked on that cut (2026-09-17) and
+  is live: guest cluster **cicd-gc3** in vSphere Namespace `cicd` (1 CP + 2 workers, v1.36.2,
+  `builtin-generic-v3.7.0`, every node `best-effort-small`), Gitea `192.168.101.135`, ingress
+  `192.168.101.136`, all six apps + Tekton + Istio + headlamp Running. ArgoCD is the Supervisor
+  Service in ns `lab`. None of this was recorded here until now (B737).
+- **The CP's "102–106% memory" is NOT pressure** — it is `kubectl top` dividing by ALLOCATABLE
+  (`--show-capacity` reads 76%). Evidence: 0 kernel OOM kills in the journal across all 7 boots
+  since creation (kernel log complete per boot; search positive-controlled), 0 kubelet evictions,
+  cadvisor `container_oom_events_total` 0/72, kubepods `failcnt` 0; control cluster `lab-gc1`
+  (same class, half the pods) reads 104%. The margin that matters is the kubepods cgroup: limit
+  2933Mi (= 3910Mi capacity − 977Mi systemReserved), usage 2828Mi of which 1177Mi is reclaimable
+  cache, rss 1608Mi. Resize is OPTIONAL and was NOT done (a 1-CP rollout has a no-quorum window).
+  Details + how to watch it: B737.
+- All CP container restarts are `Unknown exit=255` at the lab restarts, not OOMs.
+
+### In flight — branch `feat/macos-jumpbox` (worktree `../vks-airgap-cicd-macos`)
+
+B735 (macOS jump box), B736 (arm64 build host overwrites amd64 tags — a real hazard for ANY arm64
+box), B737 (this state). Owner decisions 2026-09-23: Homebrew GNU tools on PATH (not a BSD
+rewrite); crane built from source with Go ≥ 1.27 + `GODEBUG=x509sslcertoverrideplatform=1` on
+Darwin; re-run scenario-1 from the Mac against the EXISTING cicd-gc3 only AFTER the port (no new
+cluster, no teardown). A rented Mac (Scaleway, `ssh m1@51.159.120.46`, reaches the lab only through
+`ssh -R` tunnels) is available until the owner deletes it.
 
 ### 🔴 DISTRUST FIRST
 
 | instrument | what it did |
 |---|---|
-| **a backgrounded `cmd >log 2>&1; echo rc=$?` / `; tail`** | the task-completion notification reported **"exit 0"** over a FAILED `make lint` AND over `test-scripts-fast`, TWICE — the last statement's status becomes the task status. Read the LOG's verdict line, never the notification's exit code. |
-| **`static-check-fast` (the PR gate)** | omits BOTH `lint` and `test-scripts` (B574). A green PR check does NOT mean `static-check` passed — run `make lint` + `make test-scripts` locally for any shell/test change. |
-| **a backlog row HEADER** | systematically stale. Of 7 top-severity rows read this session, 3 were softer than their titles (B470 litter already fixed; B484 re-graded LOW/disclosed; B500 an intentional placeholder). `git log -S` / read the code before briefing. |
-| **a grep pattern with regex metachars in an `&&` chain** | `grep -q '${T:?}...'` failed to match (regex-special) and broke the chain; use `grep -Fq` for fixed strings. |
+| **`kubectl top node` %** | divides by ALLOCATABLE: 100%+ is the baseline for `best-effort-small` here, not pressure. |
+| **`journalctl -k` without `-b`** | reads the CURRENT boot only — a "0 OOM" from it covers hours, not the node's life. |
+| **cadvisor text parsed by field position** | some series carry a timestamp and some do not; `$(NF-1)` read a limit as 0. Parse by name. |
+| **`static-check-fast` under Apple `/usr/bin/make` 3.81** | no `.SHELLFLAGS` → recipes lose `-e`/`pipefail`; a green there is not a green (B735). |
+| **a backgrounded `cmd >log; echo rc=$?`** | the notification's exit code is the echo's. Read the log's verdict line. |
 
-### NOT done — next work, ranked (verified against code this session)
+### NOT done — next work, ranked
 
-1. **B725** (🔴 HIGH, RECOMMENDED, LAB-INDEPENDENT) — `02-env.sh:90` generates `HARBOR_PASSWORD` with
-   NO discriminator and it is in `required=`, so `make env-validate` goes GREEN on a password Harbor
-   never accepted (2nd instance of the B714/B715 fabricated-credential class; mirror their discriminator).
-2. **B722** (🔴 HIGH) — `make creds` REFUSED-state arm: `state_set` (`lib/state.sh:57-60`) has no
-   mismatch guard, so even a successful `make install-ingress` leaves the report byte-identical and
-   still misinforms a tenant whose overlay is another cluster's. 4 residuals, one self-tagged HIGH.
-3. **B723** (🔴 MED) — 8 `.env.state.stale-*` 0600 files, no restore/prune (write-only credential graveyard).
-4. Then B729 (#2 split, #3 deferred-with-design), B500 (placeholder tracking). Tier-3 (header-only,
-   verify first): B570, B462, B509, B511, B512, B501, B498, B565, B571. Re-scope (Done-when refuted):
-   B486, B518, B468(owner). Full ranking was given in this session's `status` reply.
-
-### Lab
-
-**PAUSED at the user's request: they are starting a FRESH lab cut and will signal when to continue.**
-`secrets/supervisor.kubeconfig` is stale until then. B725 (the recommended next) is
-lab-INDEPENDENT (`02-env.sh` env-populate logic), so it can proceed before the cut is ready if asked.
-Not contacted this session.
+1. **B735 + B736** on `feat/macos-jumpbox` (design reviewed by `vks-adversary` +
+   `adversary-bash-git-cli` 2026-09-23; the numbered list in B735 is the work).
+2. **B725** (🔴 HIGH) — `02-env.sh:90` fabricates `HARBOR_PASSWORD`; `env-validate` goes green on it.
+3. **B722**, **B723** (now 9 `.env.state.stale-*` files), **B734**, then the tier-3 list.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
