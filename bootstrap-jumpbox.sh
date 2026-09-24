@@ -39,7 +39,7 @@ os_gate() {
   if [ "$(uname -s)" = Darwin ]; then
     have brew || die "Homebrew is required on macOS: https://brew.sh (then re-run this)"
     PKG=brew; SUDO=""; MAKE_CMD=gmake
-    BASE_PKGS="git curl make bash coreutils gnu-sed findutils grep gawk gnu-tar flock gettext"
+    BASE_PKGS="git curl make bash coreutils gnu-sed findutils grep gawk gnu-tar flock gettext openssl@3 python"
     ok "Detected macOS $(sw_vers -productVersion 2>/dev/null) — supported (brew)"
     return 0
   fi

@@ -31,8 +31,9 @@ for e in podman docker; do printf '#!/bin/sh\nexit 0\n' > "${tmp}/${e}"; chmod +
 
 # `container_engine` reads CONTAINER_ENGINE from the env, so unset it: an operator (or a stray
 # .env) exporting it would make this test measure their box instead of the code.
-# /bin/bash by ABSOLUTE path: a PATH of one directory has no `bash` on it either.
-engine_with_path() { env -u CONTAINER_ENGINE PATH="$1" /bin/bash -c '. scripts/lib/os.sh; container_engine'; }
+# The RUNNING bash by ABSOLUTE path ($BASH): a PATH of one directory has no `bash` on it either,
+# and /bin/bash is bash 3.2 on macOS, which lib/os.sh refuses.
+engine_with_path() { env -u CONTAINER_ENGINE PATH="$1" "$BASH" -c '. scripts/lib/os.sh; container_engine'; }
 
 # 1. BOTH present -> podman. The whole claim.
 got="$(engine_with_path "${tmp}:${PATH}")"
@@ -53,7 +54,17 @@ only_docker="$(mktemp -d)"; cp "${tmp}/docker" "${only_docker}/"
 for t in id dirname date sed grep cat mktemp tr uname readlink basename sudo; do
   p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "${only_docker}/${t}"
 done
-got="$(engine_with_path "${only_docker}")"
+# macOS: lib/os.sh APPENDS Homebrew's bin to PATH, and that is where a real podman lives -- so the
+# one-directory PATH above is undone at source time and the fixture measures this box (MEASURED:
+# 'podman'). Point os.sh at a fake prefix whose opt/ is the real one (the GNU gnubin dirs it needs)
+# and whose bin/ is EMPTY. Linux never reads HOMEBREW_PREFIX, so this is inert there.
+fake_brew=""
+if [ "$(uname -s)" = Darwin ]; then
+  real_brew="${HOMEBREW_PREFIX:-$([ -x /opt/homebrew/bin/brew ] && echo /opt/homebrew || echo /usr/local)}"
+  fake_brew="$(mktemp -d)"; ln -s "${real_brew}/opt" "${fake_brew}/opt"; mkdir "${fake_brew}/bin"
+fi
+got="$(HOMEBREW_PREFIX="${fake_brew:-${HOMEBREW_PREFIX:-}}" engine_with_path "${only_docker}")"
+[ -z "$fake_brew" ] || rm -rf "$fake_brew"
 if [ "$got" = docker ]; then
   ok "podman absent -> docker (the fallback is intact)"
 else
@@ -179,8 +190,8 @@ ok "engine choosers covered: os.sh (checks 1-3) + ${impls} others"
 #    THE INVARIANT: docker is never REQUIRED. It appears only because the operator asked by name.
 for mgr in apt-get tdnf; do
   # CONTAINER_ENGINE UNSET = the default jump box. podman, and NOT ONE docker token.
-  def_eng="$(env -u CONTAINER_ENGINE /bin/bash -c '. scripts/lib/os.sh; engine_choice')"
-  def_pkgs="$(env -u CONTAINER_ENGINE /bin/bash -c ". scripts/lib/os.sh; engine_packages \"\$(engine_choice)\" $mgr")"
+  def_eng="$(env -u CONTAINER_ENGINE "$BASH" -c '. scripts/lib/os.sh; engine_choice')"
+  def_pkgs="$(env -u CONTAINER_ENGINE "$BASH" -c ". scripts/lib/os.sh; engine_packages \"\$(engine_choice)\" $mgr")"
   if [ "$def_eng" != podman ]; then
     bad "default engine on ${mgr} is '${def_eng}', not podman — CONTAINER_ENGINE unset MUST mean podman"
   elif printf '%s' "$def_pkgs" | grep -qE '(^| )(docker|docker\.io|docker-ce[a-z-]*|docker-rootless|rootlesskit)( |$)'; then
@@ -192,7 +203,7 @@ for mgr in apt-get tdnf; do
   fi
 
   # CONTAINER_ENGINE=docker = the operator asked. docker, and NOT podman (one engine, by choice).
-  dk_pkgs="$(CONTAINER_ENGINE=docker /bin/bash -c ". scripts/lib/os.sh; engine_packages \"\$(engine_choice)\" $mgr")"
+  dk_pkgs="$(CONTAINER_ENGINE=docker "$BASH" -c ". scripts/lib/os.sh; engine_packages \"\$(engine_choice)\" $mgr")"
   if ! printf '%s' "$dk_pkgs" | grep -qE '(^| )(docker|docker\.io)( |$)'; then
     bad "CONTAINER_ENGINE=docker on ${mgr} does not install docker: '${dk_pkgs}'"
   elif printf '%s' "$dk_pkgs" | grep -qE '(^| )podman( |$)'; then

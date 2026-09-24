@@ -86,9 +86,11 @@ esac
 # needs sha256sum. A box provisioned without the engine packages passed every earlier check and then
 # printed `tr: command not found` from lib/state.sh on the operator's very first command.
 if [ "$(pkg_mgr)" = brew ]; then
-  # macOS (B735): curl, file, unzip, openssl, tar and gzip come with macOS; these are the GNU tools the
+  # macOS (B735): curl, file, unzip, tar and gzip come with macOS; these are the GNU tools the
   # scripts assume (lib/os.sh puts them first on PATH), plus flock (with_registry_lock) and bash >= 4.
-  pkg_install bash coreutils gnu-sed findutils grep gawk gnu-tar make flock gettext jq git
+  # openssl@3: macOS's /usr/bin/openssl is LibreSSL, not OpenSSL (keg-only; os.sh/Makefile add its bin).
+  # python: /usr/bin/python3 is 3.9; check-secrets-untracked.sh needs >= 3.11 (tomllib).
+  pkg_install bash coreutils gnu-sed findutils grep gawk gnu-tar make flock gettext jq git openssl@3 python
 else
   pkg_install ca-certificates coreutils curl file git jq tar gzip unzip findutils gawk openssl "$GETTEXT_PKG"
 fi

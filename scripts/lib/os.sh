@@ -41,7 +41,7 @@ if [ "$(uname -s)" = Darwin ]; then
   for _d in "$_brew/opt/make/libexec/gnubin" "$_brew/opt/gawk/libexec/gnubin" \
             "$_brew/opt/gnu-tar/libexec/gnubin" "$_brew/opt/grep/libexec/gnubin" \
             "$_brew/opt/findutils/libexec/gnubin" "$_brew/opt/gnu-sed/libexec/gnubin" \
-            "$_brew/opt/coreutils/libexec/gnubin"; do
+            "$_brew/opt/coreutils/libexec/gnubin" "$_brew/opt/openssl@3/bin"; do
     case ":$PATH:" in *":$_d:"*) ;; *) if [ -d "$_d" ]; then PATH="$_d:$PATH"; fi ;; esac
   done
   # Homebrew's bin (bash 5, flock, envsubst, gmake) and the getent shim are APPENDED: they must never
@@ -1551,8 +1551,12 @@ ensure_secret_dir() {
   # An unset REPO_ROOT would make the patterns below `/secrets/`, which could match a real
   # system path. Refuse to guess: create only.
   [ -n "${REPO_ROOT:-}" ] || return 0
+  # rp is PHYSICAL (pwd -P) and REPO_ROOT is LOGICAL (os.sh uses plain pwd), so a repo reached
+  # through a symlink never matched and was silently left unhardened. MEASURED on macOS, where
+  # mktemp/TMPDIR live under /var -> /private/var. Resolve the root the same way before comparing.
+  local root; root="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P)" || root="$REPO_ROOT"
   case "${rp}/" in
-    "${REPO_ROOT}"/secrets/|"${REPO_ROOT}"/*/secrets/)
+    "${root}"/secrets/|"${root}"/*/secrets/)
       chmod 700 "$rp" || log_warn "ensure_secret_dir: could not harden ${rp} (not the owner?) — leaving its mode as-is" ;;
     *) : ;;
   esac

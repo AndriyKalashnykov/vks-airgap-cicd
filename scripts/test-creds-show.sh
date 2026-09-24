@@ -971,9 +971,17 @@ if ! command -v script >/dev/null 2>&1; then
   # LOUD, not silent. A skipped case that says nothing is indistinguishable from a passing one.
   printf '  SKIP  --raw handshake: script(1) not on PATH, so no pty is available to discriminate\n' >&2
 else
-  # -q quiet, -e return the child's status, -c command, output to /dev/null (we read stdout).
+  # pty_run CMD -- run the bash string CMD under a pseudo-terminal. util-linux script(1) is
+  # `script -qec CMD FILE`; BSD/macOS script(1) has no -c and is `script -q FILE CMD...` (it already
+  # returns the child's status). MEASURED macOS 26.6: BSD script DISCARDS pending pty input once its
+  # stdin reaches EOF, so a piped answer must hold stdin open until the child has read it.
+  pty_run() {
+    if grep -q util-linux <<<"$(script --version 2>&1)"; then script -qec "$1" /dev/null
+    else script -q /dev/null bash -c "$1"; fi
+  }
+  # (util-linux form) -q quiet, -e return the child's status, -c command, output to /dev/null.
   # \r strip: a pty terminates lines with CRLF, which would defeat a plain grep -F on the tail.
-  _pty_out="$(script -qec "SKIP_DOTENV=1 CREDS_TOKEN=1 ARGOCD_ADMIN_PASSWORD='${_ARGO}' ./scripts/creds.sh" /dev/null 2>/dev/null | tr -d '\r')"
+  _pty_out="$(pty_run "SKIP_DOTENV=1 CREDS_TOKEN=1 ARGOCD_ADMIN_PASSWORD='${_ARGO}' ./scripts/creds.sh" </dev/null 2>/dev/null | tr -d '\r')"
   _argo_row="$(printf '%s' "$_pty_out" | grep -iE '^ *ArgoCD ' | head -1)"
   if printf '%s' "$_argo_row" | grep -qF "$_ARGO" \
      && ! printf '%s' "$_argo_row" | grep -qF 'hidden: not a terminal'; then

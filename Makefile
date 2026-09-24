@@ -85,10 +85,15 @@ ifeq ($(UNAME_S),Darwin)
 BREW_PREFIX := $(or $(HOMEBREW_PREFIX),$(if $(wildcard /opt/homebrew/bin/brew),/opt/homebrew,/usr/local))
 # foreach joins with SPACES — strip them, or every entry after the first is invalid (measured).
 DARWIN_GNU_PATH := $(subst $(SPACE),,$(foreach f,coreutils gnu-sed findutils grep gnu-tar gawk make,$(BREW_PREFIX)/opt/$(f)/libexec/gnubin:))
+# /usr/bin/openssl on macOS is LibreSSL (no -ext, a different x509 text dump, s_server differences);
+# Homebrew's openssl@3 is KEG-ONLY, so it is never on PATH unless put there.
+DARWIN_GNU_PATH := $(DARWIN_GNU_PATH)$(BREW_PREFIX)/opt/openssl@3/bin:
+# The getent shim os.sh appends, so a recipe/test that does not source os.sh sees the same tools.
+DARWIN_COMPAT := :$(CURDIR)/scripts/compat/darwin
 # Homebrew's bin goes AFTER ~/.local/bin, so a Homebrew tkn/argocd never shadows the pinned ones.
 DARWIN_BREW_BIN := $(BREW_PREFIX)/bin:
 endif
-export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$(DARWIN_GNU_PATH)$(if $(HOME),$(HOME)/.local/bin:,)$(DARWIN_BREW_BIN)$(PATH)
+export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$(DARWIN_GNU_PATH)$(if $(HOME),$(HOME)/.local/bin:,)$(DARWIN_BREW_BIN)$(PATH)$(DARWIN_COMPAT)
 
 # ⚠️ THE INCLUDE ORDER BELOW IS REVERSED RELATIVE TO load_env's, AND THAT IS THE POINT.
 # `load_env` SOURCES the files, so the LAST one read wins (.env.example → .env → .env.state →
