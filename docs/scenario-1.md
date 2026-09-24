@@ -979,6 +979,12 @@ make env-validate     # does KUBECONFIG reach the cluster? does Harbor authentic
 rejected, and it takes 8–10 minutes to say so. Fix it here — the Harbor step tells you where the password
 comes from.
 
+**On an Apple-silicon Mac:** the images are pushed as `linux/amd64` but the podman machine is arm64,
+so the two local builds run under emulation, and the install refuses to start them unless you run it
+as `BUILD_EMULATE=1 make install-all`. The machine must use **Rosetta**, not QEMU: under QEMU the
+.NET builder aborts. `make engine-check` (part of `preflight`) says which one you have and prints the
+exact lines to switch. Expect roughly 25 minutes for `install-all` on the Mac.
+
 ```bash
 make install-all      # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> harbor-robot-ensure -> platform -> install-headlamp -> install-ingress -> gitops -> build-apps
 make verify           # pushes a marked change and follows it to the running app
