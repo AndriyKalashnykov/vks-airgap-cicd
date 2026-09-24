@@ -23,8 +23,16 @@ ev() {
 AV="$(ev ARGOCD_VCF_VERSION)"; VV="$(ev VCF_CLI_VERSION)"; PV="$(ev VCF_PLUGINS_VERSION)"
 [ -n "$AV" ] && [ -n "$VV" ] && [ -n "$PV" ] || { echo "FATAL: could not read the pinned versions"; exit 1; }
 
-pass=0; fail=0
+pass=0; fail=0; skipped=0
 ok()  { pass=$((pass+1)); printf 'ok   - %s\n' "$1"; }
+# ON A REAL MAC the fake cannot control the machine arch: lib/os.sh puts Homebrew's coreutils gnubin
+# (which has its own `uname`) AHEAD of it once the fake says Darwin. MEASURED on the Mac: the Intel
+# case installed the ARM64 CLI. So there, a Darwin case whose arch is not the host's is SKIPPED by
+# name rather than reported as a result; Linux (no gnubin) runs every case.
+HOST_DARWIN_ARCH=""
+[ "$(uname -s)" = Darwin ] && HOST_DARWIN_ARCH="$(uname -m)"
+# can_fake <kernel> <machine> — 0 if this host can present that kernel/machine to the installer
+can_fake() { [ -z "$HOST_DARWIN_ARCH" ] || [ "$1" != Darwin ] || [ "$2" = "$HOST_DARWIN_ARCH" ]; }
 bad() { fail=$((fail+1)); printf 'FAIL - %s\n' "$1"; }
 mkfake() { { printf '#!/usr/bin/env bash\n'; printf 'echo "%s"\n' "$2"; } > "$1"; chmod +x "$1"; }
 
@@ -55,7 +63,8 @@ echo "== vcf on darwin/arm64: picks the Darwin archive over a Linux one of the s
 fresh
 pack "$src/VCF-Consumption-CLI-Darwin_ARM64-${VV}.tar.gz" "vcf-cli-darwin_arm64" "VCF-DARWIN-ARM64"
 pack "$src/VCF-Consumption-CLI-Linux_ARM64-${VV}.tar.gz"  "vcf-cli-linux_arm64"  "VCF-LINUX-ARM64"
-if run_as Darwin arm64 vcf "$src" "$bin" "$err"; then
+if ! can_fake Darwin arm64; then skipped=$((skipped+1)); echo "SKIP - host arch ${HOST_DARWIN_ARCH} cannot present arm64 (runs on Linux)"
+elif run_as Darwin arm64 vcf "$src" "$bin" "$err"; then
   got="$("$bin/vcf" 2>/dev/null || true)"
   if [ "$got" = VCF-DARWIN-ARM64 ]; then ok "installs the Darwin_ARM64 CLI"; else bad "installed [$got], want VCF-DARWIN-ARM64"; fi
 else bad "vcf darwin: installer exited non-zero"; sed 's/^/      /' "$err"; fi
@@ -65,7 +74,8 @@ fresh
 pack "$src/VCF-Consumption-CLI-Linux_ARM64-${VV}.tar.gz" "vcf-cli-linux_arm64" "VCF-LINUX-ARM64"
 # The arch-blind FALLBACK glob (kept for a hypothetical agnostic bundle) DOES match this file, so
 # resolve succeeds and the inner-name assertion is what refuses it. Either refusal is correct.
-if run_as Darwin arm64 vcf "$src" "$bin" "$err"; then bad "installed a Linux CLI on darwin"
+if ! can_fake Darwin arm64; then skipped=$((skipped+1)); echo "SKIP - host arch ${HOST_DARWIN_ARCH} cannot present arm64 (runs on Linux)"
+elif run_as Darwin arm64 vcf "$src" "$bin" "$err"; then bad "installed a Linux CLI on darwin"
 elif grep -qE 'vcf-cli-darwin_arm64 not found|no vcf artifact' "$err"; then ok "refuses the Linux archive on darwin"
 else bad "failed with an unexpected error"; sed 's/^/      /' "$err"; fi
 
@@ -74,14 +84,16 @@ fresh
 mkfake "$bin/vcf" "VCF-STUB"
 pack "$src/VCF-Consumption-CLI-PluginBundle-Darwin_ARM64-${PV}.tar.gz" "cluster/v3.7.1/vcf-cluster-darwin_arm64" "PLUGIN-DARWIN"
 pack "$src/VCF-Consumption-CLI-PluginBundle-Linux_ARM64-${PV}.tar.gz"  "cluster/v3.7.1/vcf-cluster-linux_arm64"  "PLUGIN-LINUX"
-if run_as Darwin arm64 plugins "$src" "$bin" "$err"; then ok "installs from the Darwin_ARM64 plugin bundle"
+if ! can_fake Darwin arm64; then skipped=$((skipped+1)); echo "SKIP - host arch ${HOST_DARWIN_ARCH} cannot present arm64 (runs on Linux)"
+elif run_as Darwin arm64 plugins "$src" "$bin" "$err"; then ok "installs from the Darwin_ARM64 plugin bundle"
 else bad "plugins darwin: installer exited non-zero"; sed 's/^/      /' "$err"; fi
 
 echo "== plugins on darwin/arm64: a Darwin-NAMED bundle holding LINUX binaries -> refused"
 fresh
 mkfake "$bin/vcf" "VCF-STUB"
 pack "$src/VCF-Consumption-CLI-PluginBundle-Darwin_ARM64-${PV}.tar.gz" "cluster/v3.7.1/vcf-cluster-linux_arm64" "PLUGIN-MISLABELED"
-if run_as Darwin arm64 plugins "$src" "$bin" "$err"; then bad "installed a mislabeled bundle"
+if ! can_fake Darwin arm64; then skipped=$((skipped+1)); echo "SKIP - host arch ${HOST_DARWIN_ARCH} cannot present arm64 (runs on Linux)"
+elif run_as Darwin arm64 plugins "$src" "$bin" "$err"; then bad "installed a mislabeled bundle"
 elif grep -q 'no darwin_arm64 binaries' "$err"; then ok "the OS+arch content assertion catches it"
 else bad "failed with an unexpected error"; sed 's/^/      /' "$err"; fi
 
@@ -90,7 +102,8 @@ fresh
 cp /dev/null "$src/argocd-cli-darwin-amd64-${AV}.gz"   # only the amd64 argocd, as Broadcom ships it
 pack "$src/VCF-Consumption-CLI-Darwin_ARM64-${VV}.tar.gz" "vcf-cli-darwin_arm64" "VCF-DARWIN-ARM64"
 pack "$src/VCF-Consumption-CLI-PluginBundle-Darwin_ARM64-${PV}.tar.gz" "cluster/v3.7.1/vcf-cluster-darwin_arm64" "PLUGIN-DARWIN"
-if run_as Darwin arm64 all "$src" "$bin" "$err"; then
+if ! can_fake Darwin arm64; then skipped=$((skipped+1)); echo "SKIP - host arch ${HOST_DARWIN_ARCH} cannot present arm64 (runs on Linux)"
+elif run_as Darwin arm64 all "$src" "$bin" "$err"; then
   if grep -q 'SKIPPING the VCF-flavored argocd' "$err" && ! grep -q 'installing argocd' "$err" && [ ! -e "$bin/argocd" ] && [ "$("$bin/vcf" 2>/dev/null || true)" = VCF-DARWIN-ARM64 ]; then
     ok "argocd skipped (warned, not installed), vcf installed"
   else bad "all: rc 0 but skip/install state wrong"; sed 's/^/      /' "$err"; fi
@@ -98,24 +111,30 @@ else bad "all on darwin/arm64: installer exited non-zero"; sed 's/^/      /' "$e
 
 echo "== argocd ALONE on darwin/arm64 still dies (an explicit request is not silently skipped)"
 fresh
-if run_as Darwin arm64 argocd "$src" "$bin" "$err"; then bad "argocd alone succeeded with no arm64 build"
+if ! can_fake Darwin arm64; then skipped=$((skipped+1)); echo "SKIP - host arch ${HOST_DARWIN_ARCH} cannot present arm64 (runs on Linux)"
+elif run_as Darwin arm64 argocd "$src" "$bin" "$err"; then bad "argocd alone succeeded with no arm64 build"
 elif grep -q 'amd64-only' "$err"; then ok "dies naming amd64-only"
 else bad "failed with an unexpected error"; sed 's/^/      /' "$err"; fi
 
 echo "== vcf on darwin/x86_64 (Intel Mac): picks Darwin_AMD64"
 fresh
+if ! can_fake Darwin x86_64; then
+  skipped=$((skipped+1)); echo "SKIP - this Mac is ${HOST_DARWIN_ARCH}; its coreutils uname shadows the fake (runs on Linux)"
+else
 pack "$src/VCF-Consumption-CLI-Darwin_AMD64-${VV}.tar.gz" "vcf-cli-darwin_amd64" "VCF-DARWIN-AMD64"
 pack "$src/VCF-Consumption-CLI-Darwin_ARM64-${VV}.tar.gz" "vcf-cli-darwin_arm64" "VCF-DARWIN-ARM64"
 if run_as Darwin x86_64 vcf "$src" "$bin" "$err"; then
   got="$("$bin/vcf" 2>/dev/null || true)"
   if [ "$got" = VCF-DARWIN-AMD64 ]; then ok "installs the Darwin_AMD64 CLI"; else bad "installed [$got], want VCF-DARWIN-AMD64"; fi
 else bad "vcf darwin amd64: installer exited non-zero"; sed 's/^/      /' "$err"; fi
+fi
 
 echo "== vcf that cannot RUN -> a hard failure, not a warning"
 fresh
 w="$T/wbad"; mkdir -p "$w"; printf '#!/bin/sh\nexit 1\n' > "$w/vcf-cli-darwin_arm64"; chmod +x "$w/vcf-cli-darwin_arm64"
 tar -C "$w" -czf "$src/VCF-Consumption-CLI-Darwin_ARM64-${VV}.tar.gz" vcf-cli-darwin_arm64
-if run_as Darwin arm64 vcf "$src" "$bin" "$err"; then bad "a vcf that exits 1 was accepted"
+if ! can_fake Darwin arm64; then skipped=$((skipped+1)); echo "SKIP - host arch ${HOST_DARWIN_ARCH} cannot present arm64 (runs on Linux)"
+elif run_as Darwin arm64 vcf "$src" "$bin" "$err"; then bad "a vcf that exits 1 was accepted"
 elif grep -q 'does not run' "$err"; then ok "dies when the installed vcf does not run"
 else bad "failed with an unexpected error"; sed 's/^/      /' "$err"; fi
 
@@ -126,5 +145,5 @@ elif grep -q 'unsupported OS: FreeBSD' "$err"; then ok "dies naming the OS"
 else bad "failed with an unexpected error"; sed 's/^/      /' "$err"; fi
 
 echo
-printf 'test-vcf-cli-darwin: %d passed, %d failed\n' "$pass" "$fail"
+printf 'test-vcf-cli-darwin: %d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
 [ "$fail" -eq 0 ] || exit 1
