@@ -255,7 +255,7 @@ require_build_arch() {
   want="$(target_arch)"; have="$(engine_arch "$1")"
   [ -n "$have" ] || die "cannot read the architecture of '$1' ($1 info failed) — is the engine running?"
   [ "$have" = "$want" ] && return 0
-  [ "${BUILD_EMULATE:-0}" = "1" ] && { log_warn "building linux/${want} on a ${have} engine under EMULATION (BUILD_EMULATE=1) — slow, and Go/.NET builders are expected to crash under QEMU"; return 0; }
+  [ "${BUILD_EMULATE:-0}" = "1" ] && { log_warn "building linux/${want} on a ${have} engine under EMULATION (BUILD_EMULATE=1) — slow; under QEMU the .NET builder aborts (measured on a Mac) — on Apple silicon enable Rosetta for the podman machine, engine-check says how"; return 0; }
   die "the ${1} engine is ${have}, but the guest nodes need linux/${want}: images built here would overwrite the tags they pull.
   Build on an ${want} box, or accept emulation for this run: BUILD_EMULATE=1 make <target>"
 }
