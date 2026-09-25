@@ -52,6 +52,18 @@ gmake deps    # also creates and starts the podman machine
 
 **Expect:** `prereqs installed. Versions:` followed by the pinned version of each tool. *(~3 min)*
 
+**On macOS, also check the podman machine** — the images are `linux/amd64` and a Mac is arm64, so the
+builds run under emulation, and under QEMU (what a new machine gets by default) the .NET builder
+aborts. It must be **Rosetta**:
+
+```bash
+gmake engine-check            # names the machine's emulation; if it is QEMU, prints the two lines to switch
+```
+
+**Expect (macOS):** `emulation: Rosetta (on, machine …)` and `engine-check: OK`. If it reports a
+PROBLEM instead, run the lines it prints (one `containers.conf` line, then a machine stop/start) and
+run it again.
+
 ### Put the toolchain on YOUR shell's PATH
 
 The Makefile puts the pinned toolchain on `PATH` itself. The commands that are **not** `make` —
@@ -831,6 +843,11 @@ box very often cannot do both.
 |---|---|
 | reaches the internet **and** Harbor (**dual-homed**) | `make install-all` below |
 | reaches the **internet only** | **[the sneakernet flow](sneakernet.md)** — two boxes: pull + build outside, carry, push into your granted Harbor project + install inside. It replaces `install-all` (which starts with `mirror`); do **not** come back to it. |
+
+**On an Apple-silicon Mac:** the images are pushed as `linux/amd64` but the podman machine is arm64,
+so the two local builds run under emulation, and the install refuses to start them unless you run it
+as `BUILD_EMULATE=1 make install-all`. That needs the machine on **Rosetta** — the `engine-check`
+in Step 0b. Expect roughly 25 minutes for `install-all` on the Mac.
 
 **Then install:**
 
