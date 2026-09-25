@@ -58,6 +58,7 @@ os="unknown"
 if [ "$(uname -s)" = Darwin ]; then
   os="macOS $(sw_vers -productVersion 2>/dev/null || echo '?')"
 elif [ -r /etc/os-release ]; then
+  # shellcheck source=/dev/null  # absent on macOS, where this branch never runs (as lib/os.sh:237)
   os="$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-$NAME}")"
 fi
 arch="$(uname -m)"
