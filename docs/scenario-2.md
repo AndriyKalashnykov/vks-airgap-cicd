@@ -37,21 +37,38 @@ exist until you have done this.
 neither the tools nor a kubeconfig, and without a kubeconfig `kubectl` quietly tries `localhost:8080`
 and every step after it reports nothing found.
 
+**On Linux:**
+
 ```bash
 make deps     # kubectl, crane, tkn, argocd, helm, openssl + the rest of the pinned toolchain
+```
+
+**On macOS**, type `gmake` — until the next section puts GNU make on your PATH, `make` is Apple's
+3.81, which the Makefile refuses (`GNU make >= 3.82 is required`):
+
+```bash
+gmake deps    # also creates and starts the podman machine
 ```
 
 **Expect:** `prereqs installed. Versions:` followed by the pinned version of each tool. *(~3 min)*
 
 ### Put the toolchain on YOUR shell's PATH
 
-Every `make …` below works already, because the Makefile puts the pinned toolchain on `PATH` itself.
-The commands that are **not** `make` — every bare `kubectl` in this document — run in *your* shell,
-which cannot see them yet.
+The Makefile puts the pinned toolchain on `PATH` itself. The commands that are **not** `make` —
+every bare `kubectl` in this document — run in *your* shell, which cannot see them yet. **On Linux:**
 
 ```bash
 make shell-init                      # future shells: appends to YOUR shell's rc file
 . "$(make -s shell-rc-file)"         # THIS shell: re-reads that same file, whichever it is
+```
+
+**On macOS** (the same two lines, still as `gmake`) — `shell-init` also puts Homebrew's GNU tools
+first on PATH, so from here on `make` **is** GNU make and every later `make …` works as written:
+
+```bash
+gmake shell-init
+. "$(gmake -s shell-rc-file)"
+make --version | head -1             # Expect: GNU Make 4.x — not 3.81
 ```
 
 **Two lines because they fix two different things.** The first edits your shell's startup file, which

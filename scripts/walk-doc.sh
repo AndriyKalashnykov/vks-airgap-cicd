@@ -145,6 +145,12 @@ should_skip() {
     # macOS (B735): the brew block runs ONLY on a macOS row. Not gated, every Linux row ran it and
     # died 127 (found by review of the commit that added the block to common-bootstrap.md).
     *"brew install"*)           [ "${WALK_OS:-}" = macos ] || printf 'macOS block; this box is %s' "${WALK_OS:-linux}" ;;
+    # scenario-1 Step 1 has a Linux block (`make deps`) and a macOS twin (`gmake deps`): until
+    # shell-init, `make` on a Mac is Apple's 3.81, which the Makefile refuses (measured rc=2). The
+    # gmake arm MUST come first -- "gmake deps" also contains "make deps".
+    *"gmake "*)                 [ "${WALK_OS:-}" = macos ] || printf 'macOS block (gmake); this box is %s' "${WALK_OS:-linux}" ;;
+    *"make deps"*|*"make shell-init"*)
+                                [ "${WALK_OS:-}" != macos ] || printf 'Linux block; on macOS the gmake twin runs instead' ;;
   esac
 }
 
