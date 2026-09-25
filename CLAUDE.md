@@ -1098,7 +1098,7 @@ and vcsa. Open residuals are listed in B735.
 | **`kubectl top node` %** | divides by ALLOCATABLE: 100%+ is the baseline for `best-effort-small` here, not pressure. |
 | **`journalctl -k` without `-b`** | reads the CURRENT boot only — a "0 OOM" from it covers hours, not the node's life. |
 | **cadvisor text parsed by field position** | some series carry a timestamp and some do not; `$(NF-1)` read a limit as 0. Parse by name. |
-| **`static-check-fast` under Apple `/usr/bin/make` 3.81** | no `.SHELLFLAGS` → recipes lose `-e`/`pipefail`; a green there is not a green (B735). |
+| **Apple `/usr/bin/make` 3.81** | REFUSED at parse time since #1283 (`Makefile:89-91`, rc=2 measured on the Mac 2026-09-25; pinned by `test-make-version-guard.sh`). There is no 3.81 green to distrust any more — use `gmake`. |
 | **a backgrounded `cmd >log; echo rc=$?`** | the notification's exit code is the echo's. Read the log's verdict line. |
 
 ### NOT done — next work, ranked

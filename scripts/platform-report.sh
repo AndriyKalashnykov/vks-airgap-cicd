@@ -12,7 +12,12 @@
 #   * No "M need a live lab / K are Linux-only" split. The Makefile's `##@` groups are TOPICAL,
 #     not execution classes -- the "KinD" group holds install-ingress, which install-all runs on a
 #     real lab. Any class count derived from them is confidently wrong in both directions. So it
-#     counts only what it EXECUTED (make --trace) against the documented total, and says the rest
+#     counts the documented targets REACHED by the ones it ran (a separate `make -n --trace` dry run)
+#     against the documented total, and says the rest were NOT exercised by it.
+#   * The MEASURED run gets NO --trace. The first version traced the real run, and --trace rides in
+#     MAKEFLAGS into every nested make: a test that captures a child make's stdout
+#     (test-e2e-ingress-pin.sh) received trace lines and FAILED. Measured 2026-09-25 -- the
+#     instrument changed the product. Counting now happens in a dry run that executes nothing.
 #     were NOT run by it.
 #   * No versions of mise-pinned tools. They live in .mise.toml and rot on the next Renovate merge;
 #     the row names the commit instead. Only HOST-supplied tools are printed.
@@ -23,8 +28,10 @@
 # off PATH: on a Mac a bare `make` is Apple's 3.81, which the Makefile refuses, and reading its
 # version would record a make that ran nothing.
 #
-# POSITIVE CHECK: `git status --porcelain` must be identical before and after. A report that
-# dirtied the tree measured a different tree than the one it names.
+# POSITIVE CHECK: `git status --porcelain` must be identical before and after. It sees TRACKED and
+# UNTRACKED changes only -- not writes to GITIGNORED paths (target/, secrets/, .env.state), and not a
+# second edit to a file that was already modified. So it catches a report that dirtied the tree in a
+# way a commit would show; it does not prove the run wrote nothing.
 # ============================================================================
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,8 +42,16 @@ MAKE_BIN="${MAKE:?platform-report must be run through make (make platform-report
 MAKE_VER="${PLATFORM_REPORT_MAKE_VERSION:-unknown}"
 TARGETS="${PLATFORM_REPORT_TARGETS:-static-check docs-lint}"
 OUT="${PLATFORM_REPORT_DIR:-${TMPDIR:-/tmp}/platform-report}"
+# Refuse BEFORE creating anything: a relative value would be created inside the repo (we cd'd there),
+# and a symlink or "$REPO_ROOT" itself slips past a string prefix match. Canonicalise the PARENT
+# (which must exist) and compare physical paths.
+case "$OUT" in /*) ;; *) printf 'platform-report: PLATFORM_REPORT_DIR must be an ABSOLUTE path, got "%s"\n' "$OUT" >&2; exit 2 ;; esac
+out_parent="$(cd "$(dirname "$OUT")" 2>/dev/null && pwd -P)" \
+  || { printf 'platform-report: the parent of PLATFORM_REPORT_DIR does not exist: %s\n' "$OUT" >&2; exit 2; }
+out_real="${out_parent}/$(basename "$OUT")"
+repo_real="$(pwd -P)"
+case "$out_real/" in "$repo_real"/*) printf 'platform-report: PLATFORM_REPORT_DIR must be OUTSIDE the repo (it would dirty the tree it measures)\n' >&2; exit 2 ;; esac
 mkdir -p "$OUT" || exit 2
-case "$OUT" in "$REPO_ROOT"/*) printf 'platform-report: PLATFORM_REPORT_DIR must be OUTSIDE the repo (it would dirty the tree it measures)\n' >&2; exit 2 ;; esac
 
 # ── host facts ───────────────────────────────────────────────────────────────────────────
 os="unknown"
@@ -77,10 +92,12 @@ fail=0; results=""; executed_file="$OUT/executed.txt"; : > "$executed_file"
 for t in $TARGETS; do
   log="$OUT/${t}.log"
   t0=$SECONDS
-  "$MAKE_BIN" --no-print-directory --trace "$t" > "$log" 2>&1
+  "$MAKE_BIN" --no-print-directory "$t" > "$log" 2>&1
   rc=$?
+  # Count separately, with -n: every recipe is PRINTED, not run (recursive $(MAKE) lines inherit -n).
   # --trace prints every target it considers: "target 'x' does not exist" / "update target 'x' due to:"
-  grep -oE "(update )?target '[^']+' (does not exist|due to)" "$log" \
+  "$MAKE_BIN" --no-print-directory -n --trace "$t" 2>/dev/null \
+    | grep -oE "(update )?target '[^']+' (does not exist|due to)" \
     | sed -E "s/^(update )?target '([^']+)'.*/\2/" >> "$executed_file"
   verdict="$(grep -E '^run-test-set \[' "$log" | tail -1 | sed -E 's/^run-test-set \[[^]]*\]: //')"
   status=PASS; [ "$rc" -eq 0 ] || { status="FAIL rc=$rc"; fail=1; }
@@ -90,7 +107,7 @@ done
 after="$(git status --porcelain 2>/dev/null)"
 
 executed="$(sort -u "$executed_file" | grep -cxFf <(grep -oE '^[a-zA-Z0-9_.-]+:.*##' Makefile | cut -d: -f1) || true)"
-printf '\n  %s of %s documented targets executed by this report; the rest were NOT run by it.\n' "$executed" "$documented"
+printf '\n  %s of %s documented targets reached by this report (dry-run count); the rest were NOT exercised by it.\n' "$executed" "$documented"
 printf '  logs: %s\n' "$OUT"
 
 if [ "$before" != "$after" ]; then

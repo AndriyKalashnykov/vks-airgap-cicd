@@ -9644,6 +9644,16 @@ time, so the same refutation may apply); or keep generating but never `env_set` 
 never heard of, `make env-check` cannot go green on a fabricated one, and both directions are
 RED-proven with a control that must still generate.
 
+**A THIRD site, same class (source-read 2026-09-25, not run):** `04-install-harbor-service.sh:79`
+sets `H_ADMIN="${HARBOR_PASSWORD:-$(gen_password)}"` and `:178` publishes it with
+`[ -n "${HARBOR_PASSWORD:-}" ] || state_set HARBOR_PASSWORD "$H_ADMIN"`. When Harbor is ALREADY
+installed, `vc_ss_install` takes the `"already exists"` arm (`lib/vcenter.sh:497-502`) and changes
+nothing — so the generated value was never given to Harbor, yet on a box with no `HARBOR_PASSWORD`
+it is published to the state overlay as the admin password. Same failure as `02-env.sh:90`: a
+credential the lab has never heard of, presented as real. (An adversary round first graded this as
+"re-running rotates Harbor's secretKey"; the "already exists" arm refutes that — nothing rotates.)
+**Done when** also covers this site: publish `H_ADMIN` only when this run actually installed.
+
 ## ⚪ B726 — CLOSED, REFUTED BY ITS OWN AUTHOR: the control was RIGHT and I mis-measured it TWICE
 
 `scripts/check-grep-q-pipe.sh:37-38` says, in the scope note it prints its own verdict against:
