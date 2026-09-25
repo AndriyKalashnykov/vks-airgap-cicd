@@ -144,7 +144,7 @@ retry burns a failed login, and **repeated failures can lock the account**. You 
 ⚠️ **Put `VCF_CLI_SRC_DIR` in `./.env`, not on a command line.** Steps 4 and 5 silently fall back to
 `~/Downloads/vcf`, so a one-shot value makes Step 4 search a directory you never used.
 
-Now run:
+Now run, **on Linux:**
 
 ```bash
 make deps                     # toolchain: kubectl, helm, crane, tkn, jq, yq…
@@ -152,16 +152,46 @@ make install-vcf-clis         # reads VCF_CLI_SRC_DIR, which you set above
 make check-tools              # what you have, what is missing
 ```
 
+**On macOS**, type `gmake` — until the next section puts GNU make on your PATH, `make` is Apple's
+3.81, which the Makefile refuses (`GNU make >= 3.82 is required`):
+
+```bash
+gmake deps                    # also creates and starts the podman machine
+gmake install-vcf-clis
+gmake check-tools
+```
+
 **Expect:** `check-tools` prints `all REQUIRED tools present.` *(~5 min, mostly downloads)*
+
+**On macOS, also check the podman machine** — the images are `linux/amd64` and a Mac is arm64, so the
+builds run under emulation, and under QEMU (what a new machine gets by default) the .NET builder
+aborts. It must be **Rosetta**:
+
+```bash
+gmake engine-check            # names the machine's emulation; if it is QEMU, prints the two lines to switch
+```
+
+**Expect (macOS):** `emulation: Rosetta (on, machine …)` and `engine-check: OK`. If it reports a
+PROBLEM instead, run the lines it prints (one `containers.conf` line, then a machine stop/start) and
+run it again.
 
 ### Put the toolchain on YOUR shell's PATH
 
-Every `make …` below works already. The commands that are **not** `make` — `kubectl`, `vcf`,
-`argocd` — run in *your* shell, which cannot see them yet.
+The commands that are **not** `make` — `kubectl`, `vcf`, `argocd` — run in *your* shell, which
+cannot see them yet. **On Linux:**
 
 ```bash
 make shell-init                      # future shells: appends to YOUR shell's rc file
 . "$(make -s shell-rc-file)"         # THIS shell: re-reads that same file, whichever it is
+```
+
+**On macOS** (the same two lines, still as `gmake`) — `shell-init` also puts Homebrew's GNU tools
+first on PATH, so from here on `make` **is** GNU make and every later step's `make …` works as written:
+
+```bash
+gmake shell-init
+. "$(gmake -s shell-rc-file)"
+make --version | head -1             # Expect: GNU Make 4.x — not 3.81
 ```
 
 **Two lines because they fix two different things.** The first one edits your shell's startup file,
@@ -982,8 +1012,7 @@ comes from.
 **On an Apple-silicon Mac:** the images are pushed as `linux/amd64` but the podman machine is arm64,
 so the two local builds run under emulation, and the install refuses to start them unless you run it
 as `BUILD_EMULATE=1 make install-all`. The machine must use **Rosetta**, not QEMU: under QEMU the
-.NET builder aborts. `make engine-check` (part of `preflight`) says which one you have and prints the
-exact lines to switch. Expect roughly 25 minutes for `install-all` on the Mac.
+.NET builder aborts — the `engine-check` you ran in Step 1 (it also runs inside `preflight`). Expect roughly 25 minutes for `install-all` on the Mac.
 
 ```bash
 make install-all      # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> harbor-robot-ensure -> platform -> install-headlamp -> install-ingress -> gitops -> build-apps

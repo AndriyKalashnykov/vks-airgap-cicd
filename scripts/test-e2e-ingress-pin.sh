@@ -73,8 +73,11 @@ if [ -n "$_line" ]; then
     # shellcheck disable=SC2016  # ditto -- $$ is make's escape for a literal $ in a recipe
     printf 'child:\n\t@echo "$$INGRESS_CONTROLLER"\n'
   } > "$_mk"
-  _default=$(make -s -f "$_mk" t 2>/dev/null)
-  _cli=$(make -s -f "$_mk" t INGRESS_CONTROLLER=traefik 2>/dev/null)
+  # env -u MAKEFLAGS/MAKELEVEL: this compares the child's STDOUT, so an INHERITED debug flag
+  # (`make --trace test-scripts`) printed trace lines into it and failed the test -- measured
+  # 2026-09-25 when make platform-report ran static-check under --trace.
+  _default=$(env -u MAKEFLAGS -u MAKELEVEL make -s -f "$_mk" t 2>/dev/null)
+  _cli=$(env -u MAKEFLAGS -u MAKELEVEL make -s -f "$_mk" t INGRESS_CONTROLLER=traefik 2>/dev/null)
   # if/fi, not `A && B || C` -- that idiom runs C when B fails, and it is the linter class that
   # reddened main for six hours earlier today.
   if [ "$_default" = istio ]; then ok "with no override the CHILD make receives istio"

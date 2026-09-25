@@ -6,10 +6,11 @@
 #   engine unreachable     -> the PROBLEM text prints (it used to die at the `$(...)` under set -e)
 #   inspect fails          -> a note, NOT a blocking PROBLEM (it used to read as "Rosetta off")
 #   Rosetta on             -> OK, naming the machine behind the DEFAULT connection
-#   Rosetta off            -> PROBLEM whose printed command, EXECUTED, leaves VALID TOML — for an
-#                             absent file and for one with no trailing newline. MEASURED on the Mac:
-#                             a malformed containers.conf makes every podman command fail.
-#   an existing [machine]  -> the instruction says edit it, and prints no append
+#   Rosetta off            -> PROBLEM whose printed command, EXECUTED, writes a valid DROP-IN
+#                             (containers.conf.d/50-vks-rosetta.conf) and leaves the operator's
+#                             containers.conf BYTE-IDENTICAL -- absent, no trailing newline, or already
+#                             holding a [machine] table. MEASURED on the Mac: a malformed
+#                             containers.conf makes every podman command fail; a drop-in wins over it.
 #   no Rosetta 2 on host   -> PROBLEM naming softwareupdate (the registry enrolls a .NET app)
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,24 +68,40 @@ run_ec FAKE_ROS=true
 if [ "$rc" -eq 0 ] && has 'Rosetta (on, machine mymachine)'; then ok "OK, machine mymachine"
 else bad "got rc=$rc: $(grep -i rosetta "$T/out" | tr '\n' ' ')"; fi
 
-echo "== Rosetta off, no containers.conf: the printed command leaves valid TOML"
+DROPIN="$T/cfg/containers/containers.conf.d/50-vks-rosetta.conf"
+MAIN="$T/cfg/containers/containers.conf"
+echo "== Rosetta off, no containers.conf: the printed command writes a valid DROP-IN, no main file"
 rm -rf "$T/cfg"
 run_ec FAKE_ROS=false
-if [ "$rc" -ne 0 ] && has 'podman machine stop mymachine' && run_remedy && valid_toml "$T/cfg/containers/containers.conf" \
-   && grep -qx 'rosetta = true' "$T/cfg/containers/containers.conf"; then ok "PROBLEM; remedy creates a valid file"
-else bad "rc=$rc; file: $(cat "$T/cfg/containers/containers.conf" 2>&1 | tr '\n' '|')"; fi
+if [ "$rc" -ne 0 ] && has 'podman machine stop mymachine' && run_remedy && valid_toml "$DROPIN" \
+   && grep -qx 'rosetta = true' "$DROPIN" && [ ! -e "$MAIN" ]; then ok "PROBLEM; remedy creates a valid drop-in and no main file"
+else bad "rc=$rc; drop-in: $(cat "$DROPIN" 2>&1 | tr '\n' '|'); main exists: $([ -e "$MAIN" ] && echo yes || echo no)"; fi
 
-echo "== Rosetta off, file with NO trailing newline: still valid TOML after the remedy"
-mkdir -p "$T/cfg/containers"; printf '[engine]\ncgroup_manager = "systemd"' > "$T/cfg/containers/containers.conf"
+echo "== Rosetta off, main file with NO trailing newline: the remedy leaves it BYTE-IDENTICAL"
+rm -rf "$T/cfg"; mkdir -p "$T/cfg/containers"; printf '[engine]\ncgroup_manager = "systemd"' > "$MAIN"; cp "$MAIN" "$T/main.before"
 run_ec FAKE_ROS=false
-if run_remedy && valid_toml "$T/cfg/containers/containers.conf"; then ok "remedy keeps the file parseable"
-else bad "invalid TOML after remedy: $(tr '\n' '|' < "$T/cfg/containers/containers.conf")"; fi
+if run_remedy && cmp -s "$MAIN" "$T/main.before" && valid_toml "$DROPIN"; then ok "main file untouched; drop-in valid"
+else bad "main changed or drop-in invalid: $(tr '\n' '|' < "$MAIN")"; fi
 
-echo "== Rosetta off, [machine] already present: edit it, no append printed"
-printf '[machine]\ncpus = 4\n' > "$T/cfg/containers/containers.conf"
+echo "== Rosetta off, [machine] already in the main file: still a drop-in, never a second [machine] there"
+rm -rf "$T/cfg"; mkdir -p "$T/cfg/containers"; printf '[machine]\ncpus = 4\n' > "$MAIN"; cp "$MAIN" "$T/main.before"
 run_ec FAKE_ROS=false
-if [ "$rc" -ne 0 ] && has 'inside the EXISTING \[machine\]' && ! grep -qE "printf '.*\[machine\]" "$T/out"; then ok "instruction only"
+if [ "$rc" -ne 0 ] && run_remedy && cmp -s "$MAIN" "$T/main.before" && valid_toml "$MAIN" && valid_toml "$DROPIN" \
+   && [ "$(grep -c '^\[machine\]' "$MAIN")" = 1 ]; then ok "drop-in only; the existing [machine] table is untouched"
 else bad "got rc=$rc: $(grep -iE 'machine|printf' "$T/out" | tr '\n' ' ')"; fi
+
+echo "== Rosetta off, CONTAINERS_CONF set: no drop-in remedy (podman would ignore it); names the variable"
+rm -rf "$T/cfg"
+run_ec FAKE_ROS=false CONTAINERS_CONF=/tmp/site-containers.conf
+if [ "$rc" -ne 0 ] && has 'CONTAINERS_CONF=/tmp/site-containers.conf is set' && ! has '50-vks-rosetta.conf'; then ok "names CONTAINERS_CONF, prints no drop-in"
+else bad "rc=$rc: $(tr '\n' ' ' < "$T/out" | cut -c1-300)"; fi
+
+echo "== Rosetta off, a LATER user drop-in sets rosetta=false: name THAT file, print no drop-in"
+rm -rf "$T/cfg"; mkdir -p "$T/cfg/containers/containers.conf.d"
+printf '[machine]\nrosetta = false\n' > "$T/cfg/containers/containers.conf.d/99-mine.conf"
+run_ec FAKE_ROS=false
+if [ "$rc" -ne 0 ] && has '99-mine.conf already sets rosetta' && ! has "printf '\[machine\]"; then ok "names 99-mine.conf, prints no drop-in"
+else bad "rc=$rc: $(tr '\n' ' ' < "$T/out" | cut -c1-300)"; fi
 
 echo "== no Rosetta 2 on the host: softwareupdate"
 run_ec FAKE_ROS=false FAKE_HOST_ROS=1

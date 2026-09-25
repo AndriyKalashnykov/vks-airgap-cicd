@@ -152,10 +152,29 @@ pkg_install $(engine_packages "$ENGINE_CHOICE" "$(pkg_mgr)") \
 # subuid/subgid, userns probes) does not apply; instead make sure the VM exists and runs.
 if [ "$(pkg_mgr)" = brew ]; then
   if [ "$ENGINE_CHOICE" = podman ] && have podman; then
-    podman machine inspect >/dev/null 2>&1 || podman machine init \
-      || log_warn "podman machine init failed — run it by hand, then 'podman machine start'"
+    # shellcheck source=scripts/lib/rosetta.sh
+    . "${SCRIPT_DIR}/lib/rosetta.sh"
+    # `podman machine inspect` with no name checks only podman-machine-default, so it missed a machine
+    # with any other name and created a SECOND one. Ask whether ANY machine exists.
+    if [ -z "$(podman machine list --format '{{.Name}}' 2>/dev/null)" ]; then
+      # A new machine is born on QEMU, under which the .NET builder aborts. Before creating it, point
+      # it at Rosetta via a drop-in (never an edit of your containers.conf) -- lib/rosetta.sh.
+      r_rc=0; r_msg="$(rosetta_ensure_dropin "")" || r_rc=$?
+      if [ "$r_rc" -eq 2 ]; then log_warn "$r_msg"; else log_info "$r_msg"; fi
+      podman machine init \
+        || log_warn "podman machine init failed — run it by hand, then 'podman machine start'"
+    fi
     if ! podman info >/dev/null 2>&1; then
       podman machine start || log_warn "podman machine start failed — run 'podman machine start'"
+    fi
+    # VERIFY, do not trust the write: a renamed key or an ignored drop-in would otherwise end at QEMU
+    # under a green `make deps`, and surface as a .NET abort 20 minutes into install-all. An EXISTING
+    # machine is never restarted here -- it may be running your containers; engine-check says how.
+    m="$(rosetta_default_machine)"
+    # Only with a NAME: a no-name inspect reads podman-machine-default, which may not be the machine.
+    if [ -n "$m" ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] \
+       && [ "$(podman machine inspect "$m" --format '{{.Rosetta}}' 2>/dev/null || true)" != true ]; then
+      log_warn "the podman machine is NOT on Rosetta: amd64 builds use QEMU, which aborts the .NET builder. Run 'gmake engine-check' for the two lines that switch it."
     fi
   elif [ "$ENGINE_CHOICE" = docker ] && have colima; then
     # Homebrew's buildx is a docker plugin docker cannot find on its own (measured, golang-web).

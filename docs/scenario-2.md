@@ -37,21 +37,50 @@ exist until you have done this.
 neither the tools nor a kubeconfig, and without a kubeconfig `kubectl` quietly tries `localhost:8080`
 and every step after it reports nothing found.
 
+**On Linux:**
+
 ```bash
 make deps     # kubectl, crane, tkn, argocd, helm, openssl + the rest of the pinned toolchain
 ```
 
+**On macOS**, type `gmake` — until the next section puts GNU make on your PATH, `make` is Apple's
+3.81, which the Makefile refuses (`GNU make >= 3.82 is required`):
+
+```bash
+gmake deps    # also creates and starts the podman machine
+```
+
 **Expect:** `prereqs installed. Versions:` followed by the pinned version of each tool. *(~3 min)*
+
+**On macOS, also check the podman machine** — the images are `linux/amd64` and a Mac is arm64, so the
+builds run under emulation, and under QEMU (what a new machine gets by default) the .NET builder
+aborts. It must be **Rosetta**:
+
+```bash
+gmake engine-check            # names the machine's emulation; if it is QEMU, prints the two lines to switch
+```
+
+**Expect (macOS):** `emulation: Rosetta (on, machine …)` and `engine-check: OK`. If it reports a
+PROBLEM instead, run the lines it prints (one `containers.conf` line, then a machine stop/start) and
+run it again.
 
 ### Put the toolchain on YOUR shell's PATH
 
-Every `make …` below works already, because the Makefile puts the pinned toolchain on `PATH` itself.
-The commands that are **not** `make` — every bare `kubectl` in this document — run in *your* shell,
-which cannot see them yet.
+The Makefile puts the pinned toolchain on `PATH` itself. The commands that are **not** `make` —
+every bare `kubectl` in this document — run in *your* shell, which cannot see them yet. **On Linux:**
 
 ```bash
 make shell-init                      # future shells: appends to YOUR shell's rc file
 . "$(make -s shell-rc-file)"         # THIS shell: re-reads that same file, whichever it is
+```
+
+**On macOS** (the same two lines, still as `gmake`) — `shell-init` also puts Homebrew's GNU tools
+first on PATH, so from here on `make` **is** GNU make and every later `make …` works as written:
+
+```bash
+gmake shell-init
+. "$(gmake -s shell-rc-file)"
+make --version | head -1             # Expect: GNU Make 4.x — not 3.81
 ```
 
 **Two lines because they fix two different things.** The first edits your shell's startup file, which
@@ -814,6 +843,11 @@ box very often cannot do both.
 |---|---|
 | reaches the internet **and** Harbor (**dual-homed**) | `make install-all` below |
 | reaches the **internet only** | **[the sneakernet flow](sneakernet.md)** — two boxes: pull + build outside, carry, push into your granted Harbor project + install inside. It replaces `install-all` (which starts with `mirror`); do **not** come back to it. |
+
+**On an Apple-silicon Mac:** the images are pushed as `linux/amd64` but the podman machine is arm64,
+so the two local builds run under emulation, and the install refuses to start them unless you run it
+as `BUILD_EMULATE=1 make install-all`. That needs the machine on **Rosetta** — the `engine-check`
+in Step 0b. Expect roughly 25 minutes for `install-all` on the Mac.
 
 **Then install:**
 

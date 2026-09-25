@@ -19,6 +19,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/engine.sh
 . "${SCRIPT_DIR}/lib/engine.sh"
+# shellcheck source=scripts/lib/rosetta.sh
+. "${SCRIPT_DIR}/lib/rosetta.sh"
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
 load_env
@@ -41,7 +43,7 @@ prob()  { printf '  PROBLEM: %s\n' "$*"; problems=$((problems + 1)); }
 #   trailing newline) makes EVERY podman command fail (measured), so the remedy is built for the
 #   file's actual state instead of a blind append.
 rosetta_check() {
-  local m ros f nl have_dotnet=0 a
+  local m ros f have_dotnet=0 a
   m="$(podman system connection list --format '{{.Name}} {{.Default}}' 2>/dev/null \
        | awk '$2 == "true" { print $1; exit }' || true)"
   m="${m%-root}"
@@ -68,18 +70,27 @@ EOF_APPS
     true) note "  emulation: Rosetta (on, machine ${m:-default}) — amd64 builds, .NET included, run under it" ;;
     false)
       [ "$have_dotnet" = 1 ] || { note "  emulation: QEMU (machine ${m:-default}); no .NET app enrolled, so builds should work"; return 0; }
-      f="${XDG_CONFIG_HOME:-$HOME/.config}/containers/containers.conf"
-      if grep -qs '^[[:space:]]*\[machine\]' "$f"; then
-        prob "the machine ${m:-default} emulates amd64 with QEMU, which ABORTS the .NET builder. Use Rosetta:
-             add the line  rosetta = true  inside the EXISTING [machine] section of ${f}
-             (a second [machine] section breaks every podman command), then:
+      # A DROP-IN, never an edit of containers.conf: a second [machine] table breaks every podman
+      # command, and legal TOML (`[ machine ]`, quoted keys) defeats a regex merge. MEASURED on the
+      # Mac: a drop-in rosetta=true wins even over rosetta=false in the main file. lib/rosetta.sh.
+      f="$(rosetta_dropin_path)"
+      # Do not print a fix that cannot work (review, 2026-09-25): with CONTAINERS_CONF set podman ignores
+      # the user files, and a LATER drop-in (e.g. 99-mine.conf) setting rosetta=false outranks ours.
+      # Name the real cause instead; the operator's own key is theirs to change.
+      local chosen=""
+      if [ -n "${CONTAINERS_CONF:-}" ]; then
+        prob "the machine ${m:-default} emulates amd64 with QEMU, which ABORTS the .NET builder, and CONTAINERS_CONF=${CONTAINERS_CONF} is set -- podman then ignores ~/.config/containers, so a drop-in there cannot help. Set  rosetta = true  in the [machine] table of ${CONTAINERS_CONF}, then:
              podman machine stop ${m} && podman machine start ${m}"
-      else
-        nl=""; [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ] && nl='\n'
-        prob "the machine ${m:-default} emulates amd64 with QEMU, which ABORTS the .NET builder. Use Rosetta:
-             mkdir -p ${f%/*} && printf '${nl}[machine]\\nrosetta = true\\n' >> ${f}
+        return 0
+      fi
+      if chosen="$(rosetta_key_already_set)" && [ "$chosen" != "$f" ]; then
+        prob "the machine ${m:-default} emulates amd64 with QEMU, which ABORTS the .NET builder, and ${chosen} already sets rosetta -- change it there to  rosetta = true  (a drop-in from us would not override a later one), then:
              podman machine stop ${m} && podman machine start ${m}"
-      fi ;;
+        return 0
+      fi
+      prob "the machine ${m:-default} emulates amd64 with QEMU, which ABORTS the .NET builder. Use Rosetta:
+             mkdir -p ${f%/*} && printf '[machine]\\nrosetta = true\\n' > ${f}
+             podman machine stop ${m} && podman machine start ${m}" ;;
     *) note "  cannot read the Rosetta setting of machine ${m:-default}; if a .NET builder aborts under QEMU, enable Rosetta" ;;
   esac
 }
