@@ -2017,6 +2017,10 @@ static-check: check-infra-hosts-single-source## Composite code gate (alignment +
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)
 
+.PHONY: platform-report
+platform-report: ## Measure THIS host for the README "Tested platforms" row (host tools + each target's own rc; prints the row)
+	@PLATFORM_REPORT_MAKE_VERSION="$(MAKE_VERSION)" MAKE="$(MAKE)" $(SCRIPTS)/platform-report.sh
+
 ##@ Dependencies (Renovate)
 .PHONY: renovate-validate
 renovate-validate: ## Validate renovate.json (pinned renovate — needs node on PATH)
