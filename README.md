@@ -69,6 +69,32 @@ air-gap box.
 [container engine](docs/decisions/container-engine-support.md). `make e2e-kind` needs Docker
 regardless, because kind's nodes *are* docker containers.
 
+### Tested platforms
+
+Each row was produced by `make platform-report` on that host: every result is that target's own exit
+code, and the test counts are the runner's own verdict line. Re-run it to refresh a row; a row names
+the commit it measured, so an old row is dated, not wrong.
+
+| OS | Arch | Host tools | Offline gates (commit, date, result) |
+|----|------|------------|--------------------------------------|
+| Ubuntu 24.04.5 LTS | x86_64 | GNU Make 4.3, bash 5.2.21, git 2.43.0, podman 4.9.3 (server 4.9.3 linux/amd64), docker 29.8.1 (server 29.8.1 linux/amd64) | `static-check` PASS (166 tests, 0 failed, 1 with skipped arms); `docs-lint` PASS @ `b4006c8`, 2026-09-25 |
+| macOS 26.6.2 | arm64 (Apple M1) | GNU Make 4.4.1 (`gmake`), bash 5.3.20, git 2.55.0, podman 6.1.2 (server 6.1.2 linux/arm64), docker 29.8.1 (no daemon) | `static-check` PASS (166 tests, 0 failed, 4 with skipped arms); `docs-lint` PASS @ `b4006c8`, 2026-09-25 |
+
+**What this does and does not cover.** `static-check` is the full offline gate: lint, manifest
+validation, security scans and every script unit test. It needs no lab. CI runs it on a schedule or a manual dispatch; a
+pull request runs only a faster subset — see [CI/CD](docs/ci-cd.md). The lab-backed targets
+(`install-all`, `verify`, scenario 1 and 2) are not measured by this table yet.
+
+- Tools pinned in [`.mise.toml`](.mise.toml) (kubectl, crane, helm, linters…) are not listed; the
+  commit in each row pins them. On macOS, `crane` is built from source with Go ≥ 1.27 so it can trust
+  Harbor's CA ([B735](BACKLOG.md)).
+- **macOS:** use `gmake` (Homebrew GNU make). Apple's `/usr/bin/make` 3.81 is refused. Building the
+  images on Apple silicon needs `BUILD_EMULATE=1` and Rosetta for the podman machine — see
+  [Scenario 1](docs/scenario-1.md). The `gmake` bootstrap is in
+  [Common bootstrap](docs/common-bootstrap.md).
+- Out of scope on macOS ([B735](BACKLOG.md)): the KinD targets and the sneakernet flow;
+  `make bundle` refuses to run there.
+
 ## Reference
 
 Deep-dives. Each path names the ones it needs, so you do not have to read these first.

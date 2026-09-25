@@ -78,7 +78,10 @@ for e in podman docker; do
     *)      fmt='{{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}' ;;
   esac
   s="$("$e" version --format "$fmt" 2>/dev/null || true)"
-  engine_v="${engine_v}${engine_v:+, }${e} ${c:-?}${s:+ (server ${s})}"
+  # An empty server means the CLI is installed but no daemon/VM answered (measured: docker on the Mac,
+  # which runs podman). Say so -- a bare "docker 29.8.1" reads as "server unknown".
+  if [ -n "$s" ]; then srv="server ${s}"; else srv="no daemon"; fi
+  engine_v="${engine_v}${engine_v:+, }${e} ${c:-?} (${srv})"
 done
 documented="$(grep -cE '^[a-zA-Z0-9_.-]+:.*##' Makefile || true)"
 
