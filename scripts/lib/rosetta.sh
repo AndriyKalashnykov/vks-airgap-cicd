@@ -27,9 +27,11 @@
 # The DEFAULT podman machine's name. MEASURED (podman 6.1.2): `podman machine list --format '{{.Name}}'`
 # prints the default machine WITH a trailing `*` ("podman-machine-default*"), which `inspect` rejects --
 # so strip it. Never `podman machine inspect` with no name: that reads podman-machine-default only.
+# `|| true`: callers run under `set -euo pipefail`, and a failing `podman machine list` (a corrupt
+# config after a failed init) must NOT end `make deps` silently with rc 125 -- measured by review.
 rosetta_default_machine() {
   podman machine list --format '{{.Name}} {{.Default}}' 2>/dev/null \
-    | awk '$2 == "true" { sub(/\*$/, "", $1); print $1; exit }'
+    | awk '$2 == "true" { sub(/\*$/, "", $1); print $1; exit }' || true
 }
 
 # The drop-in this repo owns. One `rm` undoes it.
@@ -44,11 +46,16 @@ rosetta_key_already_set() {
   local sysdir="${1:-/etc/containers}" user ours f
   user="${XDG_CONFIG_HOME:-$HOME/.config}/containers"
   ours="$(rosetta_dropin_path)"
+  # The rootless drop-in dirs are read by a rootless client too (review; not measured on the Mac).
+  # Scanning an extra dir can only make us stand aside, never override -- the conservative side.
   for f in "$user/containers.conf" "$user"/containers.conf.d/*.conf \
-           "$sysdir/containers.conf" "$sysdir"/containers.conf.d/*.conf; do
+           "$sysdir/containers.conf" "$sysdir"/containers.conf.d/*.conf \
+           "$sysdir"/containers.rootless.conf.d/*.conf "$sysdir/containers.rootless.conf.d/$(id -u)"/*.conf; do
     [ -f "$f" ] || continue
     [ "$f" = "$ours" ] && continue
-    if grep -Eqs '^[[:space:]]*"?rosetta"?[[:space:]]*=' "$f"; then printf '%s' "$f"; return 0; fi
+    # Every legal TOML spelling of the key: bare, "double" or 'single' quoted, and the top-level dotted
+    # form `machine.rosetta = ...` (tomllib reads all of them as machine.rosetta).
+    if grep -Eqs "^[[:space:]]*(machine\.)?[\"']?rosetta[\"']?[[:space:]]*=" "$f"; then printf '%s' "$f"; return 0; fi
   done
   return 1
 }
@@ -61,7 +68,8 @@ rosetta_host_capable() {
 }
 
 # Write the drop-in when every condition holds; print one line saying what it did and why.
-# Returns 0 when it wrote (or the drop-in was already there), 1 when it deliberately did nothing.
+# Returns 0 when it wrote (or the drop-in was already there), 1 when it deliberately stood aside, and
+# 2 when it TRIED and failed -- the caller logs 2 as a warning and the rest as info.
 # Call it ONLY when no podman machine exists yet.
 rosetta_ensure_dropin() {
   local d f already
@@ -76,8 +84,8 @@ rosetta_ensure_dropin() {
   fi
   f="$(rosetta_dropin_path)"; d="${f%/*}"
   if [ -f "$f" ]; then printf 'rosetta: %s already present\n' "$f"; return 0; fi
-  if ! { mkdir -p "$d" && printf '[machine]\nrosetta = true\n' > "$f"; }; then
-    printf 'rosetta: could not write %s\n' "$f"; return 1
+  if ! { mkdir -p "$d" 2>/dev/null && printf '[machine]\nrosetta = true\n' > "$f" 2>/dev/null; }; then
+    printf 'rosetta: could not write %s\n' "$f"; return 2
   fi
   printf 'rosetta: wrote %s so the new podman machine uses Rosetta, not QEMU (the .NET builder aborts under QEMU)\n' "$f"
   return 0

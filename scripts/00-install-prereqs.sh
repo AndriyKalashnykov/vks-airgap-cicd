@@ -159,7 +159,8 @@ if [ "$(pkg_mgr)" = brew ]; then
     if [ -z "$(podman machine list --format '{{.Name}}' 2>/dev/null)" ]; then
       # A new machine is born on QEMU, under which the .NET builder aborts. Before creating it, point
       # it at Rosetta via a drop-in (never an edit of your containers.conf) -- lib/rosetta.sh.
-      log_info "$(rosetta_ensure_dropin || true)"
+      r_rc=0; r_msg="$(rosetta_ensure_dropin "")" || r_rc=$?
+      if [ "$r_rc" -eq 2 ]; then log_warn "$r_msg"; else log_info "$r_msg"; fi
       podman machine init \
         || log_warn "podman machine init failed — run it by hand, then 'podman machine start'"
     fi
@@ -170,8 +171,9 @@ if [ "$(pkg_mgr)" = brew ]; then
     # under a green `make deps`, and surface as a .NET abort 20 minutes into install-all. An EXISTING
     # machine is never restarted here -- it may be running your containers; engine-check says how.
     m="$(rosetta_default_machine)"
-    if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] \
-       && [ "$(podman machine inspect ${m:+"$m"} --format '{{.Rosetta}}' 2>/dev/null)" != true ]; then
+    # Only with a NAME: a no-name inspect reads podman-machine-default, which may not be the machine.
+    if [ -n "$m" ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] \
+       && [ "$(podman machine inspect "$m" --format '{{.Rosetta}}' 2>/dev/null || true)" != true ]; then
       log_warn "the podman machine is NOT on Rosetta: amd64 builds use QEMU, which aborts the .NET builder. Run 'gmake engine-check' for the two lines that switch it."
     fi
   elif [ "$ENGINE_CHOICE" = docker ] && have colima; then

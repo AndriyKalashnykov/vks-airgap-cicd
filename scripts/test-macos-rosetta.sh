@@ -62,7 +62,10 @@ mk "$T/userfalse/xdg/containers/containers.conf" '[machine]\nrosetta = false\n'
 mk "$T/quoted/xdg/containers/containers.conf" '[machine]\n"rosetta" = true\n'
 mk "$T/userdrop/xdg/containers/containers.conf.d/10-mine.conf" '[machine]\nrosetta=false\n'
 mk "$T/sysdir/etc/containers.conf" '[machine]\n  rosetta = true\n'
-for c in userfalse quoted userdrop sysdir; do
+mk "$T/squoted/xdg/containers/containers.conf" "[machine]\n'rosetta' = false\n"
+mk "$T/dotted/xdg/containers/containers.conf" 'machine.rosetta = false\n'
+mk "$T/rootless/etc/containers.rootless.conf.d/10-site.conf" '[machine]\nrosetta = false\n'
+for c in userfalse quoted userdrop sysdir squoted dotted rootless; do
   o="$(run "$c")"
   if printf '%s' "$o" | grep -q 'your choice' && [ ! -e "$(dropin "$c")" ]; then ok "$c: an existing key is respected, no drop-in"
   else bad "$c: $o"; fi
@@ -72,6 +75,21 @@ mk "$T/commented/xdg/containers/containers.conf" '[machine]\n# rosetta = false\n
 o="$(run commented)"
 if printf '%s' "$o" | grep -q 'rc=0' && [ -e "$(dropin commented)" ]; then ok "a COMMENTED key does not count: drop-in written"
 else bad "commented: $o"; fi
+
+# a write that FAILS returns 2 (so deps logs it as a WARN, not info): XDG points into a read-only dir
+mkdir -p "$T/ro/xdg"; chmod 0555 "$T/ro/xdg"
+o="$(run ro)"
+if printf '%s' "$o" | grep -q 'could not write' && printf '%s' "$o" | grep -q 'rc=2'; then ok "a failed write returns 2 (a warning), not 1 (stood aside)"
+else bad "ro: $o"; fi
+chmod 0755 "$T/ro/xdg"
+
+# under set -euo pipefail (as 00-install-prereqs.sh runs) a FAILING `podman machine list` must not end
+# the caller -- found by review: it exited 125 with no message.
+printf '#!/bin/sh\nexit 125\n' > "$T/bin/podman-fail"
+mkdir -p "$T/failbin"; cp "$T/bin/podman-fail" "$T/failbin/podman"; chmod +x "$T/failbin/podman"
+o="$(env -i PATH="$T/failbin:/usr/bin:/bin" bash -c 'set -euo pipefail; . scripts/lib/rosetta.sh; m="$(rosetta_default_machine)"; echo "survived m=[$m]"' 2>&1)"
+if [ "$o" = "survived m=[]" ]; then ok "a failing podman machine list does not end a set -e caller"
+else bad "set -e caller: [$o]"; fi
 
 got="$(env -i PATH="$T/bin:/usr/bin:/bin" bash -c '. scripts/lib/rosetta.sh; rosetta_default_machine')"
 if [ "$got" = podman-machine-default ]; then ok "rosetta_default_machine strips podman's trailing '*'"

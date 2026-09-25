@@ -90,6 +90,19 @@ if [ "$rc" -ne 0 ] && run_remedy && cmp -s "$MAIN" "$T/main.before" && valid_tom
    && [ "$(grep -c '^\[machine\]' "$MAIN")" = 1 ]; then ok "drop-in only; the existing [machine] table is untouched"
 else bad "got rc=$rc: $(grep -iE 'machine|printf' "$T/out" | tr '\n' ' ')"; fi
 
+echo "== Rosetta off, CONTAINERS_CONF set: no drop-in remedy (podman would ignore it); names the variable"
+rm -rf "$T/cfg"
+run_ec FAKE_ROS=false CONTAINERS_CONF=/tmp/site-containers.conf
+if [ "$rc" -ne 0 ] && has 'CONTAINERS_CONF=/tmp/site-containers.conf is set' && ! has '50-vks-rosetta.conf'; then ok "names CONTAINERS_CONF, prints no drop-in"
+else bad "rc=$rc: $(tr '\n' ' ' < "$T/out" | cut -c1-300)"; fi
+
+echo "== Rosetta off, a LATER user drop-in sets rosetta=false: name THAT file, print no drop-in"
+rm -rf "$T/cfg"; mkdir -p "$T/cfg/containers/containers.conf.d"
+printf '[machine]\nrosetta = false\n' > "$T/cfg/containers/containers.conf.d/99-mine.conf"
+run_ec FAKE_ROS=false
+if [ "$rc" -ne 0 ] && has '99-mine.conf already sets rosetta' && ! has "printf '\[machine\]"; then ok "names 99-mine.conf, prints no drop-in"
+else bad "rc=$rc: $(tr '\n' ' ' < "$T/out" | cut -c1-300)"; fi
+
 echo "== no Rosetta 2 on the host: softwareupdate"
 run_ec FAKE_ROS=false FAKE_HOST_ROS=1
 if [ "$rc" -ne 0 ] && has 'softwareupdate --install-rosetta'; then ok "PROBLEM names softwareupdate"

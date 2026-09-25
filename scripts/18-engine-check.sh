@@ -74,6 +74,20 @@ EOF_APPS
       # command, and legal TOML (`[ machine ]`, quoted keys) defeats a regex merge. MEASURED on the
       # Mac: a drop-in rosetta=true wins even over rosetta=false in the main file. lib/rosetta.sh.
       f="$(rosetta_dropin_path)"
+      # Do not print a fix that cannot work (review, 2026-09-25): with CONTAINERS_CONF set podman ignores
+      # the user files, and a LATER drop-in (e.g. 99-mine.conf) setting rosetta=false outranks ours.
+      # Name the real cause instead; the operator's own key is theirs to change.
+      local chosen=""
+      if [ -n "${CONTAINERS_CONF:-}" ]; then
+        prob "the machine ${m:-default} emulates amd64 with QEMU, which ABORTS the .NET builder, and CONTAINERS_CONF=${CONTAINERS_CONF} is set -- podman then ignores ~/.config/containers, so a drop-in there cannot help. Set  rosetta = true  in the [machine] table of ${CONTAINERS_CONF}, then:
+             podman machine stop ${m} && podman machine start ${m}"
+        return 0
+      fi
+      if chosen="$(rosetta_key_already_set)" && [ "$chosen" != "$f" ]; then
+        prob "the machine ${m:-default} emulates amd64 with QEMU, which ABORTS the .NET builder, and ${chosen} already sets rosetta -- change it there to  rosetta = true  (a drop-in from us would not override a later one), then:
+             podman machine stop ${m} && podman machine start ${m}"
+        return 0
+      fi
       prob "the machine ${m:-default} emulates amd64 with QEMU, which ABORTS the .NET builder. Use Rosetta:
              mkdir -p ${f%/*} && printf '[machine]\\nrosetta = true\\n' > ${f}
              podman machine stop ${m} && podman machine start ${m}" ;;
