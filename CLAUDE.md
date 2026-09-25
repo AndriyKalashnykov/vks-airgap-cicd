@@ -896,7 +896,8 @@ send back. The lab is the scarce resource — a step you run without knowing wha
 cannot learn from.
 
 **Running the six-row walkthrough matrix?** [`docs/matrix-standing-rules.md`](docs/matrix-standing-rules.md)
-is the 34 standing rules it runs under — scope, how to read the documents, how to execute, how to read the
+is the standing rules it runs under (count is derived, not typed — it read 34 while the file held 38:
+`grep -cE '^[0-9]+\. ' docs/matrix-standing-rules.md`) — scope, how to read the documents, how to execute, how to read the
 VERDICT, the both-ways implication rule, the security constraints, and the during-a-run rules (the tree is
 FROZEN, never edit a script mid-run, kill by process group). They existed only in chat and were asked for
 twice; each during-a-run rule has a recorded incident behind it.
