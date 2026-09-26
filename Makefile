@@ -446,7 +446,7 @@ check-readme-scenarios: ## Gate: the README is SCENARIO-BASED — each scenario 
 check-env-coverage: ## Gate: every operator-settable var the scripts read must be documented in .env.example
 	@$(SCRIPTS)/check-env-coverage.sh
 
-.PHONY: state-show state-stamp state-migrate state-archives state-restore
+.PHONY: state-show state-migrate state-archives state-restore
 state-archives: ## List archived state overlays: which cluster each was for, and the key NAMES it holds (read-only)
 	@$(SCRIPTS)/state-archives.sh
 
@@ -456,9 +456,11 @@ state-restore: ## Put one archived state overlay back (ARCHIVE=<name>); the curr
 state-show: ## Show the state overlay: WHICH CLUSTER wrote it, when, and what is in it (secrets redacted)
 	@bash -c '. scripts/lib/os.sh; state_show'
 
-state-stamp: ## Stamp the state overlay with the cluster it belongs to (run once against a live cluster)
-	@bash -c '. scripts/lib/os.sh; load_env; state_stamp; state_show'
-
+# ⚠️ NO `state-stamp` TARGET (removed 2026-09-26). It stamped the overlay by hand, and an idea round
+# measured it harmful in every setting: on a real lab scenario-1 alternates Supervisor -> guest, so a
+# stamp for one makes the other refuse the overlay and (since #1315) archive it; on KinD it wrote
+# VKS_STATE_KIND=0 over the KinD flow's 1, so the next kind-up archived the KinD overlay. The
+# state_stamp FUNCTION stays: `05-kind-up.sh` (`state_stamp --kind`) is its one legitimate caller.
 state-migrate: ## Move a legacy .env.kind to the stamped overlay
 	@bash -c 'set -e; . scripts/lib/os.sh; \
 	  [ -f .env.kind ] || { echo "no .env.kind — nothing to migrate"; exit 0; }; \

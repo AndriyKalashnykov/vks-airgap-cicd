@@ -250,8 +250,8 @@ env_check() {
   # measured rc=1 -> rc=0. preflight has no env-validate backstop, so install-all would then mirror
   # to the OVERLAY's HARBOR_URL. The codebase already accepts that hazard -- with a real .env plus
   # the same stale overlay, the PRE-FIX gate is ALSO rc=0 and the overlay's HARBOR_URL still wins --
-  # so this WIDENS an accepted hazard rather than creating one. Named, not hidden; state_stamp and
-  # its "does not record which cluster it belongs to" warning are the existing mitigation.
+  # so this WIDENS an accepted hazard rather than creating one. Named, not hidden; the only mitigation is
+  # state_check's "does not record which cluster it belongs to" warning (a stamp exists only on KinD).
   # env_populate and env_validate keep their `die`: the file is a write target / a read source there.
   [ -f "$ENV_FILE" ] || log_warn "no .env file — checking the values that ARE set (state overlays, environment). 'make env-init' creates one."
   load_env

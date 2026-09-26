@@ -271,8 +271,8 @@ fi
 # ---- STATE 4: THE REAL-LAB STATE. An overlay that is present but NOT stamped. -------------------
 # Every state above sets VKS_STATE_KIND=1, which short-circuits creds.sh's provenance ladder BEFORE
 # the stamp comparison — so until now this gate never rendered the STORED branch at all, and STORED
-# is the ONLY branch a real lab reaches: nothing on the real-lab path calls state_stamp (its two
-# callers are 05-kind-up.sh and a manual `make state-stamp`). The gate written to keep creds-show
+# is the ONLY branch a real lab reaches: nothing on the real-lab path calls state_stamp (its one
+# caller is 05-kind-up.sh; the manual `make state-stamp` was removed 2026-09-26). The gate written to keep creds-show
 # honest "in every state" was blind to the state the operator is actually in. (B87)
 out="$(render 'HARBOR_URL=10.0.0.1
 HARBOR_PASSWORD=x

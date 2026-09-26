@@ -79,7 +79,7 @@ state_set() {
       # armed state_check against the OTHER server scenario-1 legitimately uses next (Supervisor at
       # Section 3, then the guest): each alternation archived again -- 4 archives in a 5-step walk, with
       # HARBOR_PASSWORD stranded in one of them. Unstamped is the real-lab policy (B120/B86): sourced
-      # whatever is selected, so the loop still breaks. `make state-stamp` still stamps it on request.
+      # whatever is selected, so the loop still breaks. (`make state-stamp` was removed 2026-09-26.)
       log_warn "state: started a fresh $(basename "$f"); the one stamped for ${stamped} is archived (make state-archives)"
     fi
   fi
