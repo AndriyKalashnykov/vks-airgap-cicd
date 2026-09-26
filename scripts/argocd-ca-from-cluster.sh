@@ -18,6 +18,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"   # ca_pin_verdict: ONE pin normaliser, shared with fetch-ca.sh
 
 load_env
 require_cmd kubectl
@@ -34,6 +36,9 @@ _addr="${ARGOCD_SERVER:-${ARGOCD_LB_IP:-}}"
 [ -n "$_addr" ] || die "set ARGOCD_SERVER (make argocd-address publishes it) -- needed to compare with what ArgoCD serves"
 _addr="${_addr#https://}"; _addr="${_addr%%/*}"
 case "$_addr" in *:*) _host="${_addr%%:*}"; _port="${_addr##*:}" ;; *) _host="$_addr"; _port=443 ;; esac
+# SNI = the name a real client dials (70-configure-argocd.sh and lib/tls.sh do the same). An IP sends
+# no SNI of its own, so use the default certificate's bare name -- what the CLI sends once it dials it.
+case "$(ca_addr_kind "$_host")" in ip) _sni=argocd-server ;; *) _sni="$_host" ;; esac
 
 SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"
 [ -f "$SUP" ] || { supervisor_kubeconfig_hint >&2; die "no Supervisor kubeconfig — see the search order above"; }
@@ -55,14 +60,25 @@ for s in argocd-server-tls argocd-secret; do
   fi
   if [ -s "$w" ]; then _src="$s"; break; fi
 done
+if [ -z "$_src" ]; then
+  # A GET on a secret in a namespace that does not exist ALSO says NotFound, so "no certificate here"
+  # and "wrong namespace" read the same. Tell them apart before steering anyone to trust-on-first-use.
+  _nrc=0
+  kubectl --kubeconfig "$SUP" --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-15s}" get ns "$ARGOCD_NAMESPACE" \
+    >/dev/null 2>"$e" || _nrc=$?
+  if [ "$_nrc" -ne 0 ] && grep -q 'NotFound' "$e"; then
+    die "namespace '${ARGOCD_NAMESPACE}' does not exist on this Supervisor — check ARGOCD_NAMESPACE in .env.
+  '${OUT}' was NOT touched."
+  fi
+fi
 [ -n "$_src" ] || die "neither argocd-server-tls nor argocd-secret in ${ARGOCD_NAMESPACE} carries .data.tls.crt.
   '${OUT}' was NOT touched. Use 'make fetch-argocd-ca' (reads the served certificate) instead."
 base64 -d < "$w" > "$t" 2>/dev/null || die "${ARGOCD_NAMESPACE}/${_src} tls.crt is not base64. '${OUT}' was NOT touched."
 openssl x509 -in "$t" -noout >/dev/null 2>&1 || die "${ARGOCD_NAMESPACE}/${_src} tls.crt is not a certificate. '${OUT}' was NOT touched."
 
-# The served leaf. -servername argocd-server: the SNI a real client sends when it dials the name.
+# The served leaf, with the SNI chosen above.
 _wire_rc=0
-timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client -connect "${_host}:${_port}" -servername argocd-server \
+timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client -connect "${_host}:${_port}" -servername "$_sni" \
   </dev/null 2>/dev/null | openssl x509 > "$w" 2>/dev/null || _wire_rc=$?
 [ "$_wire_rc" -eq 0 ] && [ -s "$w" ] || die "${_host}:${_port} did not present a certificate, so the Secret's certificate could
   not be compared with it. That is a CONNECTION problem, not a verdict. '${OUT}' was NOT touched."
@@ -74,10 +90,29 @@ fp_wire="$(openssl x509 -in "$w" -noout -fingerprint -sha256 | cut -d= -f2)"
   Either ARGOCD_SERVER points at another ArgoCD, or the Service now serves a different certificate.
   '${OUT}' was NOT touched."
 
+# An out-of-band pin, when the operator has one, must agree too (the same contract fetch-ca.sh enforces).
+_pv=0; ca_pin_verdict "$t" "${ARGOCD_CA_SHA256:-}" || _pv=$?
+case "$_pv" in
+  0|3) ;;
+  4) die "ARGOCD_CA_SHA256 is set but is not a SHA-256 digest (64 hex, colons optional). '${OUT}' was NOT touched." ;;
+  *) die "the certificate does NOT match ARGOCD_CA_SHA256.
+    pinned:   ${ARGOCD_CA_SHA256}
+    served:   ${fp_secret}
+  '${OUT}' was NOT touched." ;;
+esac
+
 sans="$(openssl x509 -in "$t" -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ')"
 chmod 0644 "$t"
 mv "$t" "$OUT"; trap 'rm -f "$w" "$e"' EXIT
 log_info "wrote ${OUT}  (from ${ARGOCD_NAMESPACE}/${_src} over the authenticated Supervisor API)"
 log_info "  SHA-256:  ${fp_secret}  == the certificate ${_host}:${_port} serves"
 log_info "  names:    ${sans:-<none>}"
-log_info "  It verifies ONLY a name in that list, never an IP. To use it: ARGOCD_SERVER=<one of those names>, resolving to ${_host}."
+[ "$_pv" = 0 ] && log_info "  matches ARGOCD_CA_SHA256"
+[ -n "${ARGOCD_CA_FILE:-}" ] || log_info "  set it in .env, e.g.  ARGOCD_CA_FILE=${OUT}"
+if [ "$(ca_addr_kind "$_host")" = ip ]; then
+  log_warn "  ARGOCD_SERVER is the IP ${_host}, and this certificate verifies ONLY the names above."
+  log_warn "  Until ARGOCD_SERVER is one of those names, setting ARGOCD_CA_FILE makes every verifying"
+  log_warn "  argocd call fail on the name. Map one in /etc/hosts to ${_host} and set ARGOCD_SERVER to it first."
+else
+  log_info "  It verifies ONLY a name in that list, never an IP."
+fi

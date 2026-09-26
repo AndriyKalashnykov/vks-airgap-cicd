@@ -766,7 +766,7 @@ harbor-ca-from-cluster: ## Get the lab Harbor's CA from the Supervisor when it i
 	@$(SCRIPTS)/27-harbor-ca-from-cluster.sh "$(if $(HARBOR_CA_FILE),$(HARBOR_CA_FILE),./secrets/harbor-ca.crt)"
 
 .PHONY: argocd-ca-from-cluster
-argocd-ca-from-cluster: ## Get ArgoCD's certificate from the SUPERVISOR (authenticated, no trust-on-first-use) and prove it is the one served; costs an ADMIN-level read
+argocd-ca-from-cluster: ## Get ArgoCD's certificate from the SUPERVISOR (authenticated, no trust-on-first-use) and prove it is the one served; costs an ADMIN-level read (scenario-1 / Supervisor only; a tenant uses fetch-argocd-ca)
 	@$(SCRIPTS)/argocd-ca-from-cluster.sh "$(if $(ARGOCD_CA_FILE),$(ARGOCD_CA_FILE),./secrets/argocd-ca.crt)"
 
 .PHONY: fetch-argocd-ca
