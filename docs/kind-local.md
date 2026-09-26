@@ -43,12 +43,12 @@ installs it together with its rootless prerequisites. On a Mac, follow **On macO
 ## On macOS (Apple silicon)
 
 Measured on an 8 GB M1 (macOS 26.6.2): every KinD e2e target passes
-([results](tested-platforms.md)). `e2e-kind` takes about 25 minutes and the VM peaks at about 4.3 GiB.
+([results](tested-platforms.md)). `e2e-kind` takes about 25 minutes and the VM peaks at 4.1–4.3 GiB.
 KinD needs a Docker daemon, so on a Mac it runs in a [Colima](https://github.com/abiosoft/colima) VM.
 Use these commands on a Mac instead of the **Run it** block below.
 
 ```bash
-brew install make chipmk/tap/docker-mac-net-connect
+brew install make colima docker docker-buildx chipmk/tap/docker-mac-net-connect
 podman machine stop 2>/dev/null   # the measured runs had it stopped: two VMs on 8 GB is untested
 colima start --cpu 4 --memory 6 --disk 80 --vm-type vz --vz-rosetta --runtime docker
 gmake deps CONTAINER_ENGINE=docker   # kind, helm, kubectl, crane, the docker CLI + buildx

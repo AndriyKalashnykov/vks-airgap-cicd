@@ -1072,6 +1072,9 @@ is what those PRs actually touched, and rewriting them would falsify the record.
   (vz + Rosetta, 4 CPU / 6 GiB, docker, `MIRROR_ARCH=arm64` per session). Peak VM memory 5,686 MiB
   (cross-cluster). No hardware limit was hit. Setup: `docs/kind-local.md` §"On macOS"; results:
   `docs/tested-platforms.md`. Evidence: `~/walk-evidence/from-mac/kind-20260926/` (0700).
+  ⚠️ **The fresh-Mac order in that doc was never run** (the test Mac already had its toolchain); a
+  session-end read found its brew line lacked Colima and fixed it. Treat that section as reviewed, not
+  walked.
 - Found on the way, each in its own PR:
   - **#1297**: the self-built cache ignored architecture, and the go_get check missed docker's gzip layers.
   - **#1298**: the Harbor probe hard-coded https, so the `HARBOR_INSECURE=1` leg read as down.
@@ -1080,10 +1083,12 @@ is what those PRs actually touched, and rewriting them would falsify the record.
   - **#1300**: `e2e-kind-cross-cluster` needed a `HARBOR_URL` it never had.
   - **#1301 (security):** git's credential helpers are cumulative, so the demo's Gitea token was offered
     to the operator's osxkeychain / libsecret on every push. `gitea_git_isolate` resets the list. Measured
-    on the Mac: 0 osxkeychain calls after the fix.
+    on the Mac with `GIT_TRACE`: the old shape calls `git credential-osxkeychain store`, the isolated clone
+    0 times.
   - **#1302**: `build-apps` pushed before the EventListener could receive and lost the webhook (900 s).
     `el_wait_ready` gates it; the re-fire is deferred (B742).
-- The first four failed identically on Linux, so they were never macOS-specific.
+- #1299 and #1300 failed the same way on Linux; #1298 is not macOS-specific (reasoned, not re-run on
+  Linux); #1297 needed the arm64 build to surface. So the macOS/arm64 run found things Linux did not.
 
 ### State (MEASURED 2026-09-26 — re-measure, do not trust)
 
@@ -1092,7 +1097,10 @@ is what those PRs actually touched, and rewriting them would falsify the record.
   KinD state, `secrets/` and the `172.18.0.3` docker login were removed. **A `localhost:5000` docker auth
   entry remains, origin unknown** — not created this session as far as I know; decide before wiping.
 - **Linux:** our KinD cluster is torn down (`golang-web` belongs to something else — leave it). The lab
-  (cicd-gc3) was not touched this session.
+  (cicd-gc3) was not touched this session. Since the 2026-09-25 platform run, `KUBECONFIG`/`VKS_CONTEXT`/
+  `VKS_AUTH_METHOD`/`ARGOCD_SERVER` resolve from the stamped `.env.state`, not `.env`; the pre-run `.env`
+  copies are in `~/walk-evidence/platform-linux-I/before/`.
+- **Mac lab re-run:** its lab `.env`, `secrets/` and `~/.config/vcf` were wiped; re-seed them first.
 
 ### 🔴 DISTRUST FIRST
 
@@ -1103,6 +1111,10 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 | **`make static-check-fast`** | does NOT run `lint` — an SC2034 passed it and failed `static-check`. |
 | **`git config credential.helper X`** | APPENDS to the inherited helper list; it does not replace it (#1301). |
 | **`timeout` on the Mac** | not on the default PATH (rc 127); export `/opt/homebrew/bin` first. |
+| **`secrets/.env.make` / `.env.state.make`** | GENERATED from `.env` at every make parse — deleting `.env` leaves 23 credential lines behind. |
+| **`podman machine list --format '{{.Name}}'`** | marks the DEFAULT machine with a trailing `*`; never pass it raw to `inspect`. |
+| **`make --trace`** | rides MAKEFLAGS into nested makes and changes their output. |
+| **Apple `/usr/bin/make` 3.81** | refused at parse time. Use `gmake`. |
 
 ### NOT done — next work, ranked
 
@@ -1110,7 +1122,8 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 2. **B486** — `ARGOCD_SERVER` published as an IP; `fetch-argocd-ca` refuses on it. B550 is blocked on it.
 3. **B735 residuals** (macOS jump box) and the B740 residuals: the #1298 review's three (3xx on http
    counts as serving; uninstall advice lacks `--cacert`; an IP `HARBOR_URL` with no PTR is never
-   probed), the unmeasured fresh-Mac order and `sudo -b` prompt.
+   probed), the fresh-Mac order never walked, the `sudo -b` prompt, and #1300's `GITEA_IMAGE` Harbor test
+   (a plain `${HARBOR_URL}/` prefix match: another spelling of the same registry silently skips the check).
 4. **B722**, **B723**, **B734**.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)

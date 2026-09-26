@@ -10721,7 +10721,7 @@ The macOS setup text in docs/kind-local.md was reviewed (adversary-docker) and r
 Mac: `sudo pkill -f "$(brew --prefix)/opt/docker-mac-net-connect/bin/docker-mac-net-connect"` stops the
 daemon and removes its 172.18 route (1 -> 0). NOT measured: the documented fresh-Mac order (colima start
 before `gmake deps CONTAINER_ENGINE=docker`) on a wiped Mac — the test Mac already had its toolchain — and
-`sudo -b` on a Mac whose sudo asks for a password (the test Mac's sudo is passwordless).
+`sudo -b` on a Mac whose sudo asks for a password (the test Mac's sudo is passwordless). The session-end review (2026-09-26) found the brew line lacked `colima docker docker-buildx` although the doc starts Colima before `deps` — fixed; still not walked on a wiped Mac.
 
 ## ✅ B741 — (DONE 2026-09-26, claude-config #117) subagents may write the SESSION SCRATCHPAD (owner-approved 2026-09-26; claude-config hook)
 
@@ -10765,6 +10765,8 @@ verify) closes the start-up window. Still open, from the adversary-k8s rounds:
   (`pkg/adapter/adapter.go` at v0.37.0); search the project's merged PRs before patching anything.
 - **Residual:** `rollout status` Ready does not prove the Service endpoints are programmed; there is a
   sub-second window before the first push. UNVERIFIED.
+- **Residual:** `el_wait_ready` keeps polling on UNREACHABLE/UNKNOWN, so an unreachable cluster costs the
+  whole `EL_READY_TIMEOUT_SECONDS` (300 s) before the correct message. Fail fast on UNREACHABLE, or accept it.
 
 **Done when:** the write-back retries on non-fast-forward, and build-apps re-fires once after
 `PIPELINERUN_WAIT_SECONDS`, each RED-proven.
