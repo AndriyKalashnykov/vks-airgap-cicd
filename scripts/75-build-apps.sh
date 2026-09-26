@@ -116,7 +116,7 @@ build_app() {
   # the other half, and 99-verify.sh's own comment warns about exactly this shape.
   local before
   before="$(kubectl -n "$CI_NAMESPACE" get pipelinerun -l "tekton.dev/pipeline=${app}-ci" \
-              --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -1 || true)"
+              -o name 2>/dev/null | sort || true)"   # ALL existing runs: a re-fire can add two new ones
 
   # The FIRST push waits until the EventListener can receive: a webhook delivered while it
   # crash-loops is LOST, and this script has no re-fire, so each lost app burned its full
@@ -143,40 +143,73 @@ build_app() {
   sha="$(git -C "$d" rev-parse --short HEAD)"
   log_info "[${app}] pushed ${sha} to ${APP_GIT_REPO} — waiting for its PipelineRun"
 
-  # Wait for a PipelineRun for THIS app that started after the push. Selecting by the app's own
-  # pipeline label matters: matching "any new PipelineRun" would let a sibling app's run satisfy
-  # this check — a green that proves nothing.
-  elapsed=0; pr=""
+  # Wait for THIS app's new PipelineRun(s), re-firing ONCE if none appears (B742): Gitea fires the
+  # webhook once per push, and a delivery the EventListener drops is otherwise a silent 900 s wait.
+  # Selecting by the app's own pipeline label matters: "any new PipelineRun" would let a sibling
+  # app's run satisfy this check — a green that proves nothing.
+  #
+  # ⚠️ SUCCESS IS THE DEPLOY REPO, NOT "A RUN SUCCEEDED". With a re-fire (or Gitea delivering twice)
+  # there can be two runs, and the write-back step YIELDS — exits 0 without writing — when the deploy
+  # repo already names a newer commit. So a Succeeded run alone no longer proves a write-back: this
+  # clones <app>-deploy and requires APP_COMMIT to be one of the shas pushed here.
+  local pushed="$sha" refired=0 wait_s="${PIPELINERUN_WAIT_SECONDS:-120}" now new dd2 up reason n_new n_done ok_run="" last_bad="" last_reason=""
+  elapsed=0
   while [ "$elapsed" -lt "$BUILD_APPS_TIMEOUT_SECONDS" ]; do
-    pr="$(kubectl -n "$CI_NAMESPACE" get pipelinerun \
-            -l "tekton.dev/pipeline=${app}-ci" \
-            --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -1 || true)"
-    # A NEW one, not the one that was already there. Without this the loop exits on the pre-existing
-    # run and the "Succeeded" below is about a build from before this push.
-    [ -n "$pr" ] && [ "$pr" != "$before" ] && break
-    pr=""
-    sleep "$BUILD_APPS_POLL_SECONDS"; elapsed=$((elapsed + BUILD_APPS_POLL_SECONDS))
-  done
-  [ -n "$pr" ] || { log_error "[${app}] no PipelineRun appeared in ${BUILD_APPS_TIMEOUT_SECONDS}s — is the webhook registered? (make seed-gitea)"; failed=$((failed+1)); return; }
-
-  while [ "$elapsed" -lt "$BUILD_APPS_TIMEOUT_SECONDS" ]; do
-    rc="$(kubectl -n "$CI_NAMESPACE" get "$pr" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null || true)"
-    case "$rc" in
-      Succeeded) log_info "[${app}] ${pr#*/} Succeeded"; built=$((built+1)); return ;;
-      Failed|CouldntGetTask|PipelineRunTimeout|Cancelled)
-        log_error "[${app}] ${pr#*/} ${rc} — kubectl -n ${CI_NAMESPACE} describe ${pr}"
+    now="$(kubectl -n "$CI_NAMESPACE" get pipelinerun -l "tekton.dev/pipeline=${app}-ci" -o name 2>/dev/null | sort || true)"
+    new="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$now") | sed '/^$/d')"
+    if [ -z "$new" ]; then
+      if [ "$refired" = 0 ] && [ "$elapsed" -ge "$wait_s" ]; then
+        refired=1
+        log_warn "[${app}] no PipelineRun ${wait_s}s after the push — re-firing the webhook (empty commit)"
+        git -C "$d" commit -q --allow-empty -m "build: re-fire the webhook for ${app}"
+        git -C "$d" push -q origin "$APP_BRANCH"
+        pushed="${pushed} $(git -C "$d" rev-parse --short HEAD)"
+      fi
+    else
+      n_new=0; n_done=0; ok_run=""; last_bad=""; last_reason=""
+      for pr in $new; do
+        n_new=$((n_new + 1))
+        reason="$(kubectl -n "$CI_NAMESPACE" get "$pr" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null || true)"
+        case "$reason" in
+          Succeeded) n_done=$((n_done + 1)); ok_run="$pr" ;;
+          Failed|CouldntGetTask|PipelineRunTimeout|Cancelled) n_done=$((n_done + 1)); last_bad="$pr"; last_reason="$reason" ;;
+        esac
+      done
+      if [ -n "$ok_run" ]; then
+        dd2="${HARBOR_TMP}/deploy-check-${app}"; rm -rf "$dd2"
+        up=""
+        if git clone -q --depth 1 "${BASE}/${GITEA_ORG}/${APP_DEPLOY_REPO}.git" "$dd2" 2>/dev/null; then
+          up="$(awk '/name: APP_COMMIT/ { getline; sub(/.*value:[ ]*/, ""); gsub(/[" ]/, ""); print; exit }' "$dd2/deployment.yaml" 2>/dev/null || true)"
+        fi
+        # shellcheck disable=SC2086  # $pushed is a space-separated list of shas, split on purpose
+        if short_sha_in "$up" $pushed; then
+          log_info "[${app}] ${ok_run#*/} Succeeded — ${APP_DEPLOY_REPO} names ${up}"
+          built=$((built+1)); return
+        fi
+        if [ "$n_done" -eq "$n_new" ]; then
+          log_error "[${app}] ${ok_run#*/} Succeeded, but ${APP_DEPLOY_REPO} names '${up:-?}', not what was pushed (${pushed})"
+          failed=$((failed+1)); return
+        fi
+      elif [ "$n_done" -eq "$n_new" ]; then
+        log_error "[${app}] ${last_bad#*/} ${last_reason} — kubectl -n ${CI_NAMESPACE} describe ${last_bad}"
         # THE LOG, not just the status. `install-all` ends at build-apps and never reaches
         # `make verify`, so THIS is where an operator actually lands — and the cause (a stale
         # image ref reaching kaniko as a --build-arg) is only ever in the step's stdout. B532.
-        pipeline_failure_log "$CI_NAMESPACE" "${pr#*/}"
+        pipeline_failure_log "$CI_NAMESPACE" "${last_bad#*/}"
         pipeline_rerender_hint
-        failed=$((failed+1)); return ;;
-    esac
+        failed=$((failed+1)); return
+      fi
+    fi
     sleep "$BUILD_APPS_POLL_SECONDS"; elapsed=$((elapsed + BUILD_APPS_POLL_SECONDS))
   done
-  log_error "[${app}] ${pr#*/} still running after ${BUILD_APPS_TIMEOUT_SECONDS}s (BUILD_APPS_TIMEOUT_SECONDS)"
-  # A run that never finished has a log too, and it is the only thing that says WHERE it stuck.
-  pipeline_failure_log "$CI_NAMESPACE" "${pr#*/}"
+  if [ -z "${new:-}" ]; then
+    log_error "[${app}] no PipelineRun appeared in ${BUILD_APPS_TIMEOUT_SECONDS}s, re-fire included — is the webhook registered? (make seed-gitea)"
+    el_dump_evidence
+  else
+    log_error "[${app}] no finished run wrote ${APP_DEPLOY_REPO} within ${BUILD_APPS_TIMEOUT_SECONDS}s (BUILD_APPS_TIMEOUT_SECONDS)"
+    # A run that never finished has a log too, and it is the only thing that says WHERE it stuck.
+    pipeline_failure_log "$CI_NAMESPACE" "$(printf '%s\n' "$new" | tail -1 | sed 's#.*/##')"
+  fi
   failed=$((failed+1))
 }
 for_each_app build_app

@@ -10753,7 +10753,7 @@ hardlinks, requires the per-user root to be ours, and fails closed on un-encodab
 a real worktree subagent's write to its own directory was ALLOWED, a write to the scratchpad root
 was BLOCKED. Open: the macOS `$TMPDIR` layout (unmeasured).
 
-## 🔴 B742 — build-apps has no webhook re-fire; the Tekton write-back push has no retry (2026-09-26)
+## ✅ B742 — (DONE 2026-09-26) build-apps has no webhook re-fire; the Tekton write-back push has no retry
 
 **Measured.** A cold `e2e-kind` lost javawebapp's first webhook: build-apps pushed at 09:52:57, the
 EventListener crashed at 09:53:04 ("Timed out waiting on CaBundle") and went Ready at 09:53:46, and the
@@ -10778,3 +10778,37 @@ verify) closes the start-up window. Still open, from the adversary-k8s rounds:
 
 **Done when:** the write-back retries on non-fast-forward, and build-apps re-fires once after
 `PIPELINERUN_WAIT_SECONDS`, each RED-proven.
+
+**2026-09-26 — DONE.** Design refuted once (adversary-k8s): a plain `pull --rebase -X theirs` retry makes
+the later-FINISHING run win, and the review reproduced an older commit silently rolling APP_COMMIT back.
+Shipped instead:
+- `commit-push` retries a rejected push at most 3 times, and first reads the APP_COMMIT the deploy branch
+  names: equal -> exit 0; NEWER (ours is its ancestor, checked in the app clone after fetching every
+  head) -> exit 0 "SUPERSEDED"; older, diverged or unresolvable (a reseed) -> rebase ours on top, then
+  refuse unless the diff is only our two lines, so a concurrent edit is never silently reverted.
+  `scripts/test-writeback-retry.sh` runs the step's real script against local repos (8 checks, incl. a
+  positive control showing the old bare push goes red on the same race). It caught one real bug on its
+  first run: the app clone is single-branch, so the ancestry fetch must take every head.
+- `75-build-apps.sh` re-fires once after `PIPELINERUN_WAIT_SECONDS` with no new run, and counts an app
+  built only when a new run Succeeded AND the deploy repo names a sha it pushed (`short_sha_in`, unit
+  tested) — a run that yielded no longer reads as a build.
+- `99-verify.sh` judges the newest-CREATED new run, not the alphabetically first.
+Not proven: the step in the real `alpine/git` + busybox image under a real race, and the build-apps
+re-fire branch live (both are hard to induce); the happy paths run in every e2e-kind.
+
+## 🔴 B743 — the deployed image tag is the MUTABLE version, so page and bytes can disagree (2026-09-26)
+
+Found by the B742 review. `deployment.yaml` pulls `:<version>` with `imagePullPolicy: Always`. Two runs
+for the same version but different code decide the RUNNING bytes by kaniko push order, while APP_COMMIT
+is decided by write-back order — so the page can name one commit while running the other's image. B742's
+ancestry guard fixes APP_COMMIT only. Fix direction: deploy by the sha tag (already pushed as the second
+Harbor tag) or by digest, and keep the version for display. Needs its own design round: the `replacements`
+block in each kustomization and the verify predicate both key on the version tag.
+
+## 🔴 B744 — 31-fetch-argocd-kubeconfig repoints the CURRENT CONTEXT of 30's kubeconfig (2026-09-26)
+
+Found by the B734 review, measured in both 2026-09-25/26 walk logs: `ARGOCD_KUBECONFIG` equals 30's
+`secrets/supervisor.kubeconfig`, so 31's `vcf context use argocd-supervisor:<ns>` changes that file's
+current-context. Anything that later reads the file's current context gets the ArgoCD one. Not blocking;
+decide whether 31 should use its own file or 30 should pin its context explicitly.
+
