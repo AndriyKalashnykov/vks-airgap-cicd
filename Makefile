@@ -450,8 +450,9 @@ check-env-coverage: ## Gate: every operator-settable var the scripts read must b
 state-archives: ## List archived state overlays: which cluster each was for, and the key NAMES it holds (read-only)
 	@$(SCRIPTS)/state-archives.sh
 
+state-restore: export ARCHIVE
 state-restore: ## Put one archived state overlay back (ARCHIVE=<name>); the current one is archived first
-	@ARCHIVE='$(ARCHIVE)' $(SCRIPTS)/state-restore.sh
+	@$(SCRIPTS)/state-restore.sh
 
 state-show: ## Show the state overlay: WHICH CLUSTER wrote it, when, and what is in it (secrets redacted)
 	@bash -c '. scripts/lib/os.sh; state_show'

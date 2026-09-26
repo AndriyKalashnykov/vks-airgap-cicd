@@ -15,7 +15,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 
-clean() { local v="$1"; printf '%s' "${v//[$'\001'-$'\037'$'\177']/}"; }   # no terminal escapes from a file
+clean() { printf '%s' "$1" | state_strip_controls; }   # no terminal escapes (C0 or C1) from a file
+# keys_of <file> — the KEY of every record, and never a fragment of a VALUE. A shell-quoted value can
+# span lines (set_env_var single-quotes; a hand-made file may double-quote), and a naive
+# `^[A-Za-z_]*=` read the continuation line of a multi-line password as a key NAME (measured: it
+# printed base64 key material). This tracks quote state across lines, as the shell does, and only
+# reads a key at a line that STARTS outside any quote. Prints `#unparsed` if a quote never closes.
+keys_of() {
+  LC_ALL=C awk '
+    { line = $0
+      if (q == "" && match(line, /^[A-Za-z_][A-Za-z0-9_]*=/)) print substr(line, 1, RLENGTH - 1)
+      n = length(line); esc = 0
+      for (i = 1; i <= n; i++) {
+        c = substr(line, i, 1)
+        if (esc) { esc = 0; continue }
+        if (q == "")        { if (c == "\\") esc = 1; else if (c == "\047") q = "s"; else if (c == "\"") q = "d"; else if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t]/)) break }
+        else if (q == "s")  { if (c == "\047") q = "" }
+        else                { if (c == "\\") esc = 1; else if (c == "\"") q = "" }
+      } }
+    END { if (q != "") print "#unparsed" }' "$1" 2>/dev/null || true
+}
 stamp_of() { grep -m1 "^$1=" "$2" 2>/dev/null | cut -d= -f2- | tr -d '"' || true; }
 
 sink="$(state_file)"
@@ -52,9 +71,10 @@ while IFS=$'\t' read -r cls p; do
     elif [ "$srv" = "$cur_srv" ]; then printf '    yours now: YES — the same API server as your KUBECONFIG\n'
     else printf '    yours now: no — your KUBECONFIG points at %s\n' "$(clean "$cur_srv")"; fi
   fi
-  keys="$(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$p" 2>/dev/null | tr -d '=' | grep -v '^VKS_STATE_' || true)"
+  keys="$(keys_of "$p" | grep -v '^VKS_STATE_' || true)"
   line=""
   for k in $keys; do
+    if [ "$k" = '#unparsed' ]; then line="${line}<an unterminated quote: the rest is unreadable> "; continue; fi
     if state_key_is_secret "$k"; then line="${line}${k}(secret) "; else line="${line}${k} "; fi
   done
   printf '    keys: %s\n' "${line:-<none>}"

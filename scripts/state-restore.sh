@@ -36,19 +36,24 @@ STATE_ARCHIVED_AS=""
 if [ -f "$sink" ]; then
   state_archive "replaced by 'make state-restore ARCHIVE=${a}'"
 fi
-mv "$path" "$sink"
+# `ln` + `rm`, not `mv`: link(2) fails if the sink REAPPEARED (a concurrent writer) instead of
+# silently overwriting it. The archive is only removed once the sink is its hard link.
+ln "$path" "$sink" 2>/dev/null || die "$(basename "$sink") reappeared while restoring (another vks command wrote it). Nothing was deleted; see 'make state-archives'."
+rm -f "$path"
+[ ! -L "$sink" ] || die "$(basename "$sink") is a symlink after the restore -- refused; inspect it"
 chmod 600 "$sink"
 [ "$(cksum < "$sink")" = "$want" ] || die "the restored $(basename "$sink") does not match '${a}' — another command wrote it during the swap. Nothing was deleted; see 'make state-archives'."
 
-srv="$(grep -m1 '^VKS_STATE_SERVER=' "$sink" | cut -d= -f2- | tr -d '"' || true)"
-kc="$(grep -m1 '^KUBECONFIG=' "$sink" | cut -d= -f2- | tr -d '"' || true)"
+# printed below, and a hand-made archive is untrusted: strip C0 AND C1 control bytes.
+srv="$(grep -m1 '^VKS_STATE_SERVER=' "$sink" | cut -d= -f2- | tr -d '"' | state_strip_controls || true)"
+kc="$(grep -m1 '^KUBECONFIG=' "$sink" | cut -d= -f2- | tr -d '"' | state_strip_controls || true)"
 log_info "restored $(basename "$sink") from ${a}"
 if [ -z "$srv" ]; then
   log_warn "  it is UNSTAMPED: every command without an explicit KUBECONFIG now sources it as-is"
 else
   log_info "  it is stamped for ${srv}"
   cur=""
-  if [ -n "${KUBECONFIG:-}" ] && [ -f "${KUBECONFIG%%:*}" ]; then cur="$(state_kubeconfig_server "${KUBECONFIG%%:*}" 2>/dev/null || true)"; fi
+  if [ -n "${KUBECONFIG:-}" ] && [ -f "${KUBECONFIG%%:*}" ]; then cur="$(state_kubeconfig_server "${KUBECONFIG%%:*}" 2>/dev/null | state_strip_controls || true)"; fi
   if [ -z "$cur" ]; then log_info "  your KUBECONFIG's server: unknown"
   elif [ "$cur" = "$srv" ]; then log_info "  your KUBECONFIG points at the same server, so it will be used"
   else log_warn "  your KUBECONFIG points at ${cur}, so an explicit-KUBECONFIG command will NOT source it"; fi
