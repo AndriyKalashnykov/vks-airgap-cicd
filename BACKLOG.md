@@ -10538,7 +10538,7 @@ Correction to the text above: `BUILDER_IMAGE_TAG` is NOT a `.env.example` pin (i
 its default lives in `lib/apps.sh`), so no `.env.example`-keyed design covers it. B739 covers it,
 with the other values that go stale in `.env`.
 
-## 🟡 B739 — values the TOOLS write into `.env` go stale when the lab moves on
+## ✅ B739 — (DONE 2026-09-26: already covered at the point of use) values the TOOLS write into `.env` go stale when the lab moves on
 
 B738 covers pins that `.env.example` owns. A second class of frozen value is written into `.env` by
 the flow itself and never refreshed:
@@ -10556,6 +10556,18 @@ mismatch is named with the command that refreshes it.
 **Plan 2026-09-26 (after two adversary rounds; see B740 for the wave order):** Offline half first: compare each tool-written value with its source where it is used, and name the
 refresh command on a mismatch (e.g. `VKS_CLUSTERCLASS=builtin-generic-v3.6.0` against a 3.7.1 lab,
 measured in B737). Read-only lab checks only.
+**2026-09-26 — CLOSED; each value is already checked where it is used (read from the code):**
+
+- `VKS_CLUSTERCLASS` is a SEED, not a setting. The Supervisor rewrites it to the newest compatible
+  class. `25-vks-cluster-create.sh` reads `.spec.topology.classRef.name` back after apply and warns
+  when it differs, and `make vks-shape` shows/sets the newest non-deprecated class
+  (`test-vks-shape.sh`, `test-vks-class-readback.sh`). So a stale `v3.6.0` on a 3.7.1 lab is benign.
+- A stale `VKS_K8S_VERSION` is DENIED by admission. 25 classifies the denial and prints the refresh:
+  delete the pin, then `make vks-k8s-version` (which will not overwrite a pin).
+- A stale builder image is caught by the `io.vks.builder.inputs` stamp that the offline gates
+  compare, via `make builder-freshness` (fatal with `BUILDER_FRESHNESS_ENFORCE=1`). `BUILDER_IMAGE_TAG`
+  is the Harbor ref, not a staleness signal, and is single-sourced in `lib/apps.sh`.
+Not built: a pre-create comparison against the lab. Admission is the authority and already answers.
 
 ## 🟡 B737 — the handoff says PAUSED, but scenario-1 was walked on the 2026-09-17 cut and is RUNNING
 
