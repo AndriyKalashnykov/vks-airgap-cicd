@@ -9579,6 +9579,30 @@ cluster) … The value exists on disk and is not in scope."* Port it, gated on `
 **Done when:** a refused report names the real cause, cites nothing on another stream, names
 `INGRESS_LB_IP_OVERRIDE`, and prescribes no command that cannot change it.
 
+**Re-measured 2026-09-26 (idea-round adversary, against main `bc6b132`).** Status per residual:
+- **2 (citation on another stream) and 4 (wrong cause): FIXED** on main — the REFUSED block and the
+  port-forward remedy are on stdout.
+- **F3 (a new false line), FIXED here:** the placeholder arm said "nothing is installed yet", which a
+  refused overlay contradicts; the world-claim is gone and STATE 11 asserts its absence.
+  **F7:** `98-verify-ingress` now says "state WARN" (state_check emits WARN, not ERROR).
+- **3 is REVISED — its premise was wrong.** `INGRESS_LB_IP_OVERRIDE` is an installer input to
+  `47-attach-istio.sh` only (the `istio`/`traefik` modes never read it), and 47 writes it through
+  `state_set` into the same refused sink, so it cannot break the loop. So "name the override" is DROPPED
+  from Done-when: that sentence would be false in the default `istio` mode. Optional, low: honour it in
+  creds for `istio-existing` only, in every state, as 47's precedence does.
+- **1 (the loop) STILL HOLDS, measured:** `state_set` writes into a sink stamped for another cluster,
+  and the next `make creds` refuses it again. **F5** (a KinD-stamped sink holding lab values gets
+  archived by `kind-down`) and **F6** (`make state-stamp` re-stamps a foreign sink WITHOUT archiving it,
+  which launders another cluster's passwords) are the same defect.
+  **Design (adversary):** archive-on-write inside `state_set`, keyed on `_VKS_STATE_MISMATCH=1` AND a
+  re-read of the file's stamp compared with the live server. **Never key on `_VKS_STATE_SOURCED`** —
+  that is 0 on an absent sink too, so a refusal there would drop every clean-box publish (CRITICAL
+  trap). Decision still needed: a hand-stamped Supervisor sink written from the guest would now be
+  archived loudly instead of looping silently; `make state-restore` (B723, merged #1310) is what makes
+  that acceptable. Built on branch `fix/b722-archive-on-write`.
+- **F8 (low):** the refused report renders `https://harbor.vks.local` for an unset `HARBOR_URL`, beside
+  a line saying the endpoint cannot be named.
+
 ## ✅ B723 — (DONE 2026-09-26) the archive is a WRITE-ONLY GRAVEYARD: 8 sinks hold 0600 passwords and nothing reads or prunes them
 
 `state_archive` is faithful — `mv`, never `rm` (and #1236 closed the one path that still `rm`'d). The
