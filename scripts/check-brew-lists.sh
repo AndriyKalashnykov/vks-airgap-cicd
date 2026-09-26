@@ -33,8 +33,7 @@ need "lib/os.sh hint" "$hint"
 pre="$(awk '/pkg_mgr\)" = brew \]; then/{f=1} f && /pkg_install /{sub(/^ *pkg_install /,""); print; exit}' scripts/00-install-prereqs.sh | words)"
 need "00-install-prereqs.sh brew pkg_install" "$pre"
 
-g_os="$(sed -n 's#.*\$_brew/opt/\([^/]*\)/libexec/gnubin.*#\1#p' scripts/lib/os.sh; \
-        grep -o '_brew/opt/[^/]*/libexec/gnubin' scripts/lib/os.sh | sed 's#_brew/opt/##;s#/libexec/gnubin##')"
+g_os="$(grep -o '_brew/opt/[^/]*/libexec/gnubin' scripts/lib/os.sh | sed 's#_brew/opt/##;s#/libexec/gnubin##')"
 g_os="$(printf '%s\n' "$g_os" | words)"
 need "lib/os.sh gnubin" "$g_os"
 g_init="$(sed -n 's/^ *for _f in \(.*\); do _gnu=.*/\1/p' scripts/shell-init.sh | head -1 | words)"
