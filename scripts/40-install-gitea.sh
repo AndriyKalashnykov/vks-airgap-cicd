@@ -6,6 +6,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# shellcheck source=scripts/lib/podimages.sh
+. "${SCRIPT_DIR}/lib/podimages.sh"   # podimages_is_ours: the ONE "is this image from our registry" rule
 load_env
 
 require_cmd kubectl
@@ -16,9 +18,16 @@ kubeconfig_ready
 # or an explicit GITEA_IMAGE that starts with ${HARBOR_URL}/ (the form .env.example documents). An
 # explicit non-Harbor image (the cross-cluster e2e's public gitea/gitea) needs neither. Decided BEFORE
 # the defaulting line below, after which GITEA_IMAGE is always set.
+# NOT a `${HARBOR_URL}/` prefix match: that missed another spelling of the same registry
+# (`host:443/...`, a trailing slash or scheme on HARBOR_URL) and SILENTLY skipped the mirror probe.
+# podimages_is_ours normalises through registry_hostport. The `-n` guard is load-bearing: it
+# `${3:?}`-dies on an empty registry, and the cross-cluster e2e runs with no HARBOR_URL.
 GITEA_IMAGE_FROM_HARBOR=1
 if [ -n "${GITEA_IMAGE:-}" ]; then
-  case "$GITEA_IMAGE" in "${HARBOR_URL:-<unset>}/"*) ;; *) GITEA_IMAGE_FROM_HARBOR=0 ;; esac
+  if [ -z "${HARBOR_URL:-}" ] || ! podimages_is_ours "$GITEA_IMAGE" "" "$HARBOR_URL"; then
+    GITEA_IMAGE_FROM_HARBOR=0
+    [ -z "${HARBOR_URL:-}" ] || log_info "GITEA_IMAGE's registry is not HARBOR_URL (${HARBOR_URL}) — the Harbor mirror check is SKIPPED (not a pass): ${GITEA_IMAGE}"
+  fi
 fi
 if [ "$GITEA_IMAGE_FROM_HARBOR" = 1 ]; then : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; fi
 HARBOR_URL="${HARBOR_URL:-}"; HARBOR_INFRA_PROJECT="${HARBOR_INFRA_PROJECT:-}"

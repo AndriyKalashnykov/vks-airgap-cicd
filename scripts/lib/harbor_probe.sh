@@ -73,7 +73,11 @@ harbor_project_state() {
   # makes a healthy Harbor read `empty` and BLOCKS the install — the wrong-cause class this probe
   # exists to remove, reproduced inside it. `/projects/<name>` returns one object or 404; it is the
   # endpoint 98-uninstall-all.sh already uses.
-  _out="$(curl "${_args[@]}" "$(harbor_scheme)://${HARBOR_URL:?}/api/v2.0/projects/${_p}" 2>/dev/null)"; _rc=$?
+  # Normalise LOCALLY (the caller's HARBOR_URL is left alone): a trailing slash made this
+  # `https://host//api/...`, which some proxies 404 -> a FALSE `absent` and a die on a working Harbor.
+  # 40-install-gitea.sh now treats `host/` as its own registry, so that spelling reaches here.
+  local _h="${HARBOR_URL:?}"; _h="${_h#http://}"; _h="${_h#https://}"; _h="${_h%/}"
+  _out="$(curl "${_args[@]}" "$(harbor_scheme)://${_h}/api/v2.0/projects/${_p}" 2>/dev/null)"; _rc=$?
   [ -n "$_cfg" ] && rm -f "$_cfg"
   [ "$_rc" -eq 0 ] || { printf 'inconclusive'; return 0; }
 

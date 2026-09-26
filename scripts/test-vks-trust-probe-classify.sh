@@ -61,6 +61,36 @@ p=0; f=0
 ck(){ if [ "$2" = "$3" ]; then p=$((p+1)); printf '  ok    %s\n' "$1"
       else f=$((f+1)); printf '  FAIL  %s (got=%s want=%s)\n' "$1" "$2" "$3"; fi; }
 
+# ---- 0. DETECTION: which running image is "ours"? It used to be a bare `${HARBOR_URL}*` prefix, which
+#         took `harbor.env1.lab.test.evil/...` (sorted first here) and, with HARBOR_URL unset, ANY `harbor*`.
+cat > "$T/bin/kubectl" <<STUB
+#!/usr/bin/env bash
+args="\$*"
+case "\$args" in
+  *"get ns -o jsonpath"*)      printf 'aaa-evil ours '; exit 0 ;;
+  *"get secret harbor-pull"*)  exit 0 ;;
+  *"-n aaa-evil get pod -o"*)  printf 'harbor.env1.lab.test.evil/apps/x:1'; exit 0 ;;
+  *"-n ours get pod -o"*)      printf 'harbor.env1.lab.test:443/apps/y:1'; exit 0 ;;
+  *"get events"*)              exit 0 ;;
+  *"get pod pullprobe"*)       printf 'Pending|ErrImagePull'; exit 0 ;;
+  *"current-context"*)         printf 'fake@fake'; exit 0 ;;
+  *)                           exit 0 ;;
+esac
+STUB
+chmod +x "$T/bin/kubectl"
+det() { env PATH="$T/bin:$PATH" REPO_ROOT="$T" SKIP_DOTENV=1 KUBECONFIG="$T/kubeconfig" "$1" \
+          HARBOR_CA_FILE="$T/nope.crt" PROBE_WAIT_ITERATIONS=1 PROBE_WAIT_INTERVAL=0 \
+          bash "$SCRIPT_DIR/vks-trust-probe.sh" 2>&1 | tr '\n' ' '; }
+out="$(det 'HARBOR_URL=https://harbor.env1.lab.test:443/')"
+ck "detect: a lookalike registry is NOT ours"      "$(printf '%s' "$out" | grep -c 'image: harbor.env1.lab.test.evil')" "0"
+ck "detect: host:443 in the image IS ours"         "$(printf '%s' "$out" | grep -c 'image: harbor.env1.lab.test:443/apps/y:1  (from namespace ours)')" "1"
+# The same lookalike with a PLAIN HARBOR_URL: the old prefix `harbor.env1.lab.test*` DID take the
+# .evil host here (the https:// spelling above matched nothing under the old code, so it alone is vacuous).
+out="$(det 'HARBOR_URL=harbor.env1.lab.test')"
+ck "detect: plain HARBOR_URL, lookalike is NOT ours" "$(printf '%s' "$out" | grep -c 'image: harbor.env1.lab.test.evil')" "0"
+out="$(det 'HARBOR_URL=')"
+ck "detect: no HARBOR_URL -> SKIP, never a guess"  "$(printf '%s' "$out" | grep -c 'SKIP - HARBOR_URL is unset')" "1"
+
 mk_kubectl 0
 
 # ---- 1. THE RED THAT DID NOT EXIST. A DNS fault must be named DNS, and must NOT say TRUST. -------
