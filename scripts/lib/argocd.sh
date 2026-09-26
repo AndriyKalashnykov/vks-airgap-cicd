@@ -1061,6 +1061,7 @@ which MISDIAGNOSES an update-RBAC denial.
 # lab-verified SAN list (docs/vks-services/argocd.md) is localhost, argocd-server, argocd-server.<ns>,
 # .<ns>.svc, .<ns>.svc.cluster.local -- no IP SAN. Only the bare name is namespace-independent.
 # A platform-issued cert with other names is a GRANTED value (the operator sets ARGOCD_SERVER).
+# shellcheck disable=SC2034  # consumed by 09-argocd-address.sh, which sources this file
 ARGOCD_DEFAULT_CERT_NAME=argocd-server
 
 # argocd_name_resolves_to <name> <ip> -- 0 when <name> resolves to EXACTLY {<ip>} on this machine.
