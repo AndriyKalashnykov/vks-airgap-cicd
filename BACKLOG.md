@@ -9619,7 +9619,7 @@ Found while gating #1236; **neither is caused by that diff** — proven in a thr
 **Done when:** both are green on a clean `main` **and** on a box carrying `.env`/`.env.state`, or each
 is documented in-file as an accepted environment dependency with the measurement above.
 
-## 🔴 B725 — the SECOND instance of the fabricated-credential class: `HARBOR_PASSWORD` is generated with NO discriminator at all, and it is in `required=`
+## ✅ B725 — (DONE 2026-09-26) the SECOND instance of the fabricated-credential class: `HARBOR_PASSWORD` is generated with NO discriminator at all, and it is in `required=`
 
 `02-env.sh:90`, inside `make env-populate` — the step `docs/scenario-2.md:796` puts at Step 2 for a
 **tenant**:
@@ -9683,6 +9683,12 @@ each flow gets the password, and scenario-1 and scenario-2 no longer describe a 
 `test-env-lifecycle.sh` asserts that no HARBOR_PASSWORD is written and that it says so. The Gitea
 control still passes, and those two assertions were proven RED on the old code. **Still open:** the
 `vc_ss_install` third site (`VC_SS_OUTCOME`).
+**2026-09-26 — third site CLOSED:** `vc_ss_install` sets `VC_SS_OUTCOME=installed|existed|ambiguous`.
+`04` publishes the admin password it sent ONLY on `installed`, and otherwise points at
+`make harbor-admin-password`. `test-vc-ss-outcome.sh` drives the real function through a stubbed
+`vc_api` (five arms, including "already exists after a retry" = ambiguous), and every case fails on
+the old code. **B725 is done.** Lab re-verification of an existing Harbor is optional; the fix only
+withholds a value.
 
 ## ⚪ B726 — CLOSED, REFUTED BY ITS OWN AUTHOR: the control was RIGHT and I mis-measured it TWICE
 
