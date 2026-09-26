@@ -2158,6 +2158,24 @@ write (tri-state probe with timeout, exact-SAN match, ownership predicate), the 
 (re-run `make argocd-address` after the hosts line), show-dns-records' single-label wording, 02-env's
 IP writer, and a scenario-1 walk.
 
+**2026-09-26 — steps 2 and 3 built (one PR, two implementation rounds + one idea round).** 09 publishes
+`argocd-server` on the conditions above; the `--server-crt` login and "verifies" line need a MEASURED
+`ca_verifies_endpoint` (chain AND name), so a stale/garbage/unrelated CA prints `--insecure` (both
+rounds had caught a first version that trusted any non-empty file). Our name dropped from the cert,
+or resolving elsewhere, with a CA set: STOP, nothing written. NO_PROXY warning behind a proxy. `make
+creds` (marker arm) prints the map / re-run / `argocd-ca-from-cluster` recipe; `show-dns-records`
+prints a single-label name as a jump-box `/etc/hosts` line, not an A record; `uninstall-all` prints
+the anchored removal. **02-env's IP writer was NOT changed (idea round, refuted):** env-populate
+discovers with the GUEST kubeconfig, so on a real lab it never finds ArgoCD, and the `discovered`
+marker must keep meaning "09 wrote this" (09 is Supervisor-only; `make creds` relies on it).
+Measured against the live VIP: the SAN helper returns 0 for `argocd-server`, 1 for `argocd`, 2 for an
+unused IP. **Still open:** (1) the §5 *Verify TLS* block is collapsed, so the walker never runs it —
+walk it once on the lab (needs one sudo `/etc/hosts` edit on the jump box): argocd-ca-from-cluster →
+hosts line → argocd-address writes the name → argocd login `--server-crt` → argocd-auth-check shows
+`VERIFYING against`. That is also the only check of the argocd CLI (Go) accepting the CA:FALSE leaf
+as `--server-crt`. (2) F6, VIP stability after the CR goes True. (3) Does argocd-server regenerate
+its self-signed cert on expiry (would invalidate the pinned anchor)? UNVERIFIED.
+
 ## 🔴 B484 — the Forbidden-reads-as-absent sweep: a FAIL-OPEN air-gap check outranks the wrong-message bug 🔴 open
 
 **⚠️ 2026-09-10 — RE-GRADED by a `vks-adversary` round; two of this row's residuals are STALE.**

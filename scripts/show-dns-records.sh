@@ -72,7 +72,7 @@ _collect() {                 # prints the rows; `n` = services FOUND, `nrec` = r
   # `n` drives the retry loop below, so it must count every service that HAS an address --
   # including one addressed by IP, which needs no record. Counting only records would spin.
   # All three reset here because _collect is called repeatedly by that loop.
-  n=0; nrec=0; IPROWS=""
+  n=0; nrec=0; IPROWS=""; HOSTSROWS=""
   # A FAILED list is not an EMPTY list. This used to be `2>/dev/null ... || true`, so an expired
   # Supervisor token (Unauthorized) became zero rows, and the operator was told "no LoadBalancer
   # address -- wait for it" and, with DNS_RECORDS_WAIT_SECONDS=900 as that message suggests, waited
@@ -95,6 +95,11 @@ _collect() {                 # prints the rows; `n` = services FOUND, `nrec` = r
     host="${host#*://}"; host="${host%%/*}"        # tolerate a scheme/path if *_URL carries one
     # Is the configured address a NAME or an IP LITERAL? 06-install-harbor.sh:304 does
     # `state_set HARBOR_URL "$LB_IP"`, so the IP case is routine, not exotic.
+    # A SINGLE-LABEL name (no dot, e.g. argocd-server, which make argocd-address publishes) is not an
+    # A-record row: it reaches DNS only through a search domain, and only this jump box dials ArgoCD
+    # (the guest nodes never do). /etc/hosts is the one mechanism that works everywhere for it.
+    case "${host%%:*}" in *.*) ;; *[!0-9]*)
+      HOSTSROWS="${HOSTSROWS}  ${ip} ${host%%:*}    (${ns}/${nm})"$'\n'; continue ;; esac
     case "${host%%:*}" in
       *[!0-9.]*) ;;                                 # any non-[0-9.] char -> it is a NAME
       *.*.*.*)  IPROWS="${IPROWS}  ${host} (${ns}/${nm})"$'\n'; continue ;;
@@ -109,7 +114,7 @@ _collect() {                 # prints the rows; `n` = services FOUND, `nrec` = r
 # check-env-coverage correctly reads that shape as an operator-settable variable, and these are
 # internal. (Do not spell the shape out in this comment either -- the gate scans comments too, and
 # that is how this comment's first draft kept the gate RED.) _collect re-sets all three per call.
-n=0; nrec=0; IPROWS=""; KFAIL=0
+n=0; nrec=0; IPROWS=""; HOSTSROWS=""; KFAIL=0
 KERR="$(mktemp)"; trap 'rm -f "$KERR"' EXIT
 
 # Stop on a failed list -- every class here is a reason waiting cannot help. One arm per class
@@ -172,6 +177,10 @@ cat <<'NOTE'
     virsh -c qemu:///system net-update <net> add dns-host \
       "<host ip='<IP>'><hostname><HOSTNAME></hostname></host>" --live --config
 NOTE
+fi
+
+if [ -n "$HOSTSROWS" ]; then
+  printf '\n  a single-label name: put it in /etc/hosts on THIS jump box (sudo), not in DNS:\n%s' "$HOSTSROWS"
 fi
 
 if [ -n "$IPROWS" ]; then

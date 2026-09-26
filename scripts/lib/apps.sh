@@ -120,6 +120,12 @@ _hosts_teardown_advice() {
     printf 'whose names are: %s\n' "$names"
     printf 'and remove that ONE line by hand (needs root).\n'
   fi
+  # B486: make argocd-address publishes a single-label name once it resolves here; that came from a
+  # hosts line the operator added. Anchored on a line whose ONLY name is it.
+  if [ "${ARGOCD_SERVER:-}" = argocd-server ]; then
+    printf 'and the ArgoCD line (needs root):\n'
+    printf "  sudo sed -i '/^[0-9.]*[[:space:]][[:space:]]*argocd-server[[:space:]]*$/d' /etc/hosts\n"
+  fi
   return 0
 }
 
