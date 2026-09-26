@@ -9580,6 +9580,7 @@ cluster) … The value exists on disk and is not in scope."* Port it, gated on `
 `INGRESS_LB_IP_OVERRIDE`, and prescribes no command that cannot change it.
 
 **Re-measured 2026-09-26 (idea-round adversary, against main `bc6b132`).** Status per residual:
+
 - **2 (citation on another stream) and 4 (wrong cause): FIXED** on main — the REFUSED block and the
   port-forward remedy are on stdout.
 - **F3 (a new false line), FIXED here:** the placeholder arm said "nothing is installed yet", which a
