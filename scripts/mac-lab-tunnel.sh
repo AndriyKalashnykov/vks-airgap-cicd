@@ -6,7 +6,7 @@
 #   scripts/mac-lab-tunnel.sh status [user@mac]
 #   scripts/mac-lab-tunnel.sh down   [user@mac]   # remove exactly what `up` added
 #
-# This is NOT a product path. It exists so the README "Tested platforms" macOS row can carry lab
+# This is NOT a product path. It exists so the macOS lab results in docs/tested-platforms.md can carry lab
 # evidence, and it must be labelled "via a tunnel harness" wherever that evidence is quoted. What a
 # tunnel does NOT test: real DNS (the Mac gets an /etc/hosts block), routing/firewall between a jump
 # box and the lab, the source address the lab sees (always this box), MTU, and one TCP connection
