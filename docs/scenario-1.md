@@ -523,8 +523,10 @@ argocd login "$ARGOCD_SERVER" --username admin --server-crt "$ARGOCD_CA_FILE"
 make argocd-auth-check
 ```
 
-**Expect:** `wrote ARGOCD_SERVER=` followed by the name argocd-server, and `make argocd-auth-check` reporting
-`VERIFYING against`. `make argocd-address` publishes the name only when it resolves here to exactly
+**Expect:** `wrote ARGOCD_SERVER=` followed by the name argocd-server, `argocd login` succeeding with
+no `--insecure`, and `make argocd-auth-check` printing `VERIFYING against` on its TLS line. That line
+is about trust; the check reads the password from the initial Secret, so after `argocd account
+update-password` its credential half fails even though TLS verified. `make argocd-address` publishes the name only when it resolves here to exactly
 the LoadBalancer address and the certificate served there carries it; otherwise it keeps the IP.
 Behind an HTTPS proxy, add `argocd-server` to `NO_PROXY`.
 

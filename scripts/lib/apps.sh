@@ -111,7 +111,7 @@ _hosts_teardown_advice() {
   if [ -n "${INGRESS_LB_IP:-}" ]; then
     esc="$(printf '%s' "$INGRESS_LB_IP" | sed 's/\./\\./g')"   # dots are BRE 'any char' — escape for literal ZERO-V truth
     printf 'and the /etc/hosts line we told you to add (it starts with the ingress LB IP); needs root:\n'
-    printf "  sudo sed -i '/^%s[[:space:]]/d' /etc/hosts\n" "$esc"
+    printf "  sudo sed -i.bak '/^%s[[:space:]]/d' /etc/hosts\n" "$esc"
     printf '  (removes ONLY lines starting with %s. If you added other names to that line, or the LB IP\n' "$INGRESS_LB_IP"
     printf '   has since changed, remove it by hand — the names we added were: %s)\n' "$names"
   else
@@ -121,10 +121,12 @@ _hosts_teardown_advice() {
     printf 'and remove that ONE line by hand (needs root).\n'
   fi
   # B486: make argocd-address publishes a single-label name once it resolves here; that came from a
-  # hosts line the operator added. Anchored on a line whose ONLY name is it.
+  # hosts line the operator added. Anchored on a line whose ONLY name is it (a trailing # comment is
+  # allowed: show-dns-records prints its source there). `-i.bak`: BSD sed (macOS) reads a bare `-i`'s
+  # next argument as the backup suffix; GNU and BSD both accept an attached suffix.
   if [ "${ARGOCD_SERVER:-}" = argocd-server ]; then
     printf 'and the ArgoCD line (needs root):\n'
-    printf "  sudo sed -i '/^[0-9.]*[[:space:]][[:space:]]*argocd-server[[:space:]]*$/d' /etc/hosts\n"
+    printf "  sudo sed -i.bak '/^[0-9.]*[[:space:]][[:space:]]*argocd-server[[:space:]]*\\(#.*\\)\\{0,1\\}$/d' /etc/hosts\n"
   fi
   return 0
 }

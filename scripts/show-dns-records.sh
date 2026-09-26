@@ -98,8 +98,11 @@ _collect() {                 # prints the rows; `n` = services FOUND, `nrec` = r
     # A SINGLE-LABEL name (no dot, e.g. argocd-server, which make argocd-address publishes) is not an
     # A-record row: it reaches DNS only through a search domain, and only this jump box dials ArgoCD
     # (the guest nodes never do). /etc/hosts is the one mechanism that works everywhere for it.
-    case "${host%%:*}" in *.*) ;; *[!0-9]*)
-      HOSTSROWS="${HOSTSROWS}  ${ip} ${host%%:*}    (${ns}/${nm})"$'\n'; continue ;; esac
+    # ArgoCD ONLY: Harbor must be in DNS the guest nodes use, whatever its name looks like. A
+    # placeholder (<...>) is not a name at all. The source goes after `#` so a pasted line stays a
+    # valid hosts entry with ONE name, which the uninstall advice can then match.
+    case "$nm:${host%%:*}" in argocd-server:*'<'*|argocd-server:*.*) ;; argocd-server:*[!0-9]*)
+      HOSTSROWS="${HOSTSROWS}  ${ip} ${host%%:*}    # ${ns}/${nm}"$'\n'; continue ;; esac
     case "${host%%:*}" in
       *[!0-9.]*) ;;                                 # any non-[0-9.] char -> it is a NAME
       *.*.*.*)  IPROWS="${IPROWS}  ${host} (${ns}/${nm})"$'\n'; continue ;;
