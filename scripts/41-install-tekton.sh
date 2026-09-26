@@ -59,7 +59,7 @@ dash="${MANIFEST_DIR}/tekton-dashboard-${TEKTON_DASHBOARD_VERSION}.yaml"
 #
 # Why here and not in the ingress step (F2): the only ensure_namespace calls for tekton lived in
 # lib/istio.sh's route functions (:279, :567), reachable ONLY from `make install-ingress` — which
-# `make install-all` (Makefile:459) does NOT run. So on a real lab the label landed never. Worse,
+# `make install-all` did NOT run when this was written (it has since #1091). So on a real lab the label landed never. Worse,
 # with INGRESS_CONTROLLER=traefik nothing calls istio_apply_routes* at all, yet traefik still routes
 # the Tekton dashboard — so tekton was unlabelled on that path in every mode.
 #

@@ -37,7 +37,15 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 # shellcheck source=scripts/lib/os.sh
 . "$PWD/scripts/lib/os.sh"
 
-WANT="$(grep -m1 '^install-all:' Makefile | sed 's/^install-all: *//; s/ *##.*//' | tr -s ' ' | sed 's/ *$//')"
+WANT="$(grep -m1 '^INSTALL_ALL_STEPS *:=' Makefile | sed 's/^INSTALL_ALL_STEPS *:= *//; s/ *##.*//' | tr -s ' ' | sed 's/ *$//')"
+
+# The RULE must consume the variable and nothing else, or a target appended to the rule would be
+# invisible to this gate (it reads only INSTALL_ALL_STEPS).
+if ! grep -qE '^install-all: \$\(INSTALL_ALL_STEPS\) +##' Makefile; then
+  log_error "check-install-chain: the install-all rule must read exactly 'install-all: \$(INSTALL_ALL_STEPS) ## ...'."
+  log_error "  Add steps to INSTALL_ALL_STEPS, not to the rule line — this gate reads only the variable."
+  exit 1
+fi
 
 # ⚠️ SANITY-GATE THE LEFT-HAND SIDE FIRST. Forgetting the `s/ *##.*//` yields 49 tokens instead of
 # 12 — and then BOTH correct docs go RED, with a message that reads as a DOC defect and sends the

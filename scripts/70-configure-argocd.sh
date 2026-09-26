@@ -709,7 +709,7 @@ configure_app_argocd() {
   # GUEST: create the app's namespace WITH its PSA label. ArgoCD's CreateNamespace=true would create
   # it unlabelled, and VKS enforces Pod Security `restricted` by default on every non-system
   # namespace — so the label has to exist before the first pod. It used to be applied only by the
-  # ingress step, which `make install-all` never runs.
+  # ingress step, which `make install-all` did not run before #1091 (and the attach fixture still skips).
   # (ensure_namespace uses the ambient kubectl, i.e. $KUBECONFIG = the GUEST — which is what we want.)
   ensure_namespace "$APP_NAMESPACE" "${PSA_LEVEL_APP:-restricted}"
 

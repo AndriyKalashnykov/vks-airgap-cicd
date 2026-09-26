@@ -40,7 +40,7 @@ log_info "installing Gitea into namespace '$GITEA_NAMESPACE' (Service type: ${GI
 # Create the namespace WITH its PSA + no-inject labels, HERE, before the manifest that carries its
 # pods. Two bugs, one fix:
 #
-#   1. `make install-all` does NOT run `install-ingress` (Makefile:459) — and until now the ONLY
+#   1. `make install-all` did NOT run `install-ingress` when this was written (it has since #1091) — and until then the ONLY
 #      ensure_namespace calls for gitea lived inside lib/istio.sh's route functions (:278, :566),
 #      reachable only from that target. So on the documented real-lab install the label landed
 #      NEVER, not late. `make e2e-kind` runs install-ingress explicitly, which is precisely what

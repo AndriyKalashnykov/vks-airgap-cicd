@@ -57,7 +57,10 @@ READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 # RED 1 — no mesh yet: the attach path MUST fail, not quietly succeed.
 # ---------------------------------------------------------------------------
 if kubectl get deploy -A -l app=istiod -o name 2>/dev/null | grep . >/dev/null; then
-  log_warn "an Istio control plane is ALREADY present — skipping RED 1 (it only means something on a mesh-free cluster)"
+  die "an Istio control plane is ALREADY present before the platform team installed one — RED 1 cannot run,
+  and half this target's proof would be vacuous. The first suspect is an ingress install in the fixture
+  (install-all's install-ingress with INGRESS_CONTROLLER=istio): e2e-kind-istio-existing must run
+  \$(INSTALL_ALL_STEPS) MINUS install-ingress."
 else
   log_info "RED 1: 'attach' with no Istio installed must FAIL"
   if "${SCRIPT_DIR}/47-attach-istio.sh" >/dev/null 2>&1; then
@@ -84,8 +87,9 @@ log_info "PLATFORM: installing Istio ${ISTIO_VERSION} as a foreign mesh (ns=${PL
 # It also hands us the honest ABSENT state for free: assert it BEFORE installing.
 if istio_gwapi_crds_present; then
   die "the Gateway API CRDs are present BEFORE the platform team installed them.
-  Something else is installing them (cloud-provider-kind's --gateway-channel?), which is precisely the
-  shim that made the CRD install untestable. Re-check 05-kind-up.sh."
+  First suspect: an ingress install in the fixture (install-all's install-ingress with
+  INGRESS_CONTROLLER=istio installs them) — e2e-kind-istio-existing must run install-all MINUS
+  install-ingress. Second: cloud-provider-kind's --gateway-channel (05-kind-up.sh)."
 fi
 log_info "PLATFORM: Gateway API CRDs are ABSENT (the honest tenant starting state) — installing them as the mesh admin"
 istio_ensure_gwapi_crds
