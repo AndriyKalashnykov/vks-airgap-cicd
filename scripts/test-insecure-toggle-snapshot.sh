@@ -61,7 +61,7 @@ probe() {
   out="$( cd "$T" || exit 1
           env -u HARBOR_INSECURE -u ARGOCD_INSECURE -u MIRROR_VERIFY_FAST \
               -u ARGOCD_ADMIN_PASSWORD -u GITEA_ADMIN_PASSWORD -u ARGOCD_LB_IP \
-              -u INGRESS_CONTROLLER -u GITEA_ADMIN_USER -u REPO_ROOT -u VKS_STATE_FILE \
+              -u INGRESS_CONTROLLER -u GITEA_ADMIN_USER -u REPO_ROOT -u VKS_STATE_FILE -u ARGOCD_HOST \
               bash -c '
                 [ -n "${4:-}" ] && export "$3=$4"
                 . scripts/lib/os.sh >/dev/null 2>&1
@@ -125,6 +125,16 @@ fi
 # The class was already known and worked around in the WRONG PLACE: 71-argocd-register-guest.sh
 # :39-53 hand-rolls a snapshot/restore for the sibling ARGOCD_REGISTER_INSECURE instead of adding
 # it to the list. This test exists so the next one is fixed in the list.
+# ── B486(c): ARGOCD_HOST is a "which system" selector (the name ArgoCD is reached by), so a per-run
+# value must beat the overlay; caller-silent must still read it. MEASURED before the fix: caller
+# `caller` + overlay `from-overlay` -> `from-overlay` (the caller was DEFEATED).
+got="$(probe .env.state 'ARGOCD_HOST=from-overlay' ARGOCD_HOST caller)"
+if [ "$got" = caller ]; then ok "ARGOCD_HOST: a per-run value beats the .env.state overlay"
+else bad "ARGOCD_HOST: caller said 'caller', got '${got}' -- it is missing from load_env's snapshot list"; fi
+got="$(probe .env.state 'ARGOCD_HOST=from-overlay' ARGOCD_HOST '')"
+if [ "$got" = from-overlay ]; then ok "ARGOCD_HOST: caller silent -> the overlay still applies"
+else bad "ARGOCD_HOST: caller silent, got '${got}' -- the snapshot fires unconditionally"; fi
+
 for v in ARGOCD_MECHANISM ARGOCD_REGISTER; do
   got="$(probe .env "${v}=auto" "$v" CALLER)"
   if [ "$got" = CALLER ]; then
