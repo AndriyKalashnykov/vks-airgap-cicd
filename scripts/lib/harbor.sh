@@ -579,6 +579,48 @@ _harbor_serving_code() {
   printf '%s' "$code"
 }
 
+# harbor_url_host — the HOST of HARBOR_URL: path, port and IPv6 brackets removed. `%%:*` alone cut
+# "[fd00::1]:443" to "[fd00" (the same parse 02-env.sh does inline for its CA check).
+harbor_url_host() {
+  local h="${HARBOR_URL%%/*}"
+  case "$h" in
+    \[*\]*) h="${h%%]*}"; h="${h#\[}" ;;
+    *:*:*)   : ;;                       # a bare IPv6 literal carries no port
+    *)       h="${h%%:*}" ;;
+  esac
+  printf '%s' "$h"
+}
+
+# harbor_url_is_literal <host> — rc 0 for an IP literal (v4 or v6). Such a HARBOR_URL has no A record,
+# so the advice must not tell anyone to fix one.
+harbor_url_is_literal() {
+  case "$1" in
+    *:*) return 0 ;;
+    *[!0-9.]*|''|*..*|.*|*.) return 1 ;;
+  esac
+  local IFS=. o n=0
+  # shellcheck disable=SC2086  # splitting on "." is the point
+  set -- $1
+  [ "$#" = 4 ] || return 1
+  for o in "$@"; do n=$((n + 1)); [ "${#o}" -le 3 ] && [ "$o" -le 255 ] || return 1; done
+  return 0
+}
+
+# _harbor_resolve <host> — the first address, or nothing. A literal is returned as-is; a name goes
+# through `getent AHOSTS`, NOT `getent hosts`:
+# MEASURED 2026-09-26, `getent hosts 172.18.0.3` (an IP with no PTR record) returns rc=2, so every
+# IP-literal HARBOR_URL -- every KinD run, and any lab that hands a tenant an address -- read as
+# "does not resolve yet" while it served. `ahosts` goes through getaddrinfo, which takes a literal
+# numerically and still reads DNS and /etc/hosts for a name. The macOS shim
+# (scripts/compat/darwin/getent) accepts `ahosts` for exactly this caller. awk DRAINS (no `exit`): an early exit
+# SIGPIPEs getent and pipefail turns a found address into a failure.
+_harbor_resolve() {
+  # A literal needs no resolver at all -- and on macOS `getent` is a repo shim over dscacheutil, so
+  # not calling it for a literal removes a whole platform variable (implementation round, 2026-09-26).
+  if harbor_url_is_literal "$1"; then printf '%s' "$1"; return 0; fi
+  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent ahosts "$1" 2>/dev/null | awk 'NR == 1 { print $1 }' || true
+}
+
 # harbor_reachable_state — THREE states, because a wait loop that cannot tell them apart hides the
 # one this target exists to find:
 #   unresolved | serving | silent          (silent = the name resolves, nothing answers)
@@ -587,6 +629,9 @@ _harbor_serving_code() {
 # still names the old one. MEASURED, walk row 1: DNS said .143 while Harbor was at .146, and it cost
 # FIVE downstream failures. harbor_reachable_report diagnoses it in about a second -- so a wait that
 # treats `silent` and `unresolved` alike turns a one-second true positive into a 15-minute one.
+# ⚠️ A TLS Harbor probed over http (HARBOR_INSECURE=1) is `serving` HERE and a PROBLEM in
+# harbor_reachable_report -- deliberately: it does answer, and the scheme is a CONFIG problem the report
+# names. 04-harbor-reachable.sh therefore skips its wait and still exits 1 via the report.
 harbor_reachable_state() {
   [ -n "${HARBOR_URL:-}" ]                          || { printf 'unresolved'; return; }
   # ⚠️ BOUNDED. `getent hosts` is NOT covered by either creds timeout variable, and it is the
@@ -594,7 +639,7 @@ harbor_reachable_state() {
   # BOTH CREDS_PROBE_TIMEOUT_SECONDS=2 and CREDS_KUBE_TIMEOUT_SECONDS=3 set explicitly:
   # 0.298s -> 20.103s. The real trigger is an air-gap jump box with a stale `nameserver` line
   # (glibc defaults: timeout:5, attempts:2, per resolv.conf(5)) -- exactly our target box.
-  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "${HARBOR_URL%%:*}" >/dev/null 2>&1 || { printf 'unresolved'; return; }
+  [ -n "$(_harbor_resolve "$(harbor_url_host)")" ] || { printf 'unresolved'; return; }
   case "$(_harbor_serving_code)" in 000|'') printf 'silent' ;; *) printf 'serving' ;; esac
 }
 
@@ -604,8 +649,10 @@ harbor_reachable_report() {
   local ok_p='  ok       ' bad_p='  PROBLEM  ' note_p='           '
   [ -n "${HARBOR_URL:-}" ] || { printf '%sHARBOR_URL is not set — nothing to check\n' "$note_p" >&2; return 0; }
 
-  local hip
-  hip="$(timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "${HARBOR_URL%%:*}" 2>/dev/null | awk '{print $1; exit}' || true)"
+  local hip host literal=0
+  host="$(harbor_url_host)"
+  if harbor_url_is_literal "$host"; then literal=1; fi
+  hip="$(_harbor_resolve "$host")"
   if [ -z "$hip" ]; then
     printf '%sHARBOR_URL=%s does not resolve yet — expected before you create the A record\n' "$note_p" "$HARBOR_URL" >&2
     printf '%s  that '\''make show-dns-records'\'' prints. It must resolve before '\''make mirror'\''.\n' "$note_p" >&2
@@ -616,6 +663,13 @@ harbor_reachable_report() {
   # whether the connection produced any HTTP response at all. 000 means nothing answered.
   local code; code="$(_harbor_serving_code)"
   if [ "${code:-000}" = 000 ]; then
+    if [ "$literal" = 1 ]; then
+      # An IP literal has no A record, so the DNS advice below cannot apply to it.
+      printf '%sHARBOR_URL=%s — NOTHING is serving there.\n' "$bad_p" "$HARBOR_URL" >&2
+      printf '%sA REINSTALLED Harbor gets a NEW LoadBalancer IP, and HARBOR_URL must name the current one.\n' "$note_p" >&2
+      printf '%s  A tenant asks the platform team for it; otherwise it may still be booting.\n' "$note_p" >&2
+      return 1
+    fi
     printf '%sHARBOR_URL=%s resolves to %s but NOTHING is serving there.\n' "$bad_p" "$HARBOR_URL" "$hip" >&2
     printf '%sA REINSTALLED Harbor gets a NEW LoadBalancer IP. Compare that address with what\n' "$note_p" >&2
     printf '%s  '\''make show-dns-records'\'' prints now, and update the A record if they differ.\n' "$note_p" >&2
@@ -623,6 +677,38 @@ harbor_reachable_report() {
     printf '%s  neither of which mentions DNS.)\n' "$note_p" >&2
     return 1
   fi
-  printf '%sHarbor answers at %s (%s, http %s)\n' "$ok_p" "$HARBOR_URL" "$hip" "$code" >&2
+  # A 3xx over http from a TLS Harbor reads as "answers" and the http flow then fails (measured on
+  # KinD: http -> 301 Location https://<same>/..., https -> 200). But a 301 to https is NOT specific to
+  # Harbor -- any front end with an http->https redirect does it, and #1298 dropped an other-scheme
+  # hint for exactly that mis-attribution (a stale A record at an ingress). So blame the scheme ONLY
+  # when the redirect target is demonstrably Harbor: its systeminfo body carries "auth_mode".
+  if [ "$(harbor_scheme)" = http ]; then
+    case "$code" in
+      3??)
+        local loc body
+        loc="$(curl -s -o /dev/null -w '%{redirect_url}' --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" \
+                 "http://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null || true)"
+        case "$loc" in
+          https://*)
+            body="$(curl -sk --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" "$loc" 2>/dev/null || true)"
+            case "$body" in
+              *'"auth_mode"'*)
+                printf '%sHarbor at %s redirects http to https: it serves TLS, so HARBOR_INSECURE=1 does not match it.\n' "$bad_p" "$HARBOR_URL" >&2
+                printf '%sSet HARBOR_INSECURE=0, or remove it wherever it is set: .env, .env.state, or the make command line.\n' "$note_p" >&2
+                local rhost; rhost="${loc#https://}"; rhost="${rhost%%/*}"
+                if [ "${rhost%%:*}" != "$(harbor_url_host)" ]; then
+                  printf '%sIt redirects to %s, so HARBOR_URL must name that host (its certificate names it, not %s).\n' "$note_p" "$rhost" "$HARBOR_URL" >&2
+                fi
+                printf '%sIts CA, if self-signed: make fetch-harbor-ca\n' "$note_p" >&2
+                return 1 ;;
+            esac ;;
+        esac ;;
+    esac
+  fi
+  if [ "$literal" = 1 ]; then
+    printf '%sHarbor answers at %s (http %s)\n' "$ok_p" "$HARBOR_URL" "$code" >&2
+  else
+    printf '%sHarbor answers at %s (%s, http %s)\n' "$ok_p" "$HARBOR_URL" "$hip" "$code" >&2
+  fi
   return 0
 }

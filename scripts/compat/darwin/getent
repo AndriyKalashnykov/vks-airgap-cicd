@@ -4,7 +4,9 @@
 # /etc/resolver/*), prints getent's `ADDR NAME` lines, exits 2 when a name does not resolve (getent's
 # "key not found"). scripts/lib/os.sh APPENDS this dir to PATH on Darwin only.
 set -uo pipefail
-[ "${1:-}" = hosts ] || { echo "getent (macOS shim): only 'getent hosts NAME...' is supported" >&2; exit 1; }
+# `ahosts` is accepted as a synonym: lib/harbor.sh resolves with it (getaddrinfo on Linux), and callers
+# read only the first field, which is the same address either way.
+case "${1:-}" in hosts|ahosts) ;; *) echo "getent (macOS shim): only 'getent hosts|ahosts NAME...' is supported" >&2; exit 1 ;; esac
 shift
 rc=0
 for name in "$@"; do
