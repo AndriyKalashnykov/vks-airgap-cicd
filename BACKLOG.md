@@ -10683,7 +10683,7 @@ kind-up on Colima. **A3 trust half still open:** a `docker-vm` mode for `engine_
 **Done when:** the W4 targets pass on a >=16 GB Mac (or the infra subset on 8 GB, with a measured
 refusal for the rest), recorded as a README row with commit, date and each class's result.
 
-## 🟡 B741 — subagents may write the SESSION SCRATCHPAD (owner-approved 2026-09-26; claude-config hook)
+## ✅ B741 — (DONE 2026-09-26, claude-config #117) subagents may write the SESSION SCRATCHPAD (owner-approved 2026-09-26; claude-config hook)
 
 Root cause of "the research agent's sandbox refused anything containing git" (2026-09-26), measured from
 its refusal texts: (1) Claude Code's worktree-isolation guard refuses a subagent command that names
@@ -10697,3 +10697,10 @@ payload carries the PARENT `session_id` (`8b679d1f…`) plus its own `agent_id` 
 the Write was refused by `subagent-readonly.py`. So the exemption can bind to the exact session. Branch `feat/subagent-scratchpad-writes` in claude-config; adversary idea round
 first; the installed `~/.claude/hooks` copy must be verified by behaviour after install.
 Brief fix in the meantime: one simple command per call; no loops/variables around anything naming git.
+**DONE 2026-09-26 (claude-config #117):** the whole-scratchpad design was REFUTED in the idea round,
+because the root holds files the parent consumes blindly. Shipped instead: a per-agent
+`scratchpad/agents/agent-<agent_id>/`, identity-bound through `transcript_path`. It refuses
+hardlinks, requires the per-user root to be ours, and fails closed on un-encodable paths. Selftest
+277 -> 309, every guard mutation-proven. Installed copy verified byte-identical, and live-verified:
+a real worktree subagent's write to its own directory was ALLOWED, a write to the scratchpad root
+was BLOCKED. Open: the macOS `$TMPDIR` layout (unmeasured).
