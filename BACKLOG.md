@@ -9611,6 +9611,12 @@ each other — `state_archive` now adds a `-N` suffix (RED-proven in `test-state
 Run on this box it listed 11 archives, 2 of them stamped. **Pruning is deliberately NOT built**
 (reporter first, deleter never-first) — that stays open as its own decision.
 
+**Residual, found by the implementation round and NOT fixed here:** `state_show` (lib/state.sh) redacts
+with a per-line `sed 's/…PASSWORD=.*/…=<redacted>/'`, so the CONTINUATION line of a multi-line quoted
+secret would print raw. `state-archives` now reads keys with a quote-state machine; `state_show` should
+reuse it. Reachability: `set_env_var` single-quotes, so a newline-bearing value CAN be stored; today's
+generated passwords are single-line (inferred, not measured).
+
 ## 🟡 B724 — two offline tests are red on `main`, and one is green in CI and red on every box that has operator state
 
 Found while gating #1236; **neither is caused by that diff** — proven in a throwaway worktree of
