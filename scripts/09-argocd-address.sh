@@ -274,8 +274,14 @@ if [ "$_eff" != "$ip" ]; then
   log_warn "  Nothing here wrote that value, so it is treated as one you were GRANTED and is left alone."
   log_warn "  If ${ip} is the one you want, change it in .env yourself."
 else
+  # B486(d): this arm is reached for TWO different reasons, and the log must say which. It used to
+  # claim "(we wrote the previous value)" for a template placeholder too, which we never wrote.
   if [ -n "${ARGOCD_SERVER:-}" ] && [ "${ARGOCD_SERVER}" != "$ip" ]; then
-    log_warn "correcting ARGOCD_SERVER ${ARGOCD_SERVER} -> ${ip} (we wrote the previous value)."
+    if is_placeholder "${ARGOCD_SERVER}"; then
+      log_info "replacing the placeholder ARGOCD_SERVER '${ARGOCD_SERVER}' with the discovered ${ip}."
+    else
+      log_warn "correcting ARGOCD_SERVER ${ARGOCD_SERVER} -> ${ip} (we wrote the previous value)."
+    fi
   fi
   set_env_var ARGOCD_SERVER "$ip" "${REPO_ROOT}/.env"
   # PROVENANCE, so a later run may correct this value (see the guard above). It goes to the STATE

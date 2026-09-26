@@ -243,4 +243,14 @@ ck "granted NAME -> the NAME arm fires"        "$(grep -qF 'That address is a NA
 ck "granted NAME -> the IP arm does NOT"       "$(grep -qF 'That address is an IP' <<< "$_o" && echo y || echo n)" "n"
 ck "granted NAME -> keeps the platform hedge"  "$(grep -qF 'platform team issued that cert' <<< "$_o" && echo y || echo n)" "y"
 
+# B486(d): the write arm is reached for a PLACEHOLDER and for a value WE wrote. The log used to claim
+# "(we wrote the previous value)" for both -- false for the template placeholder, which nobody wrote.
+_o="$(_render '<SET-a-name-the-cert-carries>' '')"
+ck "placeholder -> says it REPLACES a placeholder"   "$(grep -qF 'replacing the placeholder ARGOCD_SERVER' <<< "$_o" && echo y || echo n)" "y"
+ck "placeholder -> does NOT claim we wrote it"      "$(grep -qF '(we wrote the previous value)' <<< "$_o" && echo y || echo n)" "n"
+# CONTROL: a value this script DID write (source=discovered) keeps the correcting message.
+_o="$(_render '10.1.1.1' 'discovered')"
+ck "our previous value -> says we wrote it"         "$(grep -qF '(we wrote the previous value)' <<< "$_o" && echo y || echo n)" "y"
+ck "our previous value -> not called a placeholder" "$(grep -qF 'replacing the placeholder' <<< "$_o" && echo y || echo n)" "n"
+
 printf '\n  %d passed, %d failed\n' "$p" "$f"; [ "$f" -eq 0 ]
