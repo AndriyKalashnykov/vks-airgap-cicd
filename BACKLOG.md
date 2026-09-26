@@ -10782,6 +10782,7 @@ verify) closes the start-up window. Still open, from the adversary-k8s rounds:
 **2026-09-26 — DONE.** Design refuted once (adversary-k8s): a plain `pull --rebase -X theirs` retry makes
 the later-FINISHING run win, and the review reproduced an older commit silently rolling APP_COMMIT back.
 Shipped instead:
+
 - `commit-push` retries a rejected push at most 3 times, and first reads the APP_COMMIT the deploy branch
   names: equal -> exit 0; NEWER (ours is its ancestor, checked in the app clone after fetching every
   head) -> exit 0 "SUPERSEDED"; older, diverged or unresolvable (a reseed) -> rebase ours on top, then
@@ -10815,4 +10816,3 @@ Found by the B734 review, measured in both 2026-09-25/26 walk logs: `ARGOCD_KUBE
 `secrets/supervisor.kubeconfig`, so 31's `vcf context use argocd-supervisor:<ns>` changes that file's
 current-context. Anything that later reads the file's current context gets the ArgoCD one. Not blocking;
 decide whether 31 should use its own file or 30 should pin its context explicitly.
-
