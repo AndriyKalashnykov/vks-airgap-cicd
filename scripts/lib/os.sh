@@ -3114,12 +3114,25 @@ vks_wait_vip_release() {
 # assert_tarball_platform <tarball> — refuse an image whose config is not linux/${MIRROR_ARCH:-amd64}
 # (B736). Reads the docker/OCI archive's manifest.json -> config blob with tar + jq, so it works on
 # the air-gap box, which has no container engine. Fails CLOSED on anything it cannot read.
-assert_tarball_platform() {
-  local t="$1" want="linux/${MIRROR_ARCH:-amd64}" cfg got
-  [ -s "$t" ] || die "assert_tarball_platform: ${t} is missing or empty"
+# tarball_platform <tarball> — print the saved image's "os/arch", or NOTHING when it cannot be read
+# (missing/empty file, no manifest.json, no jq). ALWAYS returns 0: it is called both inside `if`
+# conditions and in `x="$(…)"` assignments, and under `set -e` a non-zero there would kill the
+# caller with no message. The caller decides what "unknown" means. (#1296 idea round, finding 5.)
+tarball_platform() {
+  local t="$1" cfg
+  [ -s "$t" ] && command -v jq >/dev/null 2>&1 || return 0
   cfg="$(tar -xOf "$t" manifest.json 2>/dev/null | jq -r '.[0].Config // empty' 2>/dev/null || true)"
-  [ -n "$cfg" ] || die "${t}: no manifest.json/Config — refusing to push an image whose platform is unknown"
-  got="$(tar -xOf "$t" "$cfg" 2>/dev/null | jq -r '"\(.os // "")/\(.architecture // "")"' 2>/dev/null || true)"
+  [ -n "$cfg" ] || return 0
+  tar -xOf "$t" "$cfg" 2>/dev/null | jq -r '"\(.os // "")/\(.architecture // "")"' 2>/dev/null || true
+  return 0
+}
+
+assert_tarball_platform() {
+  local t="$1" want="linux/${MIRROR_ARCH:-amd64}" got
+  [ -s "$t" ] || die "assert_tarball_platform: ${t} is missing or empty"
+  command -v jq >/dev/null 2>&1 || die "assert_tarball_platform: jq is missing — cannot read ${t}'s platform (run make deps)"
+  got="$(tarball_platform "$t")"
+  [ -n "$got" ] || die "${t}: no manifest.json/Config — refusing to push an image whose platform is unknown"
   [ "$got" = "$want" ] || die "${t} is ${got:-an unknown platform}, but the guest nodes need ${want} — pushing it would overwrite the tag they pull.
   Rebuild it on an ${want#linux/} engine (see B736), or set MIRROR_ARCH if the nodes really are ${got#linux/}."
 }

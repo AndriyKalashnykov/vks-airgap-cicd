@@ -147,9 +147,13 @@ else bad "content filter returned $by_content, want exactly 1 (0 = vacuous on do
 # shellcheck disable=SC2016  # single quotes are DELIBERATE: this greps for the LITERAL source
 # text of the probe. Expanding it here would search for this test's own (empty) variables and the
 # assertion would pass on any file, which is the vacuous-green this case exists to prevent.
-if grep -q 'grep -acw "${_want_mod}.${_want_ver}" "$tarball"' "$SCRIPT_DIR/14-selfbuilt-build.sh"; then
-  ok "the probe greps the SAVED TARBALL (no engine call, no cgroups)"
-else bad "the probe no longer greps \$tarball — the cgroup-v1-proof route is gone"; fi
+# The route (2026-09-26): FLATTEN the saved tarball with crane from STDIN (a path would be read as a
+# remote ref), then grep the flattened file. Still no engine call and no cgroups, and it now reads
+# docker's gzip layers, which the old raw-$tarball grep could not (a false `die` on docker 29).
+if grep -qF 'crane export - "$_flat" < "$tarball"' "$SCRIPT_DIR/14-selfbuilt-build.sh" \
+   && grep -qF 'grep -acw "${_want_mod}.${_want_ver}" "$_flat"' "$SCRIPT_DIR/14-selfbuilt-build.sh"; then
+  ok "the probe flattens the SAVED TARBALL with crane (stdin) and greps that (no engine call, no cgroups)"
+else bad "the probe no longer flattens \$tarball with 'crane export -' and greps the result — the route changed"; fi
 
 # The tar also carries manifest.json and the image config, whose history records the very
 # `RUN go get <mod>@<ver>` this script injects. Today the go_get runs in a DISCARDED builder stage
@@ -163,6 +167,27 @@ if grep -q '_json_hits=$((_json_hits + _jh))' "$SCRIPT_DIR/14-selfbuilt-build.sh
    && grep -q '\[ "$_json_hits" -gt 0 \]' "$SCRIPT_DIR/14-selfbuilt-build.sh"; then
   ok "the vacuity guard is present (metadata hits counted separately)"
 else bad "the vacuity guard is gone — image METADATA could satisfy the check on its own"; fi
+
+# BEHAVIOURAL (impl round, 2026-09-26): the probe's real route on a GZIP layer — the docker-29 save
+# shape the raw-tarball grep was blind to. Built offline with crane's empty base. Three assertions,
+# and the first is what makes the other two mean anything: the fixture must REPRODUCE the defect.
+if command -v crane >/dev/null 2>&1; then
+  mkdir -p "$TMP/gz"
+  printf 'dep\tgithub.com/google/go-containerregistry\tv0.21.9\th1:x\n' > "$TMP/gz/executor"
+  tar -C "$TMP/gz" -czf "$TMP/gz/layer.tgz" executor
+  if crane append --oci-empty-base -f "$TMP/gz/layer.tgz" -t localhost/fx:1 -o "$TMP/gz/fx.tar" >/dev/null 2>&1; then
+    raw=$(grep -acw 'github.com/google/go-containerregistry.v0.21.9' "$TMP/gz/fx.tar" || true)
+    crane export - "$TMP/gz/fx.flat" < "$TMP/gz/fx.tar" 2>/dev/null
+    right=$(grep -acw 'github.com/google/go-containerregistry.v0.21.9' "$TMP/gz/fx.flat" || true)
+    wrong=$(grep -acw 'github.com/google/go-containerregistry.v0.21.1' "$TMP/gz/fx.flat" || true)
+    if [ "${raw:-0}" = 0 ]; then ok "gzip fixture reproduces the defect: raw tarball grep finds 0"
+    else bad "gzip fixture is not compressed (raw grep found ${raw}); the next two cases prove nothing"; fi
+    if [ "${right:-0}" -ge 1 ]; then ok "the flattened image finds the override in a gzip layer (${right})"
+    else bad "the flattened image did NOT find the override in a gzip layer"; fi
+    if [ "${wrong:-0}" = 0 ]; then ok "a wrong-version control finds 0 in the flattened image"
+    else bad "a wrong-version control matched (${wrong}): -w boundary broken"; fi
+  else bad "could not build the offline gzip fixture with 'crane append --oci-empty-base'"; fi
+else bad "crane is not on PATH (make deps): the gzip-layer behaviour is untested"; fi
 
 rm -rf "$TMP"
 printf '  %d passed, %d failed\n' "$pass" "$fail"

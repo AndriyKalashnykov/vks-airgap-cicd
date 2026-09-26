@@ -57,7 +57,11 @@ OUT="$TMP/bundle/selfbuilt"; mkdir -p "$OUT"
 REPO_PATH="$(reg selfbuilt_repo_path "$NAME")"
 [ -n "${REPO_PATH:-}" ] || { echo "  FAIL  could not read the repo path from the registry"; exit 1; }
 REC="$(printf '%s\tv1.2.3\tsha256:deadbeef\t%s:%s\t2026-01-01T00:00:00Z' "$NAME" "$REPO_PATH" "$TAG")"
-printf 'fake-image-bytes\n' > "$OUT/${NAME}.tar"
+# A VALID linux/amd64 archive: the skip reads the tarball's platform, so a non-archive would make
+# every warm run REBUILD -- a real git clone in the fast tier, failing here for the wrong cause.
+_d="$(mktemp -d)"; printf '{"architecture":"amd64","os":"linux"}' > "$_d/c.json"
+printf '[{"Config":"c.json","RepoTags":[],"Layers":[]}]' > "$_d/manifest.json"
+tar -C "$_d" -cf "$OUT/${NAME}.tar" manifest.json c.json; rm -rf "$_d"
 printf '%s\n%s\n' "$TAG" "$REC" > "$OUT/.${NAME}.built"
 
 REAL_LOCK="$REPO/bundle/selfbuilt/selfbuilt.lock"
@@ -66,7 +70,7 @@ real_before="$(stat -c %Y "$REAL_LOCK" 2>/dev/null || echo none)"
 # test is in the FAST per-PR tier. Without it, an engine-less runner reports 5 FAILs reading "the
 # erasure is back" / "not backward compatible" — wrong causes for a missing binary, the class this
 # repo calls worse than a crash. The skip path never touches the engine, so pinning it is faithful.
-run_warm() { ( cd "$TMP" && CONTAINER_ENGINE=none timeout 120 bash "$SCRIPT_DIR/14-selfbuilt-build.sh" ) >"$TMP/run.log" 2>&1; }
+run_warm() { ( cd "$TMP" && CONTAINER_ENGINE=none MIRROR_ARCH=amd64 timeout 120 bash "$SCRIPT_DIR/14-selfbuilt-build.sh" ) >"$TMP/run.log" 2>&1; }
 
 run_warm; rc1=$?
 a="$(cat "$OUT/selfbuilt.lock" 2>/dev/null)"
