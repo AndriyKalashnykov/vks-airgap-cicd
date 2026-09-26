@@ -2138,7 +2138,7 @@ harness pins both, and the new cases were proven RED on the old 09. (c): `ARGOCD
 snapshot list and in the clobber gate's SELECTORS. Measured before the fix, the overlay beat a
 caller's value; `test-insecure-toggle-snapshot` pins both arms. (a): wording only, in
 `.env.example`. This does **not** reopen change 1, whose defects are independent of the
-contract. (e) is not done: the fixture prefix is defence only.
+contract. **(e) closed as unnecessary, 2026-09-26 — measured:** `test-argocd-address-classify.sh` passes with `ARGOCD_HOST=argocd.example.test` exported (rc 0, same as unset), because (c) put `ARGOCD_HOST` in `load_env`'s snapshot list; a fixture blank would guard a leak that no longer happens. What keeps B486 open is the IP-versus-SAN question itself (change 1 stays refuted).
 
 ## 🔴 B484 — the Forbidden-reads-as-absent sweep: a FAIL-OPEN air-gap check outranks the wrong-message bug 🔴 open
 
