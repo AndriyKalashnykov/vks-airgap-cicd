@@ -463,7 +463,7 @@ state-migrate: ## Move a legacy .env.kind to the stamped overlay
 	@bash -c 'set -e; . scripts/lib/os.sh; \
 	  [ -f .env.kind ] || { echo "no .env.kind — nothing to migrate"; exit 0; }; \
 	  f="$$(state_file)"; cat .env.kind >> "$$f"; chmod 0600 "$$f"; rm -f .env.kind; \
-	  echo "migrated .env.kind -> $$(basename "$$f") (stamp it: make state-stamp)"'
+	  echo "migrated .env.kind -> $$(basename "$$f")"'
 
 .PHONY: check-vks-terminology
 check-vks-terminology: ## Gate: Broadcom's product nouns (the vendor says "Supervisor Service"; phantom hybrids are banned)

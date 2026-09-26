@@ -52,8 +52,8 @@ case "$o" in *mismatch=1*) : ;; *) bad "harness" "load_env did not refuse the si
 if [ "$(archives)" = 1 ] && grep -q '^VKS_STATE_SERVER=https://127.0.0.1:44444' "$T"/s/.env.state.stale-* \
    && grep -q 'HARBOR_PASSWORD=theirs' "$T"/s/.env.state.stale-*; then ok "the foreign sink is ARCHIVED, whole (its stamp and its password kept)"
 else bad "foreign sink archived" "archives=$(archives) $o"; fi
-if grep -q "^VKS_STATE_SERVER='\{0,1\}https://127.0.0.1:1'\{0,1\}$" "$T/s/.env.state" && grep -q '192.0.2.7' "$T/s/.env.state" \
-   && ! grep -q 'theirs' "$T/s/.env.state"; then ok "the new sink is stamped for the LIVE cluster and holds only our value"
+if ! grep -q '^VKS_STATE_' "$T/s/.env.state" && grep -q '192.0.2.7' "$T/s/.env.state" \
+   && ! grep -q 'theirs' "$T/s/.env.state"; then ok "the new sink is UNSTAMPED (real-lab policy, B120) and holds only our value"
 else bad "new sink" "$(cat "$T/s/.env.state" 2>&1)"; fi
 if [ "$(stat -c %a "$T/s/.env.state")" = 600 ]; then ok "the new sink is 0600"; else bad "mode" "$(stat -c %a "$T/s/.env.state")"; fi
 
@@ -71,6 +71,20 @@ echo "== state_unset after the swap proceeds (the flag was cleared) =="
 sh_ "$FOREIGN" 'state_set A 1; state_set B 2; state_unset A' "$T/kc" >/dev/null
 if ! grep -q '^A=' "$T/s/.env.state" && grep -q '^B=' "$T/s/.env.state"; then ok "state_unset removed its key from the new sink"
 else bad "state_unset after swap" "$(cat "$T/s/.env.state")"; fi
+
+echo "== scenario-1 alternates Supervisor -> guest: ONE archive, every key in ONE sink =="
+# Implementation round, measured: a STAMPED fresh sink re-armed the refusal against the other server,
+# so a 5-step sup/sup/guest/sup/guest walk left 4 archives and stranded HARBOR_PASSWORD in one of them.
+sed 's#127.0.0.1:1#10.0.0.2:6443#; s#name: live#name: guest#g; s#current-context: live#current-context: guest#; s#cluster: live#cluster: guest#; s#user: live#user: guest#' "$T/kc" > "$T/guest"
+sed 's#127.0.0.1:1#10.0.0.1:6443#' "$T/kc" > "$T/sup"
+rm -rf "$T/s"; mkdir -p "$T/s"; printf '%s\n' "$FOREIGN" > "$T/s/.env.state"
+step() { ( cd "$T" && env -i HOME="$T" PATH="$PATH" SKIP_DOTENV=1 VKS_STATE_FILE="$T/s/.env.state" KUBECONFIG="$1" \
+             bash -c '. "$1/lib/os.sh"; load_env >/dev/null 2>&1; state_set "$2" "$3"' _ "$SCRIPT_DIR" "$2" "$3" >/dev/null 2>&1 ); }
+step "$T/sup" ARGOCD_KUBECONFIG /k/sup; step "$T/sup" HARBOR_PASSWORD labadmin; step "$T/guest" GITEA_LB_IP 10.1.1.1
+step "$T/sup" ARGOCD_SERVER_SOURCE discovered; step "$T/guest" INGRESS_LB_IP 10.1.1.2
+n_keys="$(grep -cE '^(ARGOCD_KUBECONFIG|HARBOR_PASSWORD|GITEA_LB_IP|ARGOCD_SERVER_SOURCE|INGRESS_LB_IP)=' "$T/s/.env.state" || true)"
+if [ "$(archives)" = 1 ] && [ "$n_keys" = 5 ]; then ok "5 alternating writes: 1 archive, all 5 keys in the one sink"
+else bad "alternation" "archives=$(archives) keys-in-sink=${n_keys}"; fi
 
 echo "== states that must NOT archive =="
 sh_ NONE 'state_set X 1' "$T/kc" >/dev/null
