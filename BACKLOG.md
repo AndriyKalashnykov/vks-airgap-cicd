@@ -10825,8 +10825,11 @@ shim accepted only `hosts`, fixed there. The #1300 residual (70's RED 1 discarde
 in #1314, RED-proven on the real cross-cluster e2e. The #1300 `GITEA_IMAGE` prefix match (another spelling of our registry
 silently skipped the mirror probe) and the same class in `vks-trust-probe.sh` (a lookalike host was taken
 as ours) now use `podimages_is_ours`; the mirror-probe URL is normalised (a trailing slash made `//api`).
-Deferred, owner call: the probe checks `HARBOR_INFRA_PROJECT`, not the project a Harbor-hosted
-`GITEA_IMAGE` names. **Still open (Mac-only):** the A3 trust half
+The follow-up is DONE too: the probe now checks the project a Harbor-hosted `GITEA_IMAGE` names
+(measured before: an image in `infra` made it query `/projects/cicd`). A research round settled it as
+not an owner decision — the pull already works from any project, so only the preflight was wrong, in
+both directions (false pass, and a false "Run: make mirror" die). The other five
+`harbor_assert_mirrored` callers build their refs from `HARBOR_INFRA_PROJECT`, so they cannot disagree. **Still open (Mac-only):** the A3 trust half
 (trust-harbor / engine-trust-check refuse on Darwin), a Mac without Rosetta, and the `sudo -b` password
 prompt.
 

@@ -1128,9 +1128,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 1. **B722 residual F8** — the refused report renders a Harbor URL for an unset `HARBOR_URL`.
    (`make state-stamp` is REMOVED, and the owner's checkout was unstamped, 2026-09-26.)
 2. **B486** — F6 needs a lab timing measurement; the IP-versus-SAN decision. B550 is blocked on it.
-3. **The mirror probe checks `HARBOR_INFRA_PROJECT`, not the project a Harbor-hosted `GITEA_IMAGE` names**
-   (idea-round finding, owner call: is an explicit image in a non-infra project supported?). The #1300
-   prefix match itself is fixed in #1317 (also `vks-trust-probe`'s lookalike match).
+3. *(done: the Gitea mirror probe checks the project the image names)*
 4. **Mac-only (B740):** the A3 trust half on Darwin, a Mac without Rosetta, the `sudo -b` prompt.
 5. **B743** (mutable version tag), **B744** (31 repoints 30's kubeconfig context), **B724**.
 
