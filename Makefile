@@ -446,7 +446,13 @@ check-readme-scenarios: ## Gate: the README is SCENARIO-BASED — each scenario 
 check-env-coverage: ## Gate: every operator-settable var the scripts read must be documented in .env.example
 	@$(SCRIPTS)/check-env-coverage.sh
 
-.PHONY: state-show state-stamp state-migrate
+.PHONY: state-show state-stamp state-migrate state-archives state-restore
+state-archives: ## List archived state overlays: which cluster each was for, and the key NAMES it holds (read-only)
+	@$(SCRIPTS)/state-archives.sh
+
+state-restore: ## Put one archived state overlay back (ARCHIVE=<name>); the current one is archived first
+	@ARCHIVE='$(ARCHIVE)' $(SCRIPTS)/state-restore.sh
+
 state-show: ## Show the state overlay: WHICH CLUSTER wrote it, when, and what is in it (secrets redacted)
 	@bash -c '. scripts/lib/os.sh; state_show'
 

@@ -146,10 +146,49 @@ state_stamp() {
 state_archive() {
   local f; f="$(state_file)"
   [ -f "$f" ] || return 0
-  local dst
-  dst="${f}.stale-$(date -u +%Y%m%d-%H%M%S)"
+  local dst base n=0
+  base="${f}.stale-$(date -u +%Y%m%d-%H%M%S)"; dst="$base"
+  # ⚠️ NEVER OVERWRITE AN OLDER ARCHIVE. Two archives in the same second (a restore followed by
+  # another, or a restore then state_claim_kind) used to `mv` onto the SAME name, and the first
+  # archive — possibly the only copy of a live cluster's passwords — was gone (measured, B723).
+  # An explicit loop, not `mv -n`: its exit status differs across coreutils / toybox / BSD.
+  while [ -e "$dst" ] || [ -L "$dst" ]; do n=$((n + 1)); dst="${base}-${n}"; done
   mv "$f" "$dst"
+  if [ -e "$f" ] || [ ! -f "$dst" ]; then
+    log_error "state: archiving $(basename "$f") -> $(basename "$dst") did not complete"; return 1
+  fi
+  # shellcheck disable=SC2034  # read by callers (state-restore prints the reversal with it)
+  STATE_ARCHIVED_AS="$dst"
   log_warn "state: ${1:-mismatch} — archived $(basename "$f") -> $(basename "$dst") (NOT deleted: it may hold the only copy of a live cluster's generated passwords)"
+}
+
+# state_key_is_secret <KEY> — the ONE list of credential-bearing key-name endings. It must stay
+# equal to state_show's redaction pattern below (B76 F7 measured a narrower list printing
+# GPG_PASSPHRASE, GITHUB_PAT and TLS_KEY verbatim); test-state-archives.sh pins the agreement.
+state_key_is_secret() {
+  case "$1" in *PASSWORD|*PASSPHRASE|*TOKEN|*SECRET|*PAT|*KEY|*CRED) return 0 ;; esac
+  return 1
+}
+
+# state_archive_candidates — every file beside the sink named `<sink>.<something>`, one per line as
+# `<class><TAB><path>`. Classes: stale (state_archive's own `stale-<ts>[-N]`), temp (a state_unset
+# mktemp leftover `.XXXXXX`, never restorable), other (an unrecognised producer — e.g. a hand-made
+# copy; restorable only when its suffix carries a timestamp, and always flagged). Symlinks are listed
+# as class `symlink` and are never restorable: `mv` would move the LINK and make the sink a link.
+state_archive_candidates() {
+  local f dir base p suf
+  f="$(state_file)"; dir="$(dirname "$f")"; base="$(basename "$f")"
+  for p in "$dir/$base".*; do
+    [ -e "$p" ] || [ -L "$p" ] || continue
+    suf="${p##*/"$base".}"
+    if [ -L "$p" ]; then printf 'symlink\t%s\n' "$p"; continue; fi
+    case "$suf" in
+      stale-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]|stale-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]*)
+        printf 'stale\t%s\n' "$p" ;;
+      ??????) case "$suf" in *[!A-Za-z0-9]*) printf 'other\t%s\n' "$p" ;; *) printf 'temp\t%s\n' "$p" ;; esac ;;
+      *) printf 'other\t%s\n' "$p" ;;
+    esac
+  done
 }
 
 # state_check — decide, BEFORE sourcing, whether this sink belongs to the cluster we are talking to.
@@ -314,4 +353,7 @@ state_show() {
   grep -vE '^(VKS_STATE_|#|$)' "$f" \
     | sed 's/\(PASSWORD\|PASSPHRASE\|TOKEN\|SECRET\|PAT\|KEY\|CRED\)=.*/\1=<redacted>/' \
     | sed 's/^/    /'
+  local na
+  na="$(state_archive_candidates | grep -c . || true)"
+  [ "${na:-0}" -eq 0 ] || log_info "state: ${na} archived overlay(s) beside it — make state-archives"
 }
