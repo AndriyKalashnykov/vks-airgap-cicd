@@ -51,12 +51,12 @@ else bad "harbor: rc=$rc: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; fi
 # B486: make argocd-address publishes the SINGLE-LABEL name argocd-server. It is not an A record: it
 # reaches DNS only through a search domain, and only the jump box dials ArgoCD.
 out="$(run FAKE_MODE=argocd ARGOCD_SERVER=argocd-server DNS_RECORDS_WAIT_SECONDS=0)"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF '192.0.2.40 argocd-server' \
-   && printf '%s' "$out" | grep -qF '/etc/hosts on THIS jump box' \
-   && ! printf '%s' "$out" | grep -qF 'Create these as A records'; then ok "a single-label ArgoCD name is a hosts line, not an A record"
+if [ "$rc" -eq 0 ] && grep -qF '192.0.2.40 argocd-server' <<< "$out" \
+   && grep -qF '/etc/hosts on THIS jump box' <<< "$out" \
+   && ! grep -qF 'Create these as A records' <<< "$out"; then ok "a single-label ArgoCD name is a hosts line, not an A record"
 else bad "argocd single-label: rc=$rc: $(printf '%s' "$out" | tail -4 | tr '\n' ' ')"; fi
 out="$(run FAKE_MODE=argocd ARGOCD_SERVER=argocd.lab.test DNS_RECORDS_WAIT_SECONDS=0)"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qE 'argocd\.lab\.test +192\.0\.2\.40'; then ok "CONTROL: a dotted ArgoCD name is still an A-record row"
+if [ "$rc" -eq 0 ] && grep -qE 'argocd\.lab\.test +192\.0\.2\.40' <<< "$out"; then ok "CONTROL: a dotted ArgoCD name is still an A-record row"
 else bad "argocd dotted: rc=$rc: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; fi
 
 printf 'test-show-dns-records-failure: %d passed, %d failed\n' "$pass" "$fail"
