@@ -425,8 +425,8 @@ prints — the usual cause on a reinstall, where the old address is still in DNS
 You still need its admin credential — `make install-all` authenticates with it. **Step 8.5 gets it
 for you**, right after the CA that lets it verify Harbor. Nothing to do here.
 
-⚠️ Do not skip Step 8.5. If you leave `HARBOR_PASSWORD` unset, `make env-populate` in Step 11
-**generates** one, and it cannot possibly authenticate against a Harbor that already exists.
+⚠️ Do not skip Step 8.5. Nothing else sets `HARBOR_PASSWORD` for an existing Harbor, and
+`make install-all` cannot authenticate without it.
 
 <details><summary>Optional — Harbor project names, both already work</summary>
 
