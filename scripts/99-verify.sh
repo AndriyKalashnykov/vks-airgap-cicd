@@ -11,6 +11,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+export GIT_TERMINAL_PROMPT=0   # these git calls are unattended: a credential miss must FAIL, never prompt (gitea_git_isolate)
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS   # env-injected config is read AFTER local and would re-add a helper (gitea_git_isolate)
 load_env
 
 require_cmd kubectl; require_cmd git; require_cmd curl
@@ -103,7 +105,7 @@ verify_app() {
   local d="${tmp}/src-${app}"
   rm -rf "$d"
   git clone -q "${base}/${GITEA_ORG}/${APP_GIT_REPO}.git" "$d"
-  git -C "$d" config credential.helper "store --file=${gitcreds}"
+  gitea_git_isolate "$d" "${gitcreds}" "$GITEA_ADMIN_USER"   # ONLY our store file; see lib/os.sh
   git -C "$d" config user.email "verify@vks-airgap-cicd.local"
   git -C "$d" config user.name  "vks-airgap-cicd-verify"
   # WHERE the greeting lives is the only language-specific thing here (application.yml vs main.go);
