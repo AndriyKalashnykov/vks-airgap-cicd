@@ -44,7 +44,7 @@ and those land in **`.env.state`**, a separate file beside `.env`. You do not ed
 read last, so it wins over `.env`. If a value you expect is missing from `.env` after a step said it
 published one, look there.
 
-**Jump box:** Ubuntu or Photon OS, reaching both the internet and the lab. It must resolve the
+**Jump box:** Ubuntu, Photon OS 5 or macOS on Apple silicon ([tested platforms](../README.md#tested-platforms)), reaching both the internet and the lab. It must resolve the
 vCenter FQDN. **Harbor's FQDN must be in real DNS** — the guest nodes resolve it, so `/etc/hosts`
 is not enough. The `*.vks.local` names are `/etc/hosts`-only.
 Internet-only? Use [the sneakernet flow](sneakernet.md) instead; it replaces Step 11.

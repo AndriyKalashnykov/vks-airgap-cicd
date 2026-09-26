@@ -2125,6 +2125,14 @@ makes `ARGOCD_CA_FILE` verifiable.
   a reallocation can land *after* publication and no publisher-side fix is ever sufficient, which is
   a second argument for the name.
 
+**Plan 2026-09-26 (after two adversary rounds; see B740 for the wave order):** Items for the next pass, NO lab writes: **(d)** split the false "(we wrote the previous value)" log
+(`09:278`) into placeholder vs our-marker branches, proven with the `_render` fake-kubectl harness
+plus a RED; **(a)** wording only — for the DEFAULT cert the name must be in DNS **and** a SAN — plus a
+note that reconciling the contracts does NOT reopen change 1 (its defects 2-4 are contract-independent);
+**(c)** `ARGOCD_HOST` into both selector lists in ONE commit (`check-env-clobber` requires PROTECTED ⊆
+SELECTORS); **(e)** fixture prefix as defence only, not coverage. **(b) is already DONE** (#1212).
+Seen live 2026-09-25 on BOTH OSes: `fetch-argocd-ca` refuses because `ARGOCD_SERVER` is an IP.
+
 ## 🔴 B484 — the Forbidden-reads-as-absent sweep: a FAIL-OPEN air-gap check outranks the wrong-message bug 🔴 open
 
 **⚠️ 2026-09-10 — RE-GRADED by a `vks-adversary` round; two of this row's residuals are STALE.**
@@ -9654,6 +9662,16 @@ credential the lab has never heard of, presented as real. (An adversary round fi
 "re-running rotates Harbor's secretKey"; the "already exists" arm refutes that — nothing rotates.)
 **Done when** also covers this site: publish `H_ADMIN` only when this run actually installed.
 
+**Plan 2026-09-26 (after two adversary rounds; see B740 for the wave order):** **Fix = DELETE the generation at `02-env.sh:96`**, as #1239 did for the ArgoCD password. All three
+candidate shapes above are refuted: no documented flow needs `env-populate` to mint `HARBOR_PASSWORD`
+(`05-kind-up.sh:175-188` mints its own into state; scenario-1 publishes it at Step 4 via `04:179`;
+tenants are given theirs). Print where each flow gets it instead. Tests: not written on an empty
+`.env`; `GITEA_ADMIN_PASSWORD` still generated (control); `05` still `state_set`s it. Fix
+`scenario-1.md:428-429` and `scenario-2.md:825` in the same PR. **Third site:** `vc_ss_install`
+returns 0 from THREE arms, and "already exists" can arrive on a retry after OUR install landed —
+set `VC_SS_OUTCOME=installed|existed|ambiguous` (no new return code: `set -e` callers, `08` shares
+it); `04` publishes `H_ADMIN` only on `installed`, else points at `make harbor-admin-password`.
+
 ## ⚪ B726 — CLOSED, REFUTED BY ITS OWN AUTHOR: the control was RIGHT and I mis-measured it TWICE
 
 `scripts/check-grep-q-pipe.sh:37-38` says, in the scope note it prints its own verdict against:
@@ -10365,6 +10383,19 @@ Source-read by two adversary rounds (2026-09-23), to fix:
 cluster) with every block verbatim, AND `make static-check` + `test-scripts` stay green on Ubuntu and
 Photon (the jumpbox harness), AND the Mac run is under GNU make, not Apple's 3.81.
 
+**Plan 2026-09-26 (after two adversary rounds; see B740 for the wave order):** Residuals still open (they are recorded under the B736 heading, move them here):
+**(1)** `trust-harbor`/`engine-trust-check` on macOS — install the CA via the ROOTLESS path
+`podman machine ssh` → `~/.config/containers/certs.d/<host>/ca.crt` (NOT `/etc/containers/certs.d`,
+which needs sudo; `--cert-dir` is unavailable to the remote client on Mac); prove with a real login;
+persistence across machine stop/start; control = rename → x509. For Colima (B740) a `docker-vm` mode
+via `colima ssh`, never host sudo. **(2)** argocd: first measure whether the upstream arm64 argocd works
+against the lab (`argocd-auth-check` through the tunnel); only then an opt-in darwin-amd64 argocd-vcf
+under a distinct name. **(3)** brew lists: the install list has **4** copies (`bootstrap-jumpbox.sh:42`,
+`common-bootstrap.md:29`, `os.sh:59`, `00-install-prereqs.sh:93`) and the gnubin list **3**
+(`os.sh:41-44`, `shell-init.sh:42`, `Makefile:96`); gate with SUBSET semantics, `bootstrap-jumpbox.sh`
+as source. **(4)** a verbatim scenario-1 walk on a macOS row (the Done-when) is still not done.
+KinD moved IN scope by owner decision 2026-09-26 → B740.
+
 ## 🔴 B736 — an arm64 build host overwrites Harbor's amd64 tags; the builds pass no `--platform`
 
 Source-read (vks-adversary, 2026-09-23): `14-builder-build.sh:111` and `14-selfbuilt-build.sh:240-249`
@@ -10419,6 +10450,14 @@ Still open, each recorded by an implementation-review round (2026-09-24):
 - **walk-doc on a macOS row runs `make` literally**, i.e. Apple's 3.81, which the Makefile refuses; it
   does not translate to `gmake`. And an unset `WALK_OS` falls through to the Linux blocks (walkbox.sh
   always sets it, so only hand runs). A macOS walk row needs both before it can be automated.
+
+**Plan 2026-09-26 (after two adversary rounds; see B740 for the wave order):** **NOT closable yet.** "The Mac's build yields linux/amd64" is met (#1288: `install-all` with
+`BUILD_EMULATE=1` passed `assert_tarball_platform`; `podman build --platform linux/amd64` in the log).
+"RED-proven on an arm64 host" is NOT — only synthetic tars (`test-build-arch.sh`). To close: on the Mac,
+`podman build --platform linux/arm64` + `podman save`, then `assert_tarball_platform` must die (also
+checks the podman 6 remote save format). ⚠️ `MIRROR_ARCH=arm64` (needed for KinD on an M1, B740) makes
+BOTH guards pass arm64 by design — it must be per-run only, never in `.env`, or a later lab run pushes
+arm64 over the amd64 tags. Then move B735's residuals (below, under this heading) into B735.
 
 ## ✅ B738 — `.env` carried every pin from `.env.example`, so a version bump never reached an existing operator
 
@@ -10485,6 +10524,10 @@ None is re-checked at the point of use.
 **Done when:** each is compared with the live lab (or its default) where it is used, and a
 mismatch is named with the command that refreshes it.
 
+**Plan 2026-09-26 (after two adversary rounds; see B740 for the wave order):** Offline half first: compare each tool-written value with its source where it is used, and name the
+refresh command on a mismatch (e.g. `VKS_CLUSTERCLASS=builtin-generic-v3.6.0` against a 3.7.1 lab,
+measured in B737). Read-only lab checks only.
+
 ## 🟡 B737 — the handoff says PAUSED, but scenario-1 was walked on the 2026-09-17 cut and is RUNNING
 
 MEASURED 2026-09-23: `secrets/cicd-gc3.kubeconfig` → cicd-gc3 (1 CP + 2 workers, v1.36.2, age 6d),
@@ -10540,3 +10583,57 @@ add it to 25-vks-cluster-create.sh's export loop, `check-cluster-template-vars`,
 
 **Done when:** the handoff records the walk (done 2026-09-24), and — if `VKS_CP_VM_CLASS` ships —
 it is RED-proven that the default renders the same class as today.
+
+## 🔴 B740 — KinD targets on macOS (owner decision 2026-09-26: KinD is IN scope on macOS)
+
+**Measured facts.** Test Mac = Scaleway M1, **8 GB**, 8 CPU; podman machine (rootless, 2 GiB, Rosetta
+on); Colima 0.10.3 `default` profile present but stopped; kind 0.32.0. **Harbor v2.15.x publishes NO
+arm64 image** (crane, every released tag; multi-arch merged upstream in PR #22311, unreleased); every
+MIRRORED image has arm64 (incl. gitea 1.27.2-rootless, alpine/git v2.54.0). The kind bridge's LB IPs are
+NOT routable from macOS. `05-kind-up.sh:267-281` checks the docker socket on the Mac but the `-v` is
+resolved by the VM daemon — broken on Colima. On a Mac, `engine_mode` classifies Colima as
+`docker-rootful`, so `trust-harbor` would sudo on the Mac and write a CA no daemon reads.
+"~12 GB for the full e2e" is a pod-REQUESTS figure from `docs/sizing.md`, NOT a measurement.
+Scaleway had every Apple-silicon type OUT OF STOCK in PARIS 1 and PARIS 3 on 2026-09-26.
+
+**Owner decisions:** (1) a >=16 GB Mac for the full e2e (sold out; a session-only stock monitor was
+set); (2) routing: `docker-mac-net-connect` (one sudo; certifies the Mac as the jump box) vs a jump-box
+container on the kind network (no sudo; certifies a container).
+
+**Waves (dependency order; parallel inside a wave):**
+
+- **W1 offline:** B725 delete + `VC_SS_OUTCOME`; B486 (d)(a)(c)(e); B735 brew-list gate; B739 offline
+  half; **A3** = the Darwin socket fix + a `docker-vm` trust mode (`colima ssh`, never host sudo) +
+  kind-down removes it + offline tests; **A0** = measure the infra-subset memory requests on Linux.
+- **W2 Mac, podman up, Colima stopped:** B736 real arm64 RED → close; argocd question (B735 2);
+  B735 (1) rootless certs.d with a persistence test.
+- **W3 Mac, Colima (vz + Rosetta) up, podman stopped, a SEPARATE clone, `MIRROR_ARCH` per run:**
+  **A1a** one amd64 Harbor pod on the arm64 node (pull accepted? exec under Rosetta? binfmt flags before
+  and after kind create and a colima restart; colima #1389, kind #3510) and a Harbor dev/arm64 tag probe;
+  **A1b** `make kind-up` + Harbor, with `memory_pressure`/`vm_stat`; **A2** routing per decision 2,
+  proven by curl with the CA + a crane push (never a ping); **A4** infra subset (kind-up, install-harbor,
+  install-argocd, traefik ingress, psa-check, istio-preflight, kind-down, bootstrap-test) + a preflight
+  that refuses `e2e-kind` below the measured RAM/disk; README KinD row per OS.
+- **W4 >=16 GB Mac:** e2e-kind, e2e-kind-both, tenant, istio-existing, verify-ingress-both, cross-cluster.
+
+**Constraints:** podman machine and Colima never both up on 8 GB; `MIRROR_ARCH` never in `.env`;
+one lab-mutating box at a time; any Harbor on arm64 differs from the lab's amd64 2.15.x — a green run
+certifies the Mac's plumbing, not Harbor parity. Sneakernet/bundle on a Mac stay out (B735 item 11).
+
+**Done when:** the W4 targets pass on a >=16 GB Mac (or the infra subset on 8 GB, with a measured
+refusal for the rest), recorded as a README row with commit, date and each class's result.
+
+## 🟡 B741 — subagents may write the SESSION SCRATCHPAD (owner-approved 2026-09-26; claude-config hook)
+
+Root cause of "the research agent's sandbox refused anything containing git" (2026-09-26), measured from
+its refusal texts: (1) Claude Code's worktree-isolation guard refuses a subagent command that names
+`git` in a form "too complex to verify" (loops, variables) — plain one-command calls with `alpine/git`
+etc. RUN (reproduced 4/4); (2) `subagent-readonly.py` blocks subagent writes outside the agent's own
+worktree, including the session scratchpad, which pushed the agent into compound one-liners that trip
+(1). Owner approved allowing scratchpad writes. Design: bind to THIS session's scratchpad
+(`/tmp/claude-<uid>/<project-slug>/<session_id>/scratchpad/`), realpath + commonpath like the worktree
+exemption. **MEASURED 2026-09-26 (log-only probe hook + a real worktree subagent):** the subagent's
+payload carries the PARENT `session_id` (`8b679d1f…`) plus its own `agent_id` and its worktree `cwd`;
+the Write was refused by `subagent-readonly.py`. So the exemption can bind to the exact session. Branch `feat/subagent-scratchpad-writes` in claude-config; adversary idea round
+first; the installed `~/.claude/hooks` copy must be verified by behaviour after install.
+Brief fix in the meantime: one simple command per call; no loops/variables around anything naming git.
