@@ -10625,7 +10625,7 @@ add it to 25-vks-cluster-create.sh's export loop, `check-cluster-template-vars`,
 **Done when:** the handoff records the walk (done 2026-09-24), and — if `VKS_CP_VM_CLASS` ships —
 it is RED-proven that the default renders the same class as today.
 
-## 🔴 B740 — KinD targets on macOS (owner decision 2026-09-26: KinD is IN scope on macOS)
+## ✅ B740 — (DONE 2026-09-26, every W4 target passed on an 8 GB M1) KinD targets on macOS (owner decision 2026-09-26: KinD is IN scope on macOS)
 
 **Measured facts.** Test Mac = Scaleway M1, **8 GB**, 8 CPU; podman machine (rootless, 2 GiB, Rosetta
 on); Colima 0.10.3 `default` profile present but stopped; kind 0.32.0. **Harbor v2.15.x publishes NO
@@ -10692,8 +10692,31 @@ kind-up on Colima. **A3 trust half still open:** a `docker-vm` mode for `engine_
   reason. `trust-harbor`/`engine-trust-check` already refuse on Darwin before `engine_mode`, which
   is the safe state.
 
+**2026-09-26 — W3/W4 run on the 8 GB M1 (Colima vz + Rosetta, 4 CPU / 6 GiB, docker, podman machine
+stopped, `MIRROR_ARCH=arm64` per run, `docker-mac-net-connect` as root). No hardware limit was hit.**
+Peak Colima VM memory used: 4,368 MiB (warm traefik), 4,163 MiB (cold istio), 4,278 MiB (both TLS modes), 5,686 MiB (cross-cluster, three kind clusters) — the highest, inside the 6 GiB VM.
+
+| target | result |
+|---|---|
+| kind-up, install-harbor (amd64 under Rosetta), install-argocd, psa-check, istio-preflight, mirror (31/31) | pass |
+| `e2e-kind` warm, traefik | pass, 24.6 min (after #1297) |
+| `e2e-kind` cold (`E2E_FRESH=1`), istio | pass, 25.4 min |
+| verify-ingress-both, e2e-kind-tenant, bootstrap-test | pass |
+| e2e-kind-both | first run: leg 2 failed, the Harbor probe hard-coded https — not macOS-specific, fixed in #1298; re-run with the fix: pass, 53.3 min, peak 4,278 MiB |
+| e2e-kind-istio-existing | first run failed, the same way on Linux: since #1091 `install-all` installs the default istio ingress, so the fixture's mesh-free premise broke — fixed in #1299; re-run from main (4c9f788): pass, 26.1 min |
+| e2e-kind-cross-cluster | on macOS needs `fs.inotify.max_user_instances=512` in the VM (documented); first run then failed the same way on Linux: Gitea into the guest needed HARBOR_URL — fixed in #1300; re-run from main: pass, 2.9 min, peak 5,686 MiB (three clusters) |
+
+Residuals from the #1298 review, not fixed: a 3xx on http counts as serving (`HARBOR_INSECURE=1` against a
+TLS Harbor reads green via its 301); the `98-uninstall-all.sh` curl advice lacks `--cacert` for a
+self-signed Harbor; `harbor_reachable_report` treats `getent hosts <IP>` rc=2 (no PTR) as "does not
+resolve yet" and never probes an IP-literal HARBOR_URL.
+
 **Done when:** the W4 targets pass on a >=16 GB Mac (or the infra subset on 8 GB, with a measured
 refusal for the rest), recorded as a README row with commit, date and each class's result.
+**Met 2026-09-26 on the 8 GB Mac itself** — every W4 target passed, so no >=16 GB Mac and no RAM refusal
+are needed; recorded in docs/tested-platforms.md. Still open, low priority: the A3 trust half
+(trust-harbor / engine-trust-check refuse on Darwin, the safe state), the three #1298 residuals above,
+and the e2e's "70 refuses a guest-local repoURL" check, which discards 70's output (#1300 residual).
 
 ## ✅ B741 — (DONE 2026-09-26, claude-config #117) subagents may write the SESSION SCRATCHPAD (owner-approved 2026-09-26; claude-config hook)
 

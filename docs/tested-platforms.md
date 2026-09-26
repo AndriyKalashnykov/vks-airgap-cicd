@@ -13,7 +13,7 @@ the routing between a jump box and the lab, or the source address the lab sees.
 | Read-only (28: `preflight`, `env-validate`, `creds-show`, `mirror-verify`, `verify-ingress`, …) | 28/28 PASS | 28/28 PASS |
 | Idempotent installers, in scenario order (34, ending with `verify` and `install-all`) | 32/34 PASS; 2 refused as designed on this lab (below) | 30/34 PASS with `BUILD_EMULATE=1`; the same 2 refused as on Linux, plus 2 Linux-only (below) |
 | Not run by design on a shared lab (24) | — | — |
-| KinD, sneakernet and Linux test harnesses (28) | not in this table | out of scope on macOS |
+| KinD, sneakernet and Linux test harnesses (28) | not in this table | KinD: see **KinD on macOS** below; sneakernet out of scope |
 
 - **After the macOS run, Linux re-verified the lab** (the Mac's builds replace the same Harbor tags the
   guest pulls): `verify` passed end to end for every app, from git push to the live page.
@@ -47,5 +47,25 @@ the **Lab targets** table above.
   images on Apple silicon needs `BUILD_EMULATE=1` and Rosetta for the podman machine — see
   [Scenario 1](scenario-1.md). The `gmake` bootstrap is in
   [Common bootstrap](common-bootstrap.md).
-- **KinD on macOS: in progress** ([B740](../BACKLOG.md)). The sneakernet flow stays out of scope there;
-  `make bundle` refuses to run on macOS.
+- The sneakernet flow stays out of scope on macOS; `make bundle` refuses to run there.
+
+**KinD on macOS.** Every KinD e2e target passed on 2026-09-26 on an **8 GB** Apple M1 (macOS 26.6.2),
+in a Colima VM (vz + Rosetta, 4 CPU / 6 GiB, docker), with `MIRROR_ARCH=arm64` per run. How to set it
+up is in [KinD, on macOS](kind-local.md#on-macos-apple-silicon). The later rows ran from `main` at
+`4c9f788`; each earlier row ran from the branch that carried the fix it needed.
+
+| Target | Result | Time | Peak VM memory |
+|--------|--------|------|----------------|
+| `e2e-kind` (traefik, warm cluster) | PASS | 24.6 min | 4,368 MiB |
+| `e2e-kind` (istio, cold cluster, `E2E_FRESH=1`) | PASS | 25.4 min | 4,163 MiB |
+| `e2e-kind-both` (both TLS modes) | PASS | 53.3 min | 4,278 MiB |
+| `e2e-kind-istio-existing` | PASS | 26.1 min | — |
+| `e2e-kind-cross-cluster` | PASS | 2.9 min | 5,686 MiB (three kind clusters) |
+| `verify-ingress-both`, `e2e-kind-tenant`, `bootstrap-test` | PASS | — | — |
+
+- Harbor publishes amd64 images only; they ran on the arm64 kind node under Rosetta.
+- `e2e-kind-cross-cluster` needs the VM's `fs.inotify.max_user_instances` raised to 512 first (the
+  setting is in the setup page).
+- Three failures found on the way were not macOS-specific and are fixed: the Harbor probe ignored
+  `HARBOR_INSECURE` (#1298); the Istio attach test broke when `install-all` started installing an
+  ingress (#1299); the cross-cluster test needed a Harbor address it never had (#1300).

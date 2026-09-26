@@ -80,7 +80,7 @@ Each row was produced by `make platform-report` on that host.
 
 The lab-backed targets also pass on both OSes, apart from a few refused by design. What was run, how, and what it does not cover is in [Tested platforms, in detail](docs/tested-platforms.md).
 
-**macOS:** use `gmake` (Homebrew GNU make); Apple's `/usr/bin/make` 3.81 is refused. Building the images on Apple silicon needs `BUILD_EMULATE=1` and Rosetta — see [Scenario 1](docs/scenario-1.md). KinD on macOS is in progress ([B740](BACKLOG.md)).
+**macOS:** use `gmake` (Homebrew GNU make); Apple's `/usr/bin/make` 3.81 is refused. Building the images on Apple silicon needs `BUILD_EMULATE=1` and Rosetta — see [Scenario 1](docs/scenario-1.md). KinD runs on macOS too, measured on an 8 GB M1 — see [Tested platforms](docs/tested-platforms.md).
 
 ## Reference
 
