@@ -223,12 +223,15 @@ _harbor_marked=0
 _argocd_bare=""
 
 harbor_scheme="https"; [ "${HARBOR_INSECURE:-0}" = "1" ] && harbor_scheme="http"
-harbor_url="${harbor_scheme}://${HARBOR_URL:-harbor.vks.local}"
+# B722 F8: NO invented fallback. This printed `https://harbor.vks.local` for an unset HARBOR_URL -- a
+# name no code path publishes and `.env.example` ships commented -- beside a line saying the endpoint
+# could not be named. ArgoCD's row already says `<not set>`; Harbor's now agrees with it.
+if [ -n "${HARBOR_URL:-}" ]; then harbor_url="${harbor_scheme}://${HARBOR_URL}"; else harbor_url="<not set>"; fi
 # Harbor's cert is SELF-SIGNED too (minted with an IP SAN by 06-install-harbor.sh), so a browser warns —
 # exactly as it does for ArgoCD, whose row has always said so. Saying it for one and not the other is the
 # same lie-by-contrast that made the ArgoCD/Harbor rows inconsistent before: the reader concludes Harbor's
 # cert is trusted and ArgoCD's is not. Found by reading the REAL post-install table, not a simulated one.
-if [ "${HARBOR_INSECURE:-0}" != "1" ] && [ -n "${HARBOR_CA_FILE:-}" ]; then
+if [ -n "${HARBOR_URL:-}" ] && [ "${HARBOR_INSECURE:-0}" != "1" ] && [ -n "${HARBOR_CA_FILE:-}" ]; then
   harbor_url="${harbor_url} (untrusted cert)"
   # ⚠️ ARMED HERE, IN CALLER SCOPE. The note below used to key on `_argo_tls_flag`, which ONLY
   # ArgoCD sets -- so these two Harbor cells could carry a marker while the note explaining it was
