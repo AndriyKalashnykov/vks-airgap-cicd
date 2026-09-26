@@ -10717,6 +10717,11 @@ refusal for the rest), recorded as a README row with commit, date and each class
 are needed; recorded in docs/tested-platforms.md. Still open, low priority: the A3 trust half
 (trust-harbor / engine-trust-check refuse on Darwin, the safe state), the three #1298 residuals above,
 and the e2e's "70 refuses a guest-local repoURL" check, which discards 70's output (#1300 residual).
+The macOS setup text in docs/kind-local.md was reviewed (adversary-docker) and rewritten. Measured on the test
+Mac: `sudo pkill -f "$(brew --prefix)/opt/docker-mac-net-connect/bin/docker-mac-net-connect"` stops the
+daemon and removes its 172.18 route (1 -> 0). NOT measured: the documented fresh-Mac order (colima start
+before `gmake deps CONTAINER_ENGINE=docker`) on a wiped Mac — the test Mac already had its toolchain — and
+`sudo -b` on a Mac whose sudo asks for a password (the test Mac's sudo is passwordless).
 
 ## ✅ B741 — (DONE 2026-09-26, claude-config #117) subagents may write the SESSION SCRATCHPAD (owner-approved 2026-09-26; claude-config hook)
 
