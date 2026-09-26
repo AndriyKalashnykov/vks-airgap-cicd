@@ -87,13 +87,18 @@ env_populate() {
   echo "== GENERATE (secrets for the components we install — minted only if unset) =="
   # Gitea is ALWAYS ours → always safe to generate.
   # a_pw is GONE with the ArgoCD generate-arm below -- do not re-add it.
-  local g_admin g_ci h_pw made=0
+  local g_admin g_ci made=0
   if is_placeholder "${GITEA_ADMIN_PASSWORD:-}"; then g_admin="$(gen_password)"; env_set GITEA_ADMIN_PASSWORD "$g_admin"; echo "  + GITEA_ADMIN_PASSWORD  (generated)"; made=1; fi
   if is_placeholder "${GITEA_CI_PASSWORD:-}";    then g_ci="$(gen_password)";    env_set GITEA_CI_PASSWORD    "$g_ci";    echo "  + GITEA_CI_PASSWORD     (generated)"; made=1; fi
-  # Harbor/ArgoCD passwords: a throwaway default that works out-of-the-box for the local
-  # KinD stand-in / a self-hosted Harbor. On a REAL lab these are given to you — OVERRIDE
-  # HARBOR_PASSWORD with the admin/robot secret (env-populate never clobbers a value you set).
-  if is_placeholder "${HARBOR_PASSWORD:-}";        then h_pw="$(gen_password)"; env_set HARBOR_PASSWORD        "$h_pw"; echo "  + HARBOR_PASSWORD       (generated — OVERRIDE for a real lab)"; made=1; fi
+  # HARBOR_PASSWORD IS NEVER GENERATED HERE (B725). A Harbor password is set BY Harbor, so a minted
+  # one authenticates against nothing -- and env-check then called that .env complete. MEASURED: no
+  # documented flow needs it minted here: KinD mints its own into the state overlay (05-kind-up.sh),
+  # scenario-1 publishes the real one at Step 4 (04-install-harbor-service.sh) or 8.5
+  # (make harbor-admin-password), and a tenant is GIVEN theirs. Same fix as the ArgoCD arm below.
+  if is_placeholder "${HARBOR_PASSWORD:-}"; then
+    echo "  - HARBOR_PASSWORD       NOT generated (a Harbor password is set by Harbor). Local KinD: make kind-up sets it."
+    echo "                          Scenario 1: Step 4 publishes it, or make harbor-admin-password. Tenant: your platform team."
+  fi
   # ⚠️ AND ON A REAL LAB IT MUST NOT BE GENERATED AT ALL. This line said "KinD only; real lab sets
   # its own" and then generated it on a real lab anyway — nothing enforced the comment. MEASURED,
   # walk row 1 (2026-08-12): minted here at 20:03:46Z, and at 20:16:17Z scenario-1's PAYOFF step
@@ -193,7 +198,7 @@ env_populate() {
   echo "    VKS_USERNAME         OPTIONAL (defaults, announced) — REQUIRED only for VKS_AUTH_METHOD=vsphere; set it if your SSO domain differs"
   echo "    VKS_CLUSTER_NAME     the VKS workload cluster name"
   echo "    HARBOR_USERNAME      'admin' if you installed Harbor (Scenario 1); the robot login robot\$<name> for a tenant (Scenario 2) — the local KinD flow sets this itself"
-  echo "    HARBOR_PASSWORD      OVERRIDE the generated value with the lab's admin/robot secret"
+  echo "    HARBOR_PASSWORD      the lab's admin/robot secret (never generated: see GENERATE above)"
   echo "    VCF_CLI_SRC_DIR      folder holding the licensed VCF/argocd-vcf CLI archives (make install-vcf-clis)"
       # 4 KEYS WERE MISSING HERE UNTIL 2026-08-25, AND THE OMISSION STRANDED THE OPERATOR.
       # MEASURED: scenario-1.md Step 1 lists 9 keys; this block carried only 5 of them.

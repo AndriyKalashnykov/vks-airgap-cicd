@@ -9671,6 +9671,11 @@ tenants are given theirs). Print where each flow gets it instead. Tests: not wri
 returns 0 from THREE arms, and "already exists" can arrive on a retry after OUR install landed —
 set `VC_SS_OUTCOME=installed|existed|ambiguous` (no new return code: `set -e` callers, `08` shares
 it); `04` publishes `H_ADMIN` only on `installed`, else points at `make harbor-admin-password`.
+**2026-09-26 — the `02-env.sh` site is CLOSED** (this PR): the mint is deleted, env-populate prints where
+each flow gets the password, and scenario-1 and scenario-2 no longer describe a generated one.
+`test-env-lifecycle.sh` asserts that no HARBOR_PASSWORD is written and that it says so. The Gitea
+control still passes, and those two assertions were proven RED on the old code. **Still open:** the
+`vc_ss_install` third site (`VC_SS_OUTCOME`).
 
 ## ⚪ B726 — CLOSED, REFUTED BY ITS OWN AUTHOR: the control was RIGHT and I mis-measured it TWICE
 

@@ -80,6 +80,12 @@ try "DEFAULT TENANT SHAPE (VKS_NAMESPACE unset): .env gains NO ARGOCD_ADMIN_PASS
     '! grep -qE "^ARGOCD_ADMIN_PASSWORD=.+" "$FAB/.env"'
 try "and it SAYS so, rather than staying silent about a credential it declined to invent" \
     'printf "%s" "$fab_out" | grep -qi "ARGOCD_ADMIN_PASSWORD (never generated"'
+# B725: the same rule for HARBOR_PASSWORD. A minted one authenticates against no Harbor, and
+# env-check then called the .env complete. Same run, so the CONTROL below covers these too.
+try "DEFAULT SHAPE: .env gains NO HARBOR_PASSWORD (B725 -- a Harbor password is set by Harbor)" \
+    '! grep -qE "^HARBOR_PASSWORD=.+" "$FAB/.env"'
+try "and it SAYS where each flow gets one instead" \
+    'printf "%s" "$fab_out" | grep -q "HARBOR_PASSWORD       NOT generated"'
 # CONTROL, in the SAME run: if this fails, the run did nothing and the two assertions above are
 # vacuous -- they would pass on a populate that crashed before reaching any generator.
 try "CONTROL: the same run still DID generate GITEA_ADMIN_PASSWORD (so it was not a no-op)" \
@@ -99,6 +105,8 @@ rm -rf "$FAB" "$VCF"
 # KinD is unaffected: its password is minted by a DIFFERENT step, into the STAMPED overlay, not .env.
 # Asserted structurally because running kind-up needs a cluster. If this line moves, the deletion
 # above stops being safe and this test says so.
+try "KinD still sets HARBOR_PASSWORD itself (into .env.state), so dropping the .env mint is safe" \
+    'grep -qE "state_set HARBOR_PASSWORD" "$REPO/scripts/05-kind-up.sh"'
 try "KinD still mints ARGOCD_ADMIN_PASSWORD itself (into .env.state, not .env)" \
     'grep -qE "state_set ARGOCD_ADMIN_PASSWORD" "$REPO/scripts/05-kind-up.sh"'
 
