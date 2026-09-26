@@ -147,9 +147,13 @@ else bad "content filter returned $by_content, want exactly 1 (0 = vacuous on do
 # shellcheck disable=SC2016  # single quotes are DELIBERATE: this greps for the LITERAL source
 # text of the probe. Expanding it here would search for this test's own (empty) variables and the
 # assertion would pass on any file, which is the vacuous-green this case exists to prevent.
-if grep -q 'grep -acw "${_want_mod}.${_want_ver}" "$tarball"' "$SCRIPT_DIR/14-selfbuilt-build.sh"; then
-  ok "the probe greps the SAVED TARBALL (no engine call, no cgroups)"
-else bad "the probe no longer greps \$tarball — the cgroup-v1-proof route is gone"; fi
+# The route (2026-09-26): FLATTEN the saved tarball with crane from STDIN (a path would be read as a
+# remote ref), then grep the flattened file. Still no engine call and no cgroups, and it now reads
+# docker's gzip layers, which the old raw-$tarball grep could not (a false `die` on docker 29).
+if grep -qF 'crane export - "$_flat" < "$tarball"' "$SCRIPT_DIR/14-selfbuilt-build.sh" \
+   && grep -qF 'grep -acw "${_want_mod}.${_want_ver}" "$_flat"' "$SCRIPT_DIR/14-selfbuilt-build.sh"; then
+  ok "the probe flattens the SAVED TARBALL with crane (stdin) and greps that (no engine call, no cgroups)"
+else bad "the probe no longer flattens \$tarball with 'crane export -' and greps the result — the route changed"; fi
 
 # The tar also carries manifest.json and the image config, whose history records the very
 # `RUN go get <mod>@<ver>` this script injects. Today the go_get runs in a DISCARDED builder stage

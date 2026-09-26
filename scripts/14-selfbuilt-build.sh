@@ -47,6 +47,7 @@ if [ -z "${NAMES// /}" ]; then
 fi
 
 require_cmd git "install git"
+require_cmd crane "run make deps (crane flattens the saved image to verify the go_get override)"
 ENGINE="$(container_engine)"
 _arch_checked=0   # B736: checked lazily, right before the first real build — the skip path needs no engine
 OUT_DIR="${BUNDLE_DIR}/selfbuilt"
@@ -316,11 +317,25 @@ for name in $NAMES; do
       #    retries, which is exactly wrong on an air-gap box.
       #
       # The tarball has none of those problems: no cgroups, no engine call, no symlink divergence,
-      # no temp copy, nothing to leak, and grep's three-way status stays intact. MEASURED on the real
-      # artifact, and identical for a docker-saved and a podman-saved tar:
-      #     correct v0.21.9 -> HITS=4 RC=0   |   v0.21.1 (substring) -> HITS=0 RC=1   |   absent -> 0/1
-      # (FOUR hits, not the two the in-image grep saw: the tar carries the layer plus its blob.)
-      _hits="$(grep -acw "${_want_mod}.${_want_ver}" "$tarball")" && _grc=0 || _grc=$?
+      # no temp copy, nothing to leak, and grep's three-way status stays intact.
+      #
+      # ⚠️ BUT NOT THE RAW TARBALL (corrected 2026-09-26). This used to grep "$tarball" directly and
+      # said the result was "identical for a docker-saved and a podman-saved tar". FALSE on docker
+      # with the containerd image store (the default on docker 29): `docker save` writes an OCI layout
+      # with GZIP layers, so a raw grep reads compressed bytes -> 0 hits -> `die` accusing the supply
+      # chain of a build that was fine. MEASURED twice: an M1 Mac (Colima, docker) and this repo's own
+      # Linux box (docker 29.8.1, containerd snapshotter): raw 0 hits, decompressed 2-3.
+      # So we FLATTEN first: `crane export - <out> < <tar>` reads either save format offline (ggcr
+      # also decodes zstd) and writes the image's final filesystem, so a file a later layer deletes
+      # is gone too. STDIN, not a path: `crane export <path>` treats the path as a REMOTE ref and goes
+      # to Docker Hub (measured, 404). MEASURED on the real podman kaniko.tar: 0.1 s, 4 hits.
+      _flat="$(mktemp "${TMPDIR:-/tmp}/selfbuilt-flat.XXXXXX")"
+      if crane export - "$_flat" < "$tarball" 2>/dev/null; then
+        _hits="$(grep -acw "${_want_mod}.${_want_ver}" "$_flat")" && _grc=0 || _grc=$?
+      else
+        _hits=""; _grc=2   # crane could not read it: a TOOLING failure, reported UNVERIFIED below
+      fi
+      rm -f "$_flat"
 
       # VACUITY GUARD. The tar also carries manifest.json and the image config, and the config's
       # history records the very `RUN go get <mod>@<ver>` line THIS SCRIPT injects. Today the go_get
