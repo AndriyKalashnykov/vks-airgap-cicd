@@ -287,9 +287,15 @@ else
     _crc=0; argocd_cert_carries_name "$ip" "$_N" || _crc=$?
     case "$_crc" in
       0) _pub="$_N" ;;
-      2) log_warn "could not read the certificate at ${ip}:443 — keeping $([ "${ARGOCD_SERVER:-}" = "$_N" ] && printf '%s' "$_N" || printf 'the IP')."
+      2) log_warn "could not read the certificate at ${ip}:443 — $([ "${ARGOCD_SERVER:-}" = "$_N" ] && printf 'keeping %s' "$_N" || printf 'publishing the IP')."
          [ "${ARGOCD_SERVER:-}" = "$_N" ] && _pub="$_N" ;;
-      *) log_warn "${_N} resolves to ${ip}, but the certificate served there does not carry it — publishing the IP." ;;
+      *) if [ "${ARGOCD_SERVER:-}" = "$_N" ] && [ -n "${ARGOCD_CA_FILE:-}" ]; then
+           die "the certificate at ${ip}:443 no longer carries ${_N}, and ARGOCD_CA_FILE is set.
+  Falling back to the IP would make every verifying call fail on the name, so nothing was changed.
+  The instance's certificate changed: check what it now carries with 'make fetch-argocd-ca', then set
+  ARGOCD_SERVER to one of those names (or unset ARGOCD_CA_FILE to go back to the IP with --insecure)."
+         fi
+         log_warn "${_N} resolves to ${ip}, but the certificate served there does not carry it — publishing the IP." ;;
     esac
   elif [ "${ARGOCD_SERVER:-}" = "$_N" ]; then
     # We published the name and it no longer resolves to the Service. The VIP moved, or the hosts
@@ -297,13 +303,14 @@ else
     # into a name failure, so STOP and say exactly what to change.
     _now_at="$(getent ahosts "$_N" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
     if [ -n "${ARGOCD_CA_FILE:-}" ]; then
-      die "${_N} resolves to '${_now_at:-nothing}', but svc/argocd-server is now at ${ip}.
-  ARGOCD_SERVER=${_N} and ARGOCD_CA_FILE are left as they are. Update the resolution, then re-run:
-    in /etc/hosts, DELETE the existing ${_N} line and ADD:   ${ip} ${_N}
-    make argocd-address"
+      die "${_N} resolves to '${_now_at:-nothing}' on this machine, not to svc/argocd-server's ${ip}.
+  ARGOCD_SERVER=${_N} and ARGOCD_CA_FILE are left as they are. Make the name resolve to ${ip} only:
+    $([ -n "$_now_at" ] && printf 'in /etc/hosts (or DNS), replace the %s entry with:   %s %s' "$_N" "$ip" "$_N" || printf 'add to /etc/hosts:   %s %s' "$ip" "$_N")
+  If the lab was re-cut, ARGOCD_CA_FILE is for the OLD instance too — fetch it again
+  (make argocd-ca-from-cluster, or make fetch-argocd-ca). Then:  make argocd-address"
     fi
-    log_warn "${_N} resolves to '${_now_at:-nothing}', not ${ip} — publishing the IP (ARGOCD_CA_FILE is unset)."
-    log_warn "  To go back to the name: in /etc/hosts, delete the ${_N} line, add '${ip} ${_N}', re-run this."
+    log_warn "${_N} resolves to '${_now_at:-nothing}' on this machine, not ${ip} — publishing the IP (ARGOCD_CA_FILE is unset)."
+    log_warn "  To go back to the name: make it resolve to ${ip} only ('${ip} ${_N}' in /etc/hosts), then re-run this."
   fi
   # B486(d): this arm is reached for TWO different reasons, and the log must say which. It used to
   # claim "(we wrote the previous value)" for a template placeholder too, which we never wrote.
@@ -319,6 +326,15 @@ else
   # overlay, not .env: it is something the system observed about itself, never an operator tunable.
   state_set ARGOCD_SERVER_SOURCE discovered 2>/dev/null || true
   log_info "wrote ARGOCD_SERVER=${_pub} to ./.env"
+  # The checks above dial directly; the argocd CLI and curl honour HTTPS_PROXY. A bare single-label
+  # name matches no NO_PROXY domain or CIDR entry, so behind a proxy it would be sent to the proxy.
+  if [ "$_pub" = "$_N" ] && [ -n "${HTTPS_PROXY:-${https_proxy:-}}" ]; then
+    case ",$(printf '%s' "${NO_PROXY:-${no_proxy:-}}" | tr -d ' ')," in
+      *",${_N},"*|*",*,"*) ;;
+      *) log_warn "HTTPS_PROXY is set and NO_PROXY does not list ${_N}: add it (NO_PROXY=...,${_N}),"
+         log_warn "  or the argocd CLI sends this name to the proxy, which cannot resolve it." ;;
+    esac
+  fi
 fi
 # What the operator will use: the value just written, or the granted one left alone.
 _shown="${_pub:-$_eff}"
@@ -327,8 +343,16 @@ echo
 echo "  ArgoCD:   https://${_shown}"
 # Verify when it can: a NAME plus a readable CA file. Otherwise say --insecure, and the block below
 # explains why.
-_verify=0
-if [ "$(ca_addr_kind "$_shown")" != ip ] && [ -s "${ARGOCD_CA_FILE:-}" ]; then _verify=1; fi
+# MEASURED, not inferred from a file existing: ca_verifies_endpoint (lib/tls.sh, the check
+# 70-configure-argocd.sh uses) dials the name with -verify_hostname against the anchor. A stale CA
+# (the default after a lab re-cut) or a CA for another instance returns non-zero -> --insecure.
+_verify=0; _vrc=5
+_caf="${ARGOCD_CA_FILE:-}"
+case "$_caf" in ''|/*) ;; *) _caf="${REPO_ROOT}/${_caf#./}" ;; esac   # relative = from the repo root, as make runs it
+if [ "$(ca_addr_kind "$_shown")" != ip ] && [ -n "$_caf" ]; then
+  ca_verifies_endpoint "$_shown" 443 "$_caf" && _vrc=0 || _vrc=$?
+  [ "$_vrc" = 0 ] && _verify=1
+fi
 if [ "$_verify" = 1 ]; then
   echo "  Log in:   argocd login \"\$ARGOCD_SERVER\" --username admin --server-crt \"\$ARGOCD_CA_FILE\""
 else
@@ -408,8 +432,14 @@ else
   # branch -- i.e. exactly the platform-issued case where "self-signed" is MOST likely to be false --
   # so asserting it flat here, while hedging it on the IP arm, had the hedge on the wrong one.
   if [ "$_verify" = 1 ]; then
-  echo "  Verified against ${ARGOCD_CA_FILE}: the name ${_shown} is in the certificate and that file is its anchor."
+  echo "  MEASURED: ${_shown} verifies against ${ARGOCD_CA_FILE} (chain AND name)."
   else
+  case "$_vrc" in
+    1) echo "  ⚠️  ARGOCD_CA_FILE (${ARGOCD_CA_FILE}) does NOT verify ${_shown}: it is not this instance's anchor"
+       echo "      (a re-cut lab regenerates it). Fetch it again: make argocd-ca-from-cluster, or make fetch-argocd-ca." ;;
+    3) echo "  ⚠️  ARGOCD_CA_FILE verifies the chain but not the name ${_shown}." ;;
+    2|4) echo "  ⚠️  could not complete a TLS check against ${_shown}:443 with ARGOCD_CA_FILE — nothing was verified." ;;
+  esac
   echo "  ⚠️  That address is a NAME, so --insecure above is about the ISSUER, not the address:"
   echo "      argocd-server's DEFAULT certificate is self-signed, and a matching SAN is necessary"
   echo "      but not sufficient — this machine must also trust the CA that issued it. If your"
