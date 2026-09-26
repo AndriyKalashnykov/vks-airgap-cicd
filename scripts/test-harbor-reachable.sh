@@ -59,7 +59,7 @@ else bad "...and it names the CAUSE" "it reported a failure without saying why";
 
 # GREEN: something actually answering must NOT be flagged. It has to be a TLS listener here -- with
 # HARBOR_INSECURE unset the gate probes https (harbor_scheme), so a plain-HTTP server answers 000 and is
-# CORRECTLY flagged (as a SCHEME mismatch, see the HARBOR_INSECURE cases below) (my first version of
+# CORRECTLY flagged (my first version of
 # this test used `python3 -m http.server` and read that correct behaviour as a false positive).
 # Any HTTP status proves it is serving: a 404 from a live Harbor is still a live Harbor, which is
 # why the gate judges on 000 rather than on 2xx.
@@ -73,25 +73,19 @@ else ok "a live TLS listener is NOT flagged"; fi
 
 # SCHEME (2026-09-26). The probe hard-coded https and was blind in the INSECURE leg: e2e-kind-both leg 2
 # printed "NOTHING is serving there" one line above "Harbor accepts admin (http 200)". It now probes
-# harbor_scheme, and on a miss tries the OTHER scheme once so a flag mismatch is named, not sent to DNS.
+# with harbor_scheme, so INSECURE mode against a plain-HTTP Harbor is serving and must not be flagged.
 runi() { PATH="$TMP/bin:$PATH" KUBECONFIG="$TMP/kc" SKIP_DOTENV=1 HARBOR_INSECURE="$1" HARBOR_URL="$2" \
          timeout 90 bash "$SCRIPT_DIR/24-lab-preflight.sh" 2>&1; }
-# stale INSECURE=1 against a TLS-only Harbor: a PROBLEM that names the flag, NOT the A record
-o="$(runi 1 127.0.0.1:18099)"
-if printf '%s' "$o" | grep -q 'which HARBOR_INSECURE=1 selects' && ! printf '%s' "$o" | grep -q 'NOTHING is serving there'
-then ok "HARBOR_INSECURE=1 vs a TLS-only Harbor -> names the scheme mismatch, not DNS"
-else bad "HARBOR_INSECURE=1 vs a TLS-only Harbor -> names the scheme mismatch, not DNS" "$(printf '%s' "$o" | grep -m2 -E 'PROBLEM|answers' || true)"; fi
 kill "$SRV" 2>/dev/null; SRV=""
 python3 -m http.server 18098 --bind 127.0.0.1 >/dev/null 2>&1 & SRV=$!
 for _ in $(seq 1 40); do (exec 3<>/dev/tcp/127.0.0.1/18098) 2>/dev/null && break; sleep 0.25; done
-# THE DEFECT: INSECURE mode + a plain-HTTP Harbor is SERVING and must not be flagged
 o="$(runi 1 127.0.0.1:18098)"
-if printf '%s' "$o" | grep -qE 'NOTHING is serving there|which HARBOR_INSECURE'; then bad "HARBOR_INSECURE=1 + a plain-HTTP Harbor is NOT flagged" "the insecure leg is blind again"
+if printf '%s' "$o" | grep -q 'NOTHING is serving there'; then bad "HARBOR_INSECURE=1 + a plain-HTTP Harbor is NOT flagged" "the insecure leg is blind again"
 else ok "HARBOR_INSECURE=1 + a plain-HTTP Harbor is NOT flagged (the insecure leg)"; fi
-# and the mirror image: secure mode against a plain-HTTP-only Harbor names the flag too
+# and the control: secure mode against the same plain-HTTP-only server IS flagged
 o="$(runi 0 127.0.0.1:18098)"
-if printf '%s' "$o" | grep -q 'which HARBOR_INSECURE=0 selects'; then ok "HARBOR_INSECURE=0 vs a plain-HTTP Harbor -> names the scheme mismatch"
-else bad "HARBOR_INSECURE=0 vs a plain-HTTP Harbor -> names the scheme mismatch" "$(printf '%s' "$o" | grep -m2 PROBLEM || true)"; fi
+if printf '%s' "$o" | grep -q 'NOTHING is serving there'; then ok "HARBOR_INSECURE=0 vs a plain-HTTP-only server -> flagged (control)"
+else bad "HARBOR_INSECURE=0 vs a plain-HTTP-only server -> flagged (control)" "the probe never fails, so the case above measures nothing"; fi
 kill "$SRV" 2>/dev/null; SRV=""
 
 # HARBOR_URL genuinely unset must not invent a problem -- create-from-nothing reaches here before
