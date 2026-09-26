@@ -10943,6 +10943,18 @@ ancestry guard fixes APP_COMMIT only. Fix direction: deploy by the sha tag (alre
 Harbor tag) or by digest, and keep the version for display. Needs its own design round: the `replacements`
 block in each kustomization and the verify predicate both key on the version tag.
 
+## 🔴 B745 — `make argocd-auth-check` fails after the password change scenario-1 §5 tells you to make (2026-09-26)
+
+Found by the B486 step-3 implementation round (source-read, not run on the lab). §5 runs `argocd
+account update-password`, then says **Expect:** `argocd-auth-check: OK`. But `argocd_admin_password`
+(lib/argocd.sh) reads `argocd-initial-admin-secret` FIRST, and nothing deletes that Secret (RULE
+ZERO-V's measured incident), so after the change the check authenticates with the OLD password and
+fails. The walker never runs `update-password` (it is interactive), which is why no walk caught it.
+The new *Verify TLS* block states this and points at the TLS line instead. **Done when:** §5's order
+or wording is true for a human (run the check before the change, or say the credential half needs
+`ARGOCD_ADMIN_PASSWORD` after it — and settle which one wins by reading the code, then measuring once
+on the lab).
+
 ## 🔴 B744 — 31-fetch-argocd-kubeconfig repoints the CURRENT CONTEXT of 30's kubeconfig (2026-09-26)
 
 Found by the B734 review, measured in both 2026-09-25/26 walk logs: `ARGOCD_KUBECONFIG` equals 30's
