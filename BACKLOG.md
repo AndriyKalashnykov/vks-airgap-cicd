@@ -8562,7 +8562,13 @@ being a different one. Pin BOTH regressions in `test-classify-kube-failure.sh`: 
 timestamp AND `401` as the thread-id, each with a real memcache body. Related: B544 (the truncation
 that makes this reachable at all).
 
-## B550 — 🟡 BLOCKED on B486; the Done-when is REFUTED (round 3) — ArgoCD is the only trust anchor absent from BOTH `env-validate` AND `ca_status_report`
+## B550 — 🟡 PARTLY UNBLOCKED by #1322 (was BLOCKED on B486); the Done-when is REFUTED (round 3) — ArgoCD is the only trust anchor absent from BOTH `env-validate` AND `ca_status_report`
+
+**2026-09-26 (late):** `make argocd-ca-from-cluster` (#1322) is the first production WRITER of
+`ARGOCD_CA_FILE` (Supervisor-only; written only if byte-identical to the served leaf), and #1324 makes
+`make argocd-address` publish the name `argocd-server` that anchor can verify. What still blocks this
+row: the name path has not been walked on the lab (B486), so a gate asserting the ArgoCD anchor would
+be asserting an unwalked flow.
 
 Two rounds, 2026-09-07, after I filed a finding that was itself wrong (see B551).
 
@@ -9579,7 +9585,7 @@ subshell form above, which bypasses `load_env`.
 A round was spent re-deriving a filed refutation. A handoff's task list is a CLAIM about the backlog
 and must be checked against it, not just against the code.
 
-## 🟡 B722 — (MOSTLY DONE 2026-09-26: #1312 + #1315) the REFUSED state arm still misinforms: its only remedy is a no-op LOOP, its cause is wrong, and its citation points at another stream
+## 🟡 B722 — (MOSTLY DONE 2026-09-26: #1312 + #1315 + #1319 + #1321; only the optional creds `INGRESS_LB_IP_OVERRIDE` remains) the REFUSED state arm still misinforms: its only remedy is a no-op LOOP, its cause is wrong, and its citation points at another stream
 
 Shipped in #1236: the refused arm no longer prescribes `make install-ingress`. **Four residuals from
 the same two rounds are NOT fixed**, all in `scripts/creds.sh`, all on the path a tenant hits when a
@@ -9639,6 +9645,12 @@ cluster) … The value exists on disk and is not in scope."* Port it, gated on `
   that acceptable. Built on branch `fix/b722-archive-on-write`.
 - **F8 (low):** the refused report renders `https://harbor.vks.local` for an unset `HARBOR_URL`, beside
   a line saying the endpoint cannot be named.
+
+**2026-09-26 (late) — F8 DONE (#1321):** an unset `HARBOR_URL` reads `<not set>` in `make creds`
+(`test-creds-show` asserts it and the absence of `harbor.vks.local`). **The `make state-stamp`
+residual below is MOOT:** the target was removed in #1319 (harmful on a real lab and on KinD), and the
+owner's checkout was unstamped in place. What remains is the optional `INGRESS_LB_IP_OVERRIDE` in creds
+for `istio-existing`.
 
 **2026-09-26 — the loop is fixed (#1315).** `state_set` archives a sink stamped for another cluster
 before it writes (keyed on `_VKS_STATE_MISMATCH` plus a re-read of the stamp) and starts a fresh,
@@ -10743,6 +10755,12 @@ add it to 25-vks-cluster-create.sh's export loop, `check-cluster-template-vars`,
 it is RED-proven that the default renders the same class as today.
 
 ## ✅ B740 — (DONE 2026-09-26, every W4 target passed on an 8 GB M1) KinD targets on macOS (owner decision 2026-09-26: KinD is IN scope on macOS)
+
+**2026-09-26 (late) — #1323:** the macOS refusal of the engine trust wiring now FAILS CLOSED in two
+more places: script 17 (`make engine-trust-check-rootless`) and `engine_trust_ca` itself, which would
+otherwise `sudo install` into the Mac host's `/etc/docker/certs.d` that the VM never reads. Building
+in-VM trust (Colima `~/.docker/certs.d` via `colima ssh`, podman-machine `certs.d`) was researched and
+not built: a trust-posture change with low value.
 
 **Measured facts.** Test Mac = Scaleway M1, **8 GB**, 8 CPU; podman machine (rootless, 2 GiB, Rosetta
 on); Colima 0.10.3 `default` profile present but stopped; kind 0.32.0. **Harbor v2.15.x publishes NO
