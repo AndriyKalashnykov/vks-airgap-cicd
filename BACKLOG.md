@@ -10643,6 +10643,37 @@ container on the kind network (no sudo; certifies a container).
 one lab-mutating box at a time; any Harbor on arm64 differs from the lab's amd64 2.15.x — a green run
 certifies the Mac's plumbing, not Harbor parity. Sneakernet/bundle on a Mac stay out (B735 item 11).
 
+**2026-09-26 — A3 socket half DONE:** `cpk_docker_socket` (lib/os.sh) mounts the VM's
+`/var/run/docker.sock` on macOS and checks that the daemon ANSWERS instead of a host `-S`. Linux is
+unchanged (rootful, rootless and DOCKER_HOST); `test-cpk-docker-socket.sh` has 5 cases, and both
+macOS cases were proven RED without the branch. Unit-tested only: the first real proof is W3's
+kind-up on Colima. **A3 trust half still open:** a `docker-vm` mode for `engine_trust_ca` (via
+`colima ssh`), which needs an adversary-docker idea round first.
+
+**2026-09-26 — measurements from the first W1/W2 pass:**
+
+- **A0 (memory), rendered from this repo's pins and matched EXACTLY against a live KinD cluster:**
+  pod memory REQUESTS total **3050Mi** for the full istio `e2e-kind`, **2154Mi** with traefik, and
+  **802Mi** for the infra subset (kind-up + Harbor + ArgoCD + traefik). 28 of 50 containers set no
+  request and most set no limit, so the limits sum (10.6 GiB) is NOT a ceiling. The only usage figure
+  is one idle snapshot: 3.68 GiB working set (`docker stats`). The build pods (kaniko/maven) declare
+  nothing, so **peak during a pipeline run is UNMEASURED**. That is the number to take before
+  stating a RAM requirement; the old "~12 GB" had no basis.
+- **B735 (2) argocd, answered:** the upstream **darwin/arm64** `argocd` v3.5.1 works against the
+  lab's `argocd-server v3.4.4+696352d56-vcf` (linux/amd64) through the tunnel. `version`, `app list`
+  (7 apps) and `cluster list` (2 clusters, Successful) all passed, authenticated the product's way
+  (`ARGOCD_AUTH_TOKEN` in the environment, minted by a `curl -K` session POST). No amd64 `argocd-vcf`
+  under Rosetta is needed for these. Mutating verbs (`app create`, `cluster add`) are UNTESTED.
+- **A3 trust half, REFUTED (adversary-docker, primary-sourced):** Colima copies `~/.docker/certs.d`
+  into the VM (`/etc/docker/certs.d` and `/etc/ssl/certs`) on every start (`certs.go` v0.10.3), and
+  Docker Desktop does the same per its Mac FAQ. So the right mechanism is a HOST-side user-owned file
+  plus a VM restart, not `colima ssh`. The copy is ADDITIVE: removal must also delete both VM-side
+  copies, or a stale trust anchor survives. No macOS product flow needs daemon trust: builds pull by
+  digest, pushes use crane, and kind-node trust is wired separately. So this only makes the two
+  PROOF targets runnable on a Mac. **Priority: low.** B735 (1), podman-VM trust, drops for the same
+  reason. `trust-harbor`/`engine-trust-check` already refuse on Darwin before `engine_mode`, which
+  is the safe state.
+
 **Done when:** the W4 targets pass on a >=16 GB Mac (or the infra subset on 8 GB, with a measured
 refusal for the rest), recorded as a README row with commit, date and each class's result.
 

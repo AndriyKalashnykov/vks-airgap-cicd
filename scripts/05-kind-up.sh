@@ -264,14 +264,7 @@ log_info "starting $CPK_CONTAINER ($CPK_IMAGE) — manages LB via the docker soc
 #
 # DOCKER_HOST is the authority (it is what the rootless setup exports); fall back to the rootful default.
 # We still mount it AT /var/run/docker.sock inside the container, because that is where CPK looks.
-CPK_HOST_SOCK="/var/run/docker.sock"
-case "${DOCKER_HOST:-}" in
-  unix://*) CPK_HOST_SOCK="${DOCKER_HOST#unix://}" ;;
-  "")       [ -S "${XDG_RUNTIME_DIR:-/nonexistent}/docker.sock" ] && CPK_HOST_SOCK="${XDG_RUNTIME_DIR}/docker.sock" ;;
-esac
-[ -S "$CPK_HOST_SOCK" ] || die "no docker socket at '$CPK_HOST_SOCK' (DOCKER_HOST='${DOCKER_HOST:-<unset>}').
-  cloud-provider-kind talks to the docker daemon through this socket; without it NO LoadBalancer gets an IP.
-  Rootless docker: it lives at \$XDG_RUNTIME_DIR/docker.sock — make sure DOCKER_HOST is exported."
+CPK_HOST_SOCK="$(cpk_docker_socket)" || exit 1
 log_info "cloud-provider-kind will use the docker socket at ${CPK_HOST_SOCK}"
 
 run docker run -d \
