@@ -561,6 +561,11 @@ harbor_auth_report() {
 # _harbor_serving_code — the reachability probe, ONCE. Extracted for the same reason
 # _harbor_auth_code and _harbor_ca_args were: the moment two copies drift, one of them judges a
 # different thing from the other. Prints an http code, or 000.
+# _harbor_serving_code [scheme] — probe with the scheme the rest of the flow will USE (harbor_scheme:
+# http iff HARBOR_INSECURE=1). It hard-coded https:// and so was blind in the INSECURE leg: measured
+# 2026-09-26, `e2e-kind-both` leg 2 printed "NOTHING is serving there" one line above "Harbor accepts
+# admin (http 200)". The same defect #668 fixed in _harbor_auth_code. An explicit scheme argument is
+# only for the report's one-shot mismatch diagnosis below.
 _harbor_serving_code() {
   # rc CAPTURED SEPARATELY, never `|| printf 000`: curl's -w ALREADY prints 000 on a refused
   # connection AND exits non-zero, so the `||` appends a second one and the caller compares
@@ -568,7 +573,7 @@ _harbor_serving_code() {
   # _harbor_auth_code this morning and re-introduced here by copying the wrong shape.
   local rc=0 code
   code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" \
-            "https://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null)" || rc=$?
+            "${1:-$(harbor_scheme)}://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null)" || rc=$?
   [ "$rc" = 0 ] || code=000
   case "${code:-}" in ''|*[!0-9]*) code=000 ;; esac
   printf '%s' "$code"
@@ -611,6 +616,19 @@ harbor_reachable_report() {
   # whether the connection produced any HTTP response at all. 000 means nothing answered.
   local code; code="$(_harbor_serving_code)"
   if [ "${code:-000}" = 000 ]; then
+    # ONE probe of the OTHER scheme, on the failure path only (never in harbor_reachable_state: that is
+    # the wait loop and the creds path, and a second probe would double their silent-case latency).
+    # If it answers, the fault is the HARBOR_INSECURE flag, not DNS -- say so, not "fix the A record".
+    local _mine _other _ocode
+    _mine="$(harbor_scheme)"; if [ "$_mine" = https ]; then _other=http; else _other=https; fi
+    _ocode="$(_harbor_serving_code "$_other")"
+    if [ "${_ocode:-000}" != 000 ]; then
+      printf '%sHARBOR_URL=%s answers over %s (http %s) but NOT over %s, which HARBOR_INSECURE=%s selects.\n' \
+        "$bad_p" "$HARBOR_URL" "$_other" "$_ocode" "$_mine" "${HARBOR_INSECURE:-0}" >&2
+      printf '%sSet HARBOR_INSECURE=%s to match this Harbor (every Harbor step uses the same scheme).\n' \
+        "$note_p" "$([ "$_other" = http ] && echo 1 || echo 0)" >&2
+      return 1
+    fi
     printf '%sHARBOR_URL=%s resolves to %s but NOTHING is serving there.\n' "$bad_p" "$HARBOR_URL" "$hip" >&2
     printf '%sA REINSTALLED Harbor gets a NEW LoadBalancer IP. Compare that address with what\n' "$note_p" >&2
     printf '%s  '\''make show-dns-records'\'' prints now, and update the A record if they differ.\n' "$note_p" >&2
