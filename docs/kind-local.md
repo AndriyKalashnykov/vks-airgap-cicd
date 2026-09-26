@@ -55,6 +55,15 @@ colima start --cpu 4 --memory 6 --disk 80 --vm-type vz --vz-rosetta --runtime do
 
 `--vz-rosetta` matters: Harbor publishes amd64 images only, and they run on the arm64 node under Rosetta.
 
+For the targets that create more than one kind cluster (`e2e-kind-cross-cluster`), raise the VM's inotify
+limit first. Colima ships `fs.inotify.max_user_instances=128`, and at that value the second extra
+cluster's control plane never started; at 512 it did (the value kind's known-issues page recommends).
+The setting lasts until the VM restarts:
+
+```bash
+colima ssh -- sudo sysctl -w fs.inotify.max_user_instances=512
+```
+
 **Reach the LoadBalancer IPs.** kind's LoadBalancer addresses (`172.18.x.x`) live inside the VM and are not
 routable from macOS. `docker-mac-net-connect` routes them over WireGuard, and it must run as root. On a
 headless Mac its `brew services` daemon could not find Colima (it runs as root with no console user),
