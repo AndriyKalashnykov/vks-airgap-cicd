@@ -69,3 +69,6 @@ up is in [KinD, on macOS](kind-local.md#on-macos-apple-silicon). The later rows 
 - Three failures found on the way were not macOS-specific and are fixed: the Harbor probe ignored
   `HARBOR_INSECURE` (#1298); the Istio attach test broke when `install-all` started installing an
   ingress (#1299); the cross-cluster test needed a Harbor address it never had (#1300).
+- The Mac run also showed the demo's git pushes offering the Gitea token to the macOS keychain
+  (`fatal: failed to store: -25308`, the keychain was locked). The scripts now use only their own
+  credential file (#1301).
