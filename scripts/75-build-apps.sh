@@ -122,8 +122,8 @@ build_app() {
   # crash-loops is LOST, and this script has no re-fire, so each lost app burned its full
   # BUILD_APPS_TIMEOUT_SECONDS (measured 2026-09-26: javawebapp, 900s). Checked once, lazily, so an
   # all-SKIP run never waits. Not ready -> stop now, with the logs, instead of 6 x 900s.
-  if [ -z "${EL_CHECKED:-}" ]; then
-    EL_CHECKED=1
+  if [ -z "${_el_checked:-}" ]; then
+    _el_checked=1
     log_info "waiting for the EventListener to be ready before the first push"
     local _elrc=0; el_wait_ready || _elrc=$?
     case "$_elrc" in
