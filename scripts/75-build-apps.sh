@@ -118,6 +118,20 @@ build_app() {
   before="$(kubectl -n "$CI_NAMESPACE" get pipelinerun -l "tekton.dev/pipeline=${app}-ci" \
               --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -1 || true)"
 
+  # The FIRST push waits until the EventListener can receive: a webhook delivered while it
+  # crash-loops is LOST, and this script has no re-fire, so each lost app burned its full
+  # BUILD_APPS_TIMEOUT_SECONDS (measured 2026-09-26: javawebapp, 900s). Checked once, lazily, so an
+  # all-SKIP run never waits. Not ready -> stop now, with the logs, instead of 6 x 900s.
+  if [ -z "${EL_CHECKED:-}" ]; then
+    EL_CHECKED=1
+    log_info "waiting for the EventListener to be ready before the first push"
+    local _elrc=0; el_wait_ready || _elrc=$?
+    case "$_elrc" in
+      0) : ;;
+      2) log_warn "EventListener readiness unknown: ${EL_WAIT_REASON} — pushing anyway" ;;
+      *) el_dump_evidence; die "the EventListener cannot receive webhooks: ${EL_WAIT_REASON}. A push now would be lost." ;;
+    esac
+  fi
   gitea_git_isolate "$d" "${GITCREDS}" "$GITEA_ADMIN_USER"   # ONLY our store file; see lib/os.sh
   git -C "$d" config user.email "build-apps@vks-airgap-cicd.local"
   git -C "$d" config user.name  "vks-airgap-cicd-build"
