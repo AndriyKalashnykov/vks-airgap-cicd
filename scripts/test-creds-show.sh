@@ -868,6 +868,13 @@ if printf '%s' "$out" | grep -qiE 'ARE PLACEHOLDERS|is a PLACEHOLDER|are a defau
 else
   bad "an EMPTY .env lost the original wording" "the fix rewrote an arm it was supposed to leave alone"
 fi
+# B722 F8: no INVENTED Harbor URL. With HARBOR_URL unset the row printed `https://harbor.vks.local`, a
+# name nothing publishes, beside a note that no Harbor address is configured. It must say <not set>.
+if printf '%s' "$out" | grep -qE 'Harbor \(registry\) +<not set>' && ! printf '%s' "$out" | grep -q 'harbor\.vks\.local'; then
+  ok "unset HARBOR_URL -> the Harbor row says <not set>, and no harbor.vks.local is invented"
+else
+  bad "unset HARBOR_URL -> Harbor row: $(printf '%s' "$out" | grep -m1 'Harbor (registry)')" "an invented URL next to 'no address configured'"
+fi
 if printf '%s' "$out" | grep -q 'env-populated: 0'; then
   ok "an EMPTY .env reports env-populated: 0"
 else
