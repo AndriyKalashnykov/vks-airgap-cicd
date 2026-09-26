@@ -40,6 +40,41 @@ installs **podman** and zero docker packages, and `make kind-up` then stops at `
 Install Docker from your distribution first, or run `make deps CONTAINER_ENGINE=docker`, which
 installs it together with its rootless prerequisites.
 
+## On macOS (Apple silicon)
+
+Measured on an 8 GB M1 (macOS 26.6.2): `e2e-kind` passes with traefik on a warm cluster, and with the
+default istio ingress on a cold one. Each run takes about 25 minutes, and the Colima VM peaks at
+about 4.4 GiB. KinD needs a Docker daemon, so on a Mac it runs in a
+[Colima](https://github.com/abiosoft/colima) VM:
+
+```bash
+brew install make colima docker chipmk/tap/docker-mac-net-connect
+podman machine stop 2>/dev/null   # the measured runs had it stopped: two VMs on 8 GB is untested
+colima start --cpu 4 --memory 6 --disk 80 --vm-type vz --vz-rosetta --runtime docker
+```
+
+`--vz-rosetta` matters: Harbor publishes amd64 images only, and they run on the arm64 node under Rosetta.
+
+**Reach the LoadBalancer IPs.** kind's LoadBalancer addresses (`172.18.x.x`) live inside the VM and are not
+routable from macOS. `docker-mac-net-connect` routes them over WireGuard, and it must run as root. On a
+headless Mac its `brew services` daemon could not find Colima (it runs as root with no console user),
+so start it with Colima's socket named explicitly:
+
+```bash
+sudo DOCKER_HOST="unix://$HOME/.colima/default/docker.sock" \
+  /opt/homebrew/opt/docker-mac-net-connect/bin/docker-mac-net-connect > /tmp/dmnc.log 2>&1 &
+```
+
+Then run it with `gmake` (Apple's `make` 3.81 is refused), building for the node's architecture:
+
+```bash
+CONTAINER_ENGINE=docker MIRROR_ARCH=arm64 gmake e2e-kind
+```
+
+Pass `MIRROR_ARCH=arm64` **per run; never put it in `.env`**. The platform guard compares images against
+`MIRROR_ARCH`, so with arm64 in `.env` a later lab run would build arm64 images, the guard would accept
+them, and they would overwrite the lab's amd64 tags.
+
 ## Run it
 
 ```bash
