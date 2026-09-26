@@ -51,6 +51,17 @@ echo "== explicit GITEA_IMAGE that IS a Harbor ref: the Harbor checks stay (the 
 out="$(run40 harbor.test/infra/gitea/gitea:1.27.2-rootless harbor.test)"
 if [ -s "$T/curl.calls" ]; then ok "a Harbor-ref image is still probed"; else bad "a Harbor-ref GITEA_IMAGE skipped the Harbor mirror check: $out"; fi
 
+echo "== another SPELLING of the same registry is still ours (a prefix match skipped these) =="
+out="$(run40 harbor.test:443/infra/gitea/gitea:1.27.2-rootless harbor.test)"
+if [ -s "$T/curl.calls" ]; then ok "host:443 in the image -> probed"; else bad "host:443 skipped the mirror check: $out"; fi
+out="$(run40 harbor.test/infra/gitea/gitea:1.27.2-rootless harbor.test/)"
+if [ -s "$T/curl.calls" ]; then ok "a trailing slash on HARBOR_URL -> probed"; else bad "trailing slash skipped the mirror check: $out"; fi
+
+echo "== a LOOKALIKE host is NOT ours, and the skip is SAID, not silent =="
+out="$(run40 harbor.test.evil/infra/gitea/gitea:1.27.2-rootless harbor.test)"
+if [ -s "$T/curl.calls" ]; then bad "probed Harbor for a lookalike registry"; else ok "harbor.test.evil is not harbor.test"; fi
+if printf '%s' "$out" | grep -q 'mirror check is SKIPPED (not a pass)'; then ok "the skip is announced"; else bad "the skip was silent: $out"; fi
+
 echo "== POSITIVE CONTROL: default image WITH a HARBOR_URL does probe Harbor =="
 out="$(run40 '' harbor.test)"
 if [ -s "$T/curl.calls" ]; then ok "the probe fires when the image comes from Harbor"; else bad "the probe never fired, so the two no-probe checks above measure nothing: $out"; fi

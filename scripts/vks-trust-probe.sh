@@ -34,6 +34,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/psa.sh
 . "${SCRIPT_DIR}/lib/psa.sh"
+# shellcheck source=scripts/lib/podimages.sh
+. "${SCRIPT_DIR}/lib/podimages.sh"
 load_env
 
 : "${KUBECONFIG:?set KUBECONFIG (or run: make vks-login) - this probe reads a cluster}"
@@ -104,11 +106,14 @@ if [ -z "$PROBE_IMAGE" ]; then
   for _ns in $(kubectl get ns -o jsonpath='{range .items[*]}{.metadata.name} {end}' 2>/dev/null); do
     kubectl -n "$_ns" get secret harbor-pull >/dev/null 2>&1 || continue
     _i="$(kubectl -n "$_ns" get pod -o jsonpath='{.items[0].spec.containers[0].image}' 2>/dev/null || true)"
-    case "$_i" in "${HARBOR_URL:-harbor}"*) PROBE_IMAGE="$_i"; _probe_src_ns="$_ns"; break ;; esac
+    # podimages_is_ours, not a bare prefix: `${HARBOR_URL}*` accepted `harbor.x.evil/...` and
+    # `10.0.0.50/...` for HARBOR_URL=10.0.0.5, and with HARBOR_URL unset ANY `harbor*` image.
+    [ -n "${HARBOR_URL:-}" ] && [ -n "$_i" ] || continue
+    if podimages_is_ours "$_i" "" "$HARBOR_URL"; then PROBE_IMAGE="$_i"; _probe_src_ns="$_ns"; break; fi
   done
 fi
 if [ -z "$PROBE_IMAGE" ]; then
-  echo "     SKIP - found no running workload using a ${HARBOR_URL:-harbor} image to probe with."
+  echo "     SKIP - found no running workload using a ${HARBOR_URL:-<HARBOR_URL unset>} image to probe with."
   exit 0
 fi
 echo "     image: ${PROBE_IMAGE}  (from namespace ${_probe_src_ns:-?})"
