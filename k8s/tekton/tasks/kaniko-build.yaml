@@ -236,5 +236,71 @@ spec:
         # failed javawebapp's pipeline exactly that way, AFTER the write-back had already succeeded.
         git add kustomization.yaml deployment.yaml
         git commit -m "ci: deploy ${APP} ${TAG} (${COMMIT})"
-        git push origin "HEAD:$(params.deploy-revision)"
+
+        # ⚠️ A REJECTED PUSH IS RETRIED, BUT NEVER BLINDLY (B742). Two runs for one app write back
+        # concurrently when Gitea delivers a push twice, when a push is re-fired, or when a developer
+        # pushes during a run; the later push was rejected non-fast-forward and the run went red.
+        # A plain `pull --rebase -X theirs` retry would make the LATER-FINISHING run win whatever it
+        # built — measured in review: a run holding an OLDER commit silently rolled APP_COMMIT back.
+        # So each retry first asks what the deploy repo already names, and yields to anything newer.
+        REV="$(params.deploy-revision)"
+        APPDIR="$(workspaces.source.path)/$(params.subdir)"
+        upstream_commit() {   # the APP_COMMIT the deploy repo's branch names now ("" if unreadable)
+          git show "origin/${REV}:deployment.yaml" 2>/dev/null \
+            | awk '/name: APP_COMMIT/ { getline; sub(/.*value:[ ]*/, ""); gsub(/[" ]/, ""); print; exit }'
+        }
+        tries=0 unshallowed=0
+        until git push origin "HEAD:${REV}"; do
+          tries=$(expr "$tries" + 1)
+          if [ "$tries" -gt 3 ]; then
+            echo "ERROR: the deploy push was rejected ${tries} times; giving up" >&2
+            exit 1
+          fi
+          git fetch -q origin "$REV"
+          up="$(upstream_commit || true)"
+          if [ -n "$up" ] && [ "$up" = "$COMMIT" ]; then
+            echo "already deployed: ${REV} names ${COMMIT} — nothing to push"
+            exit 0
+          fi
+          case "$up" in
+            ''|unknown) ;;   # the seeded placeholder or unreadable: ours is the only real value
+            *)
+              if [ "$unshallowed" = 0 ]; then
+                # ALL heads: git-clone.yaml's `--depth 1 -b` clone is single-branch, so a plain
+                # --unshallow fetches only that branch and misses a newer commit elsewhere, which
+                # would then read as "unresolvable" and be overwritten (caught by the test).
+                # ⚠️ FAIL CLOSED: if the app repo cannot be fetched we cannot tell whether ${up} is
+                # newer, and "unresolvable -> ours" would then roll a NEWER deploy back to ours on an
+                # ordinary Gitea blip (measured in review). Refuse instead; a re-run decides.
+                if git -C "$APPDIR" fetch -q --unshallow origin '+refs/heads/*:refs/remotes/origin/*' \
+                   || git -C "$APPDIR" fetch -q origin '+refs/heads/*:refs/remotes/origin/*'; then
+                  unshallowed=1
+                else
+                  echo "ERROR: cannot fetch the app repo, so cannot tell whether ${up} is newer than ${COMMIT} — refusing to overwrite" >&2
+                  exit 1
+                fi
+              fi
+              if git -C "$APPDIR" cat-file -e "${up}^{commit}" 2>/dev/null \
+                 && git -C "$APPDIR" merge-base --is-ancestor "$COMMIT" "$up"; then
+                echo "SUPERSEDED: ${REV} already names ${up}, which is newer than ${COMMIT} — not writing"
+                exit 0
+              fi
+              ;;   # older, diverged, or unresolvable (e.g. the app repo was reseeded): ours goes on top
+          esac
+          if ! git rebase -q -X theirs "origin/${REV}"; then
+            git rebase --abort || true
+            echo "ERROR: could not rebase the deploy update onto ${REV}" >&2
+            exit 1
+          fi
+          # -X theirs resolves a WHOLE conflicting hunk to ours, so a concurrent edit on a line
+          # adjacent to newTag/APP_COMMIT would be reverted silently. Allow only our two lines.
+          if ! git diff --numstat "origin/${REV}" HEAD | awk '
+               $3 != "kustomization.yaml" && $3 != "deployment.yaml" { bad = 1 }
+               $1 == "-" || $2 == "-" || $1 > 1 || $2 > 1 { bad = 1 }
+               END { exit bad }'; then
+            echo "ERROR: rebasing onto ${REV} would change more than newTag and APP_COMMIT:" >&2
+            git diff --stat "origin/${REV}" HEAD >&2 || true
+            exit 1
+          fi
+        done
         echo "pushed deploy update for tag ${TAG}"

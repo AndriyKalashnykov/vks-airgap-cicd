@@ -137,7 +137,11 @@ verify_app() {
     end=$((SECONDS + ${PIPELINERUN_WAIT_SECONDS:-120}))
     while [ "$SECONDS" -lt "$end" ]; do
       now="$(kubectl -n "$CI_NAMESPACE" get pipelineruns -l "$sel" -o name 2>/dev/null | sort || true)"
-      pr="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$now") | head -1)"
+      # The NEWEST-CREATED new run, not the alphabetically first: names end in a random suffix, and
+      # with a re-fire or a doubled delivery there are two — the one whose write-back yielded is
+      # not the one to judge (B742).
+      pr="$(kubectl -n "$CI_NAMESPACE" get pipelineruns -l "$sel" --sort-by=.metadata.creationTimestamp -o name 2>/dev/null \
+              | grep -Fx -f <(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$now") | sed '/^$/d') | tail -1 || true)"
       [ -n "$pr" ] && break
       sleep "$POLL_INTERVAL_SECONDS"
     done

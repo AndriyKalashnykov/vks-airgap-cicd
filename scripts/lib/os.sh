@@ -2196,6 +2196,21 @@ assert_run_sentinel() {
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/state.sh"
 
 # ---------------------------------------------------------------------------
+# short_sha_in <sha> <candidate>... — is <sha> one of the candidates? Both sides are `git rev-parse
+# --short` output, which is NOT a fixed length (the pod's git and the host's git may pick different
+# lengths), so a match is a prefix in EITHER direction. An empty <sha> never matches: an unreadable
+# deploy repo must not count as "our commit is deployed" (B742).
+short_sha_in() {
+  local want="$1" c; shift
+  [ -n "$want" ] || return 1
+  for c in "$@"; do
+    [ -n "$c" ] || continue
+    case "$want" in "$c"*) return 0 ;; esac
+    case "$c" in "$want"*) return 0 ;; esac
+  done
+  return 1
+}
+
 # el_wait_ready — wait until the Tekton EventListener can RECEIVE a Gitea webhook. Sets
 # EL_WAIT_REASON; returns 0 ready, 1 not ready (timed out / never created / credential refused),
 # 2 cannot tell (Forbidden: a tenant may not read pods).
