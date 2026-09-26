@@ -3122,3 +3122,31 @@ assert_tarball_platform() {
   [ "$got" = "$want" ] || die "${t} is ${got:-an unknown platform}, but the guest nodes need ${want} — pushing it would overwrite the tag they pull.
   Rebuild it on an ${want#linux/} engine (see B736), or set MIRROR_ARCH if the nodes really are ${got#linux/}."
 }
+
+# cpk_docker_socket — print the docker socket path to mount into cloud-provider-kind, or die.
+# The `-v <src>:/var/run/docker.sock` SOURCE is resolved by the DAEMON, not by this shell:
+#   * Linux, rootful: the daemon's socket is /var/run/docker.sock on this host.
+#   * Linux, rootless: $DOCKER_HOST (unix://...) or $XDG_RUNTIME_DIR/docker.sock -- a host path the
+#     rootless daemon can also see. (An empty dir would be created at a wrong path, and NO
+#     LoadBalancer would ever get an IP.)
+#   * macOS (Colima, Docker Desktop, ...): the daemon runs in a Linux VM, so the source must be the
+#     VM's /var/run/docker.sock. The Mac-side socket (~/.colima/<profile>/docker.sock) does not
+#     exist inside the VM. A `-S` test on the Mac proves nothing about the VM, so on macOS the check
+#     is that the daemon ANSWERS (B740 A3).
+cpk_docker_socket() {
+  local sock=/var/run/docker.sock
+  if [ "$(uname -s)" = Darwin ]; then
+    docker info >/dev/null 2>&1 || die "the docker daemon does not answer (docker info failed).
+  On macOS it runs in a VM: start it (colima start / Docker Desktop) and check 'docker context ls'."
+    printf '%s\n' "$sock"; return 0
+  fi
+  case "${DOCKER_HOST:-}" in
+    unix://*) sock="${DOCKER_HOST#unix://}" ;;
+    "")       if [ -S "${XDG_RUNTIME_DIR:-/nonexistent}/docker.sock" ]; then sock="${XDG_RUNTIME_DIR}/docker.sock"; fi ;;
+  esac
+  [ -S "$sock" ] || die "no docker socket at '$sock' (DOCKER_HOST='${DOCKER_HOST:-<unset>}').
+  cloud-provider-kind talks to the docker daemon through this socket; without it NO LoadBalancer gets an IP.
+  Rootless docker: it lives at \$XDG_RUNTIME_DIR/docker.sock -- make sure DOCKER_HOST is exported."
+  printf '%s\n' "$sock"
+}
+
