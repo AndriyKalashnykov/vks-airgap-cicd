@@ -68,7 +68,7 @@ ck "a relocated host (headlamp.other.tld) is named — the fix tracks host chang
 # ---- 4. B486: a published argocd-server line is named, and ONLY a line whose sole name it is goes ----
 export ARGOCD_SERVER=argocd-server
 out="$(_hosts_teardown_advice)"
-aline="$(grep -F 'argocd-server[[:space:]]' <<<"$out" || true)"
+aline="$(grep -A1 -F 'the ArgoCD line' <<<"$out" | tail -n +2 || true)"   # the line AFTER its heading
 ck "ARGOCD_SERVER=argocd-server -> an ArgoCD sed line is emitted" "$([ -n "$aline" ] && echo yes || echo no)" "yes"
 ascript="${aline#*sed -i \'}"; ascript="${ascript%%\' /etc/hosts*}"
 printf '127.0.0.1 localhost\n192.168.101.131 argocd-server\n10.0.0.1 argocd-server other\n' > "$T/h2"
