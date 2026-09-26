@@ -1061,53 +1061,52 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-24 — scenario-1 IS RUNNING on the 2026-09-17 cut; macOS jump-box port MERGED
+## ▶️ HANDOFF 2026-09-26 — Makefile targets verified on Linux AND macOS (offline + lab); Mac harness in-tree
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### State of the lab (MEASURED 2026-09-23/24 — re-measure, do not trust)
+### What landed (#1287, #1288)
 
-- The "PAUSED for a fresh lab cut" state is OVER. Scenario-1 was walked on that cut (2026-09-17) and
-  is live: guest cluster **cicd-gc3** in vSphere Namespace `cicd` (1 CP + 2 workers, v1.36.2,
-  `builtin-generic-v3.7.0`, every node `best-effort-small`), Gitea `192.168.101.135`, ingress
-  `192.168.101.136`, all six apps + Tekton + Istio + headlamp Running. ArgoCD is the Supervisor
-  Service in ns `lab`. None of this was recorded here until now (B737).
-- **The CP's "102–106% memory" is NOT pressure** — it is `kubectl top` dividing by ALLOCATABLE
-  (`--show-capacity` reads 76%). Evidence: 0 kernel OOM kills in the journal across all 7 boots
-  since creation (kernel log complete per boot; search positive-controlled), 0 kubelet evictions,
-  cadvisor `container_oom_events_total` 0/72, kubepods `failcnt` 0; control cluster `lab-gc1`
-  (same class, half the pods) reads 104%. The margin that matters is the kubepods cgroup: limit
-  2933Mi (= 3910Mi capacity − 977Mi systemReserved), usage 2828Mi of which 1177Mi is reclaimable
-  cache, rss 1608Mi. Resize is OPTIONAL and was NOT done (a 1-CP rollout has a no-quorum window).
-  Details + how to watch it: B737.
-- All CP container restarts are `Unknown exit=255` at the lab restarts, not OOMs.
+- README **Tested platforms**: offline gates via `make platform-report` on Ubuntu 24.04.5 x86_64 and
+  macOS 26.6.2 arm64, plus **lab targets by class** on both OSes at `0440796` — Linux R 28/28, I 32/34;
+  macOS (via tunnel) R 28/28, I 30/34. Every failure is a refusal by design, named in the README.
+  Evidence: `~/walk-evidence/platform-*` and `~/walk-evidence/from-mac/` (0700).
+- Scenario-1 Step 1 / scenario-2 0b: per-OS blocks (Linux `make`, macOS `gmake` + `engine-check`
+  for Rosetta); `walk-doc.sh` runs each twin only on its OS (`test-walk-doc-os-blocks.sh`).
+- `make deps` on macOS puts a NEW podman machine on Rosetta via a drop-in (`lib/rosetta.sh`).
+- `scripts/mac-lab-tunnel.sh up|status|down` — how a macOS box reaches this lab (Mac cannot reach
+  udesk; per-IP `ssh -R` + pf rdr for ports < 1024). Needs `MAC_TUNNEL_HOST=user@mac`.
+- `show-dns-records` now reports an expired Supervisor login instead of "no LoadBalancer address".
 
-### macOS jump box — MERGED (#1283 → `8e862c2`), B736 closed by it
+### State of the lab and the Mac (MEASURED 2026-09-26 — re-measure, do not trust)
 
-MEASURED on a rented Apple-silicon Mac (podman 6.1.2) against cicd-gc3: scenario-1 Steps 2-7, then
-`BUILD_EMULATE=1 make install-all` (rc=0, 25 min) and `make verify` (rc=0, all six apps). It needs
-Rosetta for the podman machine (QEMU aborts the .NET builder; engine-check says how). The Mac and its
-tunnels were torn down; a re-test needs a new Mac plus `ssh -R` tunnels to .128/.130/.131/.134-.136
-and vcsa. Open residuals are listed in B735.
+- Lab: cicd-gc3 live, `verify` end to end for every app from Linux AFTER the Mac's builds replaced the
+  shared Harbor tags. The Supervisor login was renewed 2026-09-25 (`make creds-renew`, one attempt).
+- The I run MIGRATED `.env`: `KUBECONFIG`/`VKS_CONTEXT`/`VKS_AUTH_METHOD`/`ARGOCD_SERVER` now resolve
+  from the stamped `.env.state` (`use-guest-kubeconfig`/`state-stamp`); `load_env` confirms the values.
+  Pre-run copies: `~/walk-evidence/platform-linux-I/before/`.
+- Scaleway Mac `m1@51.159.120.46` (M1, 8 GB, passwordless sudo): repo at `main`, toolchain + an 8.2 GB
+  `bundle/` (public images). Lab `.env`/`secrets/`, Harbor auth and `~/.config/vcf` were WIPED; tunnel
+  DOWN. A re-run must re-seed (`.env`, `.env.state`, `secrets/` incl. `vcenter-ca.pem`, paths rewritten).
 
 ### 🔴 DISTRUST FIRST
 
 | instrument | what it did |
 |---|---|
-| **`kubectl top node` %** | divides by ALLOCATABLE: 100%+ is the baseline for `best-effort-small` here, not pressure. |
-| **`journalctl -k` without `-b`** | reads the CURRENT boot only — a "0 OOM" from it covers hours, not the node's life. |
-| **cadvisor text parsed by field position** | some series carry a timestamp and some do not; `$(NF-1)` read a limit as 0. Parse by name. |
-| **Apple `/usr/bin/make` 3.81** | REFUSED at parse time since #1283 (`Makefile:89-91`, rc=2 measured on the Mac 2026-09-25; pinned by `test-make-version-guard.sh`). There is no 3.81 green to distrust any more — use `gmake`. |
-| **a backgrounded `cmd >log; echo rc=$?`** | the notification's exit code is the echo's. Read the log's verdict line. |
+| **`secrets/.env.make` / `.env.state.make`** | GENERATED from `.env` at every make parse — a teardown that deletes only `.env` leaves 23 credential lines behind (measured on the Mac). |
+| **`make --trace` on a measured run** | rides MAKEFLAGS into nested makes and changed a test's captured stdout (it FAILED). platform-report counts in a separate `-n` dry run. |
+| **`podman machine list --format '{{.Name}}'`** | prints the DEFAULT machine with a trailing `*`; never pass it raw to `inspect`. |
+| **a pipe into a backgrounded launcher** | a backgrounded child (ssh -N) holding the pipe makes the caller hang; send it to a log. |
+| **Apple `/usr/bin/make` 3.81** | REFUSED at parse time (`Makefile:89-91`; `test-make-version-guard.sh`). Use `gmake`. |
 
 ### NOT done — next work, ranked
 
-1. **B735 residuals** (engine trust inside the podman VM, argocd via Rosetta, walk-doc on a macOS
-   row, the brew list written 3x) and **B739** (values the tools write into `.env` go stale). B738 is
-   done: repo version pins follow `.env.example` (load_env), lab pins stay in `.env`.
-2. **B725** (🔴 HIGH) — `02-env.sh:90` fabricates `HARBOR_PASSWORD`; `env-validate` goes green on it.
-3. **B722**, **B723** (now 9 `.env.state.stale-*` files), **B734**, then the tier-3 list.
+1. **B486** — `ARGOCD_SERVER` published as an IP; `fetch-argocd-ca` refuses on it (seen on both OSes).
+2. **B735 residuals** — `trust-harbor`/`engine-trust-check` Linux-only on macOS; walk-doc on a macOS
+   row; argocd via Rosetta. **B739** (values the tools write into `.env` go stale).
+3. **B725** (🔴 HIGH) — fabricated `HARBOR_PASSWORD` (three sites now, incl. `04-install-harbor-service.sh`).
+4. **B722**, **B723**, **B734**, then the tier-3 list.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 

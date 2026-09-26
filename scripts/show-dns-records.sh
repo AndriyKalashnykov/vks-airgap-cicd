@@ -73,7 +73,16 @@ _collect() {                 # prints the rows; `n` = services FOUND, `nrec` = r
   # including one addressed by IP, which needs no record. Counting only records would spin.
   # All three reset here because _collect is called repeatedly by that loop.
   n=0; nrec=0; IPROWS=""
-  hns="$(kubectl --kubeconfig "$KC" get svc -A -o json 2>/dev/null \
+  # A FAILED list is not an EMPTY list. This used to be `2>/dev/null ... || true`, so an expired
+  # Supervisor token (Unauthorized) became zero rows, and the operator was told "no LoadBalancer
+  # address -- wait for it" and, with DNS_RECORDS_WAIT_SECONDS=900 as that message suggests, waited
+  # the full 15 minutes for an address that no amount of waiting could show. MEASURED 2026-09-25 on
+  # a two-day-old supervisor.kubeconfig. Record the failure; the caller classifies it and stops.
+  local raw
+  if ! raw="$(kubectl --kubeconfig "$KC" get svc -A -o json --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-15s}" 2>"$KERR")"; then
+    KFAIL=1; return 0
+  fi
+  hns="$(printf '%s' "$raw" \
         | jq -r '.items[]?|select(.spec.type=="LoadBalancer")|select(.metadata.name|test("harbor-nginx|argocd-server"))|"\(.metadata.namespace)\t\(.metadata.name)\t\(.status.loadBalancer.ingress[0].ip // "")"' 2>/dev/null || true)"
   while IFS=$'\t' read -r ns nm ip; do
     [ -n "${nm:-}" ] && [ -n "${ip:-}" ] || continue
@@ -100,12 +109,42 @@ _collect() {                 # prints the rows; `n` = services FOUND, `nrec` = r
 # check-env-coverage correctly reads that shape as an operator-settable variable, and these are
 # internal. (Do not spell the shape out in this comment either -- the gate scans comments too, and
 # that is how this comment's first draft kept the gate RED.) _collect re-sets all three per call.
-n=0; nrec=0; IPROWS=""
+n=0; nrec=0; IPROWS=""; KFAIL=0
+KERR="$(mktemp)"; trap 'rm -f "$KERR"' EXIT
+
+# Stop on a failed list -- every class here is a reason waiting cannot help. One arm per class
+# classify_kube_failure emits (check-classifier-consumers enforces that).
+_kube_die() {
+  local srv; srv="$(kubectl config view --kubeconfig "$KC" --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
+  srv="${srv:-the Supervisor}"
+  case "$(classify_kube_failure "$KERR")" in
+    UNAUTHORIZED)        die "${srv} REJECTED the Supervisor kubeconfig ${KC} -- its login expired. This is NOT a missing
+  LoadBalancer address, and waiting will not help. Log in again, then re-run this:  make vks-login" ;;
+    FORBIDDEN)           die "authenticated to ${srv}, but this identity may not list Services across namespaces.
+  That is an RBAC grant, not an expired login. Ask your platform team for read access to the Harbor
+  and ArgoCD Supervisor Service namespaces." ;;
+    STALE_CA)            die "the CA in ${KC} does not match ${srv}. The server ANSWERED -- this is not a network
+  fault. Re-export the kubeconfig from the Supervisor that is running:  make vks-login" ;;
+    NO_KUBE_TARGET)      die "kubectl had NO TARGET for ${KC} -- it fell back to localhost:8080. Nothing was dialled.
+  Fix it:  make vks-login" ;;
+    KUBECONFIG_UNUSABLE) die "${KC} names something that is missing or unreadable, so nothing was dialled:
+  $(head -c 300 "$KERR")
+  Re-create it:  make vks-login" ;;
+    PLAINTEXT)           die "${srv} is not speaking TLS on that port -- check the scheme and port in ${KC}." ;;
+    UNREACHABLE)         die "cannot reach ${srv} within ${KUBECTL_REQUEST_TIMEOUT:-15s}. This is NOT evidence the login is stale.
+  Is the lab up, and routable from this jump box?" ;;
+    *)                   die "listing Services on ${srv} failed, with an error this script does not classify:
+  $(head -c 300 "$KERR")" ;;
+  esac
+}
+
 _collect
+[ "$KFAIL" -eq 0 ] || _kube_die
 while [ "$n" -eq 0 ] && [ "$SECONDS" -lt "$_end" ]; do
   log_info "no LoadBalancer address yet — ${SECONDS}s of ${WAIT}s elapsed, retrying in ${INTERVAL}s"
   sleep "$INTERVAL"
   _collect
+  [ "$KFAIL" -eq 0 ] || _kube_die
 done
 
 [ "$n" -gt 0 ] || die "no Harbor/ArgoCD LoadBalancer address on this cluster — there is nothing to create.
