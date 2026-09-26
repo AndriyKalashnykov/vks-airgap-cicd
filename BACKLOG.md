@@ -9579,7 +9579,7 @@ cluster) … The value exists on disk and is not in scope."* Port it, gated on `
 **Done when:** a refused report names the real cause, cites nothing on another stream, names
 `INGRESS_LB_IP_OVERRIDE`, and prescribes no command that cannot change it.
 
-## 🔴 B723 — the archive is a WRITE-ONLY GRAVEYARD: 8 sinks hold 0600 passwords and nothing reads or prunes them
+## ✅ B723 — (DONE 2026-09-26) the archive is a WRITE-ONLY GRAVEYARD: 8 sinks hold 0600 passwords and nothing reads or prunes them
 
 `state_archive` is faithful — `mv`, never `rm` (and #1236 closed the one path that still `rm`'d). The
 missing half is **restore**. MEASURED on this box: **8** `.env.state.stale-*` files, oldest
@@ -9603,6 +9603,13 @@ an explicit selection swaps one back (archiving the current sink first, so the s
 ⚠️ Reporter first, deleter never-first (B704/B707 discipline). ⚠️ Do NOT solve this by splitting the
 sink per cluster — refuted: it makes B570 (open) materially worse, a four-way precedence no test
 asserts, and it re-derives `state_claim_kind`, which already exists.
+
+**Done 2026-09-26.** `make state-archives` (read-only, file-only, tenant-safe) and `make state-restore
+ARCHIVE=<name>` (archives the current sink first, prints the undo, refuses paths/temp/symlinks/files you
+do not own, cksum-checks the swap). A bug found on the way: two archives in the same second overwrote
+each other — `state_archive` now adds a `-N` suffix (RED-proven in `test-state-archives.sh`, 15 checks).
+Run on this box it listed 11 archives, 2 of them stamped. **Pruning is deliberately NOT built**
+(reporter first, deleter never-first) — that stays open as its own decision.
 
 ## 🟡 B724 — two offline tests are red on `main`, and one is green in CI and red on every box that has operator state
 

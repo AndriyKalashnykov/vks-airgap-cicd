@@ -427,10 +427,11 @@ and `make state-migrate` moves it). Nothing in this repo ever `rm`s it: a file i
 alone, and one it did write is **archived** under `.env.state.stale-<timestamp>`, because it may hold the
 only copy of a cluster's generated passwords.
 
-> ⚠️ **There is no restore command yet.** If an overlay for a cluster you still use gets archived, its
-> values are on disk in `.env.state.stale-*` but nothing reads them back — and `INGRESS_LB_IP` and
-> `INGRESS_CONTROLLER` have **no discovery path** (only the installer writes them), so they cannot be
-> re-derived. Keep the archive until you have re-run the install.
+> **To see and restore archives:** `make state-archives` lists each one with the cluster it was written
+> for and the NAMES of the keys it holds (never a value); `make state-restore ARCHIVE=<name>` puts one
+> back, archiving the current overlay first and printing the command that undoes it. This matters
+> because `INGRESS_LB_IP` and `INGRESS_CONTROLLER` have **no discovery path** (only the installer
+> writes them), so an archive may be their only copy.
 >
 > **Do not delete it again later.** On VKS `make install-gitea` (inside `make platform`)
 > *writes* the state overlay (`.env.state`) to publish the Gitea **LoadBalancer** address it just discovered

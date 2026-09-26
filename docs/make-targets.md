@@ -54,6 +54,7 @@ coverage, which is why the gap grew unnoticed.
 | Prereqs | `deps-mise` / `deps-prereqs` | The two halves of `make deps` — the mise toolchain, and the OS packages + engine. Re-run one when only that half failed |
 | Prereqs | `install-vcf-cli` / `install-vcf-plugins` / `install-argocd-vcf` | The three pieces of `make install-vcf-clis`, when you only need one |
 | Env | `state-stamp` | Stamp the state overlay with the cluster it belongs to (`make state-show` says whose it is) |
+| Env | `state-archives` / `state-restore` | List the archived state overlays (whose cluster, which key NAMES — never a value) · put one back with `ARCHIVE=<name>`; the current overlay is archived first and the undo is printed |
 | Env | `check-ports` | Fail early if the local app-dev port is already taken, instead of a confusing bind error |
 | Platform | `install-gitea` / `install-tekton` / `seed-gitea` / `configure-tekton` | The steps inside `make platform` — re-run one after a partial failure |
 | GitOps | `configure-argocd` | The step inside `make gitops` that writes the `Application` |
