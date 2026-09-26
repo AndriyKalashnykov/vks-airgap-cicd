@@ -1485,7 +1485,12 @@ case "$_prov" in
                 # right one and push RBAC is not the question.
                 # (the re-check register moved under "Nothing here is auth-tested.", 2026-09-15)
               else
-                printf '    values below : PLACEHOLDERS from .env.example — nothing is installed yet\n'
+                # ⚠️ NO WORLD-CLAIM (B722 F3). This arm said "— nothing is installed yet", which the
+                # 2026-08-20 cleanup removed from every OTHER arm (test-creds-show.sh records it as gone
+                # everywhere): the command knows where the values came FROM, never whether anything is
+                # installed. It was false on a REFUSED overlay, which proves an installer ran for SOME
+                # cluster (measured 2026-09-26, adversary a11e381a).
+                printf '    values below : PLACEHOLDERS from .env.example\n'
                 if [ -z "${HARBOR_URL:-}" ]; then _rc_in_context=1; fi   # nothing to re-check unless Harbor is set (it can be exported, not in .env)
               fi ;;
 esac

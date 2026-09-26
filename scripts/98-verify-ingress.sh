@@ -56,7 +56,7 @@ if [ -z "${INGRESS_LB_IP:-}" ]; then
   log_error "  2. a scenario walk SKIPPED the install because 'make istio-preflight' was"
   log_error "     inconclusive about this cluster -> read that output; do NOT just pick a branch"
   log_error "  3. the state overlay was REFUSED (stamped for a different cluster) -> see the state"
-  log_error "     ERROR above, and 'make state-show'. The value exists on disk and is not in scope."
+  log_error "     WARN above, and 'make state-show'. The value exists on disk and is not in scope."
   exit 1
 fi
 : "${GITEA_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
