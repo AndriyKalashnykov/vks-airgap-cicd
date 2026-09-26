@@ -172,6 +172,10 @@ engine_certs_d_dir() {
 # --cert-dir per command, which is why podman is sudo-free by construction.
 engine_trust_ca() {
   local eng="${1:?}" reg="${2:?}" ca="${3:-}" mode dir
+  # macOS: the engine runs inside a VM, and Colima's dockerd is rootful there, so engine_mode would say
+  # docker-rootful and this would SUDO-install into the MAC's /etc/docker/certs.d -- a CA nothing reads.
+  # Every caller refuses on macOS first; this makes the function fail closed for any future caller.
+  if [ "$(os_id)" = macos ]; then log_error "engine_trust_ca: not supported on macOS (the engine's trust store is inside its VM)"; return 1; fi
   mode="$(engine_mode "$eng")"
   if [ "$mode" = podman ]; then
     printf 'podman --cert-dir (per-command, no install)'
