@@ -179,13 +179,10 @@ log_info "install issued for ${SVC_ID}"
 # B725 third site: H_ADMIN is the password WE SENT. It is Harbor's password only if OUR request
 # created the service; for one that already existed it authenticates against nothing, and publishing
 # it would be the same fabrication 02-env.sh no longer does.
-if [ -z "${HARBOR_PASSWORD:-}" ]; then
-  if [ "${VC_SS_OUTCOME:-}" = installed ]; then
-    state_set HARBOR_PASSWORD "$H_ADMIN"
-  else
-    log_warn "HARBOR_PASSWORD NOT published: ${SVC_ID} was ${VC_SS_OUTCOME:-of unknown origin}, so the password"
-    log_warn "  this run sent may not be Harbor's. Read the live one: make harbor-admin-password"
-  fi
+[ -n "${HARBOR_PASSWORD:-}" ] || [ "${VC_SS_OUTCOME:-}" != installed ] || state_set HARBOR_PASSWORD "$H_ADMIN"
+if [ -z "${HARBOR_PASSWORD:-}" ] && [ "${VC_SS_OUTCOME:-}" != installed ]; then
+  log_warn "HARBOR_PASSWORD NOT published: ${SVC_ID} was ${VC_SS_OUTCOME:-of unknown origin}, so the password"
+  log_warn "  this run sent may not be Harbor's. Read the live one: make harbor-admin-password"
 fi
 log_info "published HARBOR_USERNAME/HARBOR_PASSWORD to the state overlay (only the ones not already set, and the password only for a Harbor this run installed)"
 # `make harbor-service-status` DOES NOT EXIST — this line named it for months and nobody ran it.

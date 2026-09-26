@@ -34,7 +34,9 @@ SRC="${SCRIPT_DIR}/04-install-harbor-service.sh"
 
 # 1. STRUCTURAL: the two publishes must be guarded, and the guard must be the only-if-unset shape.
 for k in HARBOR_USERNAME HARBOR_PASSWORD; do
-  if grep -qE "^\[ -n \"\\\$\{${k}:-\}\" \] \|\| state_set ${k} " "$SRC"; then
+  # HARBOR_PASSWORD may carry ONE extra, STRICTER clause (B725): publish only if this run INSTALLED
+  # Harbor. It is still only-if-unset; it just also refuses to publish a password nothing honours.
+  if grep -qE "^\[ -n \"\\\$\{${k}:-\}\" \] \|\| (\[ \"\\\$\{VC_SS_OUTCOME:-\}\" != installed \] \|\| )?state_set ${k} " "$SRC"; then
     ok "04 publishes ${k} only-if-unset"
   else
     bad "04 publishes ${k} only-if-unset" "found: $(grep -n "state_set ${k}" "$SRC" | head -1)"

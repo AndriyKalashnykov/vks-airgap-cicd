@@ -62,8 +62,8 @@ check "CONTROL: a retry that then succeeds is still OURS" \
 
 # 04 must key the publish on the outcome, not on the return code. Structural, because running 04
 # needs a vCenter; if this line moves, the gate above no longer protects the password.
-if grep -qE 'if \[ "\$\{VC_SS_OUTCOME:-\}" = installed \]; then' scripts/04-install-harbor-service.sh \
-   && grep -q 'state_set HARBOR_PASSWORD' <<< "$(grep -A2 'VC_SS_OUTCOME:-}" = installed' scripts/04-install-harbor-service.sh)"; then
+# shellcheck disable=SC2016  # a LITERAL source line to find; nothing should expand
+if grep -qF '|| [ "${VC_SS_OUTCOME:-}" != installed ] || state_set HARBOR_PASSWORD' scripts/04-install-harbor-service.sh; then
   ok "04 publishes HARBOR_PASSWORD only when VC_SS_OUTCOME=installed"
 else
   bad "04 no longer gates the HARBOR_PASSWORD publish on VC_SS_OUTCOME=installed (B725)"
