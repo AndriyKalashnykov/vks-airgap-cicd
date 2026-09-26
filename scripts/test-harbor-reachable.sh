@@ -57,8 +57,9 @@ else bad "resolvable + dead -> PROBLEM" "the gate did not fire"; fi
 if printf '%s' "$o" | grep -q 'REINSTALLED Harbor gets a NEW LoadBalancer IP'; then ok "...and it names the CAUSE"
 else bad "...and it names the CAUSE" "it reported a failure without saying why"; fi
 
-# GREEN: something actually answering must NOT be flagged. It has to be a TLS listener -- the gate
-# probes https, so a plain-HTTP server answers 000 and is CORRECTLY flagged (my first version of
+# GREEN: something actually answering must NOT be flagged. It has to be a TLS listener here -- with
+# HARBOR_INSECURE unset the gate probes https (harbor_scheme), so a plain-HTTP server answers 000 and is
+# CORRECTLY flagged (my first version of
 # this test used `python3 -m http.server` and read that correct behaviour as a false positive).
 # Any HTTP status proves it is serving: a 404 from a live Harbor is still a live Harbor, which is
 # why the gate judges on 000 rather than on 2xx.
@@ -69,6 +70,23 @@ for _ in $(seq 1 40); do (exec 3<>/dev/tcp/127.0.0.1/18099) 2>/dev/null && break
 o="$(run 127.0.0.1:18099)"
 if printf '%s' "$o" | grep -q 'NOTHING is serving there'; then bad "a live TLS listener is NOT flagged" "false positive"
 else ok "a live TLS listener is NOT flagged"; fi
+
+# SCHEME (2026-09-26). The probe hard-coded https and was blind in the INSECURE leg: e2e-kind-both leg 2
+# printed "NOTHING is serving there" one line above "Harbor accepts admin (http 200)". It now probes
+# with harbor_scheme, so INSECURE mode against a plain-HTTP Harbor is serving and must not be flagged.
+runi() { PATH="$TMP/bin:$PATH" KUBECONFIG="$TMP/kc" SKIP_DOTENV=1 HARBOR_INSECURE="$1" HARBOR_URL="$2" \
+         timeout 90 bash "$SCRIPT_DIR/24-lab-preflight.sh" 2>&1; }
+kill "$SRV" 2>/dev/null; SRV=""
+python3 -m http.server 18098 --bind 127.0.0.1 >/dev/null 2>&1 & SRV=$!
+for _ in $(seq 1 40); do (exec 3<>/dev/tcp/127.0.0.1/18098) 2>/dev/null && break; sleep 0.25; done
+o="$(runi 1 127.0.0.1:18098)"
+if printf '%s' "$o" | grep -q 'NOTHING is serving there'; then bad "HARBOR_INSECURE=1 + a plain-HTTP Harbor is NOT flagged" "the insecure leg is blind again"
+else ok "HARBOR_INSECURE=1 + a plain-HTTP Harbor is NOT flagged (the insecure leg)"; fi
+# and the control: secure mode against the same plain-HTTP-only server IS flagged
+o="$(runi 0 127.0.0.1:18098)"
+if printf '%s' "$o" | grep -q 'NOTHING is serving there'; then ok "HARBOR_INSECURE=0 vs a plain-HTTP-only server -> flagged (control)"
+else bad "HARBOR_INSECURE=0 vs a plain-HTTP-only server -> flagged (control)" "the probe never fails, so the case above measures nothing"; fi
+kill "$SRV" 2>/dev/null; SRV=""
 
 # HARBOR_URL genuinely unset must not invent a problem -- create-from-nothing reaches here before
 # Harbor exists, and .env.example ships it COMMENTED (`# HARBOR_URL=<SET-IN-.env>`) for that reason.

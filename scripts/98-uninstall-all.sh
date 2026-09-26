@@ -259,8 +259,8 @@ note "Delete them in the Harbor UI (simplest), or with a scoped API call you hav
 # deleted. `${HARBOR_URL:-<harbor>}` carried the same defect on the same line.
 note "  curl gives -u a USERNAME and PROMPTS for the password. Do NOT append ':password' —"
 note "  that would put your Harbor admin credential in ps output and in your shell history."
-note "  curl -u '<admin-username>' -X DELETE 'https://${HARBOR_URL:-<harbor-host>}/api/v2.0/projects/${HARBOR_INFRA_PROJECT}'"
-note "  curl -u '<admin-username>' -X DELETE 'https://${HARBOR_URL:-<harbor-host>}/api/v2.0/projects/${HARBOR_APP_PROJECT}'"
+note "  curl -u '<admin-username>' -X DELETE '$(harbor_scheme)://${HARBOR_URL:-<harbor-host>}/api/v2.0/projects/${HARBOR_INFRA_PROJECT}'"
+note "  curl -u '<admin-username>' -X DELETE '$(harbor_scheme)://${HARBOR_URL:-<harbor-host>}/api/v2.0/projects/${HARBOR_APP_PROJECT}'"
 [ -n "${HARBOR_ROBOT_NAME:-}" ] && note "  and the robot '${HARBOR_ROBOT_NAME}' under Administration -> Robot Accounts"
 left "Harbor projects ${HARBOR_INFRA_PROJECT}/${HARBOR_APP_PROJECT} + robot ${HARBOR_ROBOT_NAME:-<unset>} (manual)"
 
