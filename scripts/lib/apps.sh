@@ -122,11 +122,12 @@ _hosts_teardown_advice() {
   fi
   # B486: make argocd-address publishes a single-label name once it resolves here; that came from a
   # hosts line the operator added. Anchored on a line whose ONLY name is it (a trailing # comment is
-  # allowed: show-dns-records prints its source there). `-i.bak`: BSD sed (macOS) reads a bare `-i`'s
+  # allowed: show-dns-records prints its source there; so is leading whitespace, since that row is
+  # printed indented and a line copied from the terminal keeps it — getent resolves it either way). `-i.bak`: BSD sed (macOS) reads a bare `-i`'s
   # next argument as the backup suffix; GNU and BSD both accept an attached suffix.
   if [ "${ARGOCD_SERVER:-}" = argocd-server ]; then
     printf 'and the ArgoCD line (needs root):\n'
-    printf "  sudo sed -i.bak '/^[0-9.]*[[:space:]][[:space:]]*argocd-server[[:space:]]*\\(#.*\\)\\{0,1\\}$/d' /etc/hosts\n"
+    printf "  sudo sed -i.bak '/^[[:space:]]*[0-9.]*[[:space:]][[:space:]]*argocd-server[[:space:]]*\\(#.*\\)\\{0,1\\}$/d' /etc/hosts\n"
   fi
   return 0
 }

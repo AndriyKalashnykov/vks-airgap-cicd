@@ -72,10 +72,11 @@ out="$(_hosts_teardown_advice)"
 aline="$(grep -A1 -F 'the ArgoCD line' <<<"$out" | tail -n +2 || true)"   # the line AFTER its heading
 ck "ARGOCD_SERVER=argocd-server -> an ArgoCD sed line is emitted" "$([ -n "$aline" ] && echo yes || echo no)" "yes"
 ascript="${aline#*sed -i.bak \'}"; ascript="${ascript%%\' /etc/hosts*}"
-printf '127.0.0.1 localhost\n192.168.101.131 argocd-server\n192.0.2.40 argocd-server    # lab/argocd-server\n10.0.0.1 argocd-server other\n' > "$T/h2"
+printf '127.0.0.1 localhost\n192.168.101.131 argocd-server\n192.0.2.40 argocd-server    # lab/argocd-server\n  192.0.2.41 argocd-server    # copied indented from the terminal\n10.0.0.1 argocd-server other\n' > "$T/h2"
 sed -i "$ascript" "$T/h2"
 ck "the sole-name argocd-server line was removed"           "$(grep -c '^192\.168\.101\.131' "$T/h2")" "0"
 ck "the pasted show-dns-records line (with its # source) was removed" "$(grep -c '^192\.0\.2\.40' "$T/h2")" "0"
+ck "the INDENTED pasted line was removed too"             "$(grep -c '192\.0\.2\.41' "$T/h2")" "0"
 ck "a line with OTHER names survives"                       "$(grep -c '^10\.0\.0\.1 argocd-server other' "$T/h2")" "1"
 ck "localhost survives"                                     "$(grep -c '^127\.0\.0\.1 localhost' "$T/h2")" "1"
 unset ARGOCD_SERVER
