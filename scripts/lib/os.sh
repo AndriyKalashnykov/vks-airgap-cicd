@@ -57,6 +57,7 @@ if [ "$(uname -s)" = Darwin ]; then
   if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] || ! sed --version >/dev/null 2>&1 || ! command -v timeout >/dev/null 2>&1; then
     printf '%s\n' "ERROR: macOS needs Homebrew's bash and GNU tools for these scripts (running bash ${BASH_VERSION:-?})." \
       "  brew install bash coreutils gnu-sed findutils grep gawk gnu-tar make flock gettext" \
+      "  (or re-run bootstrap-jumpbox.sh, which installs the full list, incl. git, openssl@3 and python)" \
       "  then run the targets with gmake (or run 'gmake shell-init' so plain 'make' is GNU make)." >&2
     # exit, not return: a sourcing script without `set -e` would carry on with no os.sh functions.
     exit 1

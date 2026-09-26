@@ -10407,8 +10407,13 @@ under a distinct name. **(3)** brew lists: the install list has **4** copies (`b
 (`os.sh:41-44`, `shell-init.sh:42`, `Makefile:96`); gate with SUBSET semantics, `bootstrap-jumpbox.sh`
 as source. **(4)** a verbatim scenario-1 walk on a macOS row (the Done-when) is still not done.
 KinD moved IN scope by owner decision 2026-09-26 → B740.
+**2026-09-26 — residual (3) is DONE:** `check-brew-lists` is in static-check-fast. The docs must
+EQUAL the bootstrap's macOS list; every tool in `lib/os.sh`'s hint must be installed by the
+bootstrap, the docs and `00-install-prereqs.sh`; the three gnubin lists must be the same set, and
+each must be installed. Every check was proven RED, and a moved line dies rather than passing on
+an empty list. `os.sh`'s error now also points at the bootstrap.
 
-## 🔴 B736 — an arm64 build host overwrites Harbor's amd64 tags; the builds pass no `--platform`
+## ✅ B736 — (DONE 2026-09-26) an arm64 build host overwrites Harbor's amd64 tags; the builds pass no `--platform`
 
 Source-read (vks-adversary, 2026-09-23): `14-builder-build.sh:111` and `14-selfbuilt-build.sh:240-249`
 call `$ENGINE build` without `--platform`; `15-build-push-builder.sh` then crane-pushes to the fixed
@@ -10470,6 +10475,12 @@ Still open, each recorded by an implementation-review round (2026-09-24):
 checks the podman 6 remote save format). ⚠️ `MIRROR_ARCH=arm64` (needed for KinD on an M1, B740) makes
 BOTH guards pass arm64 by design — it must be per-run only, never in `.env`, or a later lab run pushes
 arm64 over the amd64 tags. Then move B735's residuals (below, under this heading) into B735.
+**2026-09-26 — CLOSED with both halves.** Real RED on an arm64 host: on the M1 (macOS 26.6.2,
+podman 6.1.2), `podman build --platform linux/arm64` + `podman save` -> `assert_tarball_platform`
+rc=1, *"is linux/arm64, but the guest nodes need linux/amd64"*. Control: the same Containerfile at
+`--platform linux/amd64` -> rc=0. This also shows the check reads podman 6's remote save format. The
+build half was already proven by #1288. The B735 residuals that sat under this heading are restated,
+current, in B735's 2026-09-26 note — **read them there**; the text below is history.
 
 ## ✅ B738 — `.env` carried every pin from `.env.example`, so a version bump never reached an existing operator
 
