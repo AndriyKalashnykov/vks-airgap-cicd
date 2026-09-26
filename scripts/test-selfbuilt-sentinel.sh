@@ -40,10 +40,21 @@ REF='v1.0.0'
 TAR="$T/bundle/selfbuilt/probe.tar"
 STAMP="$T/bundle/selfbuilt/.probe.built"
 
+# A minimal VALID docker-archive for <arch>. The skip now reads the tarball's PLATFORM (the tag
+# carries no arch), so a non-archive fixture can no longer skip, and every SKIP case needs a real one.
+mkarchive() { # mkarchive <arch> <path>
+  local d; d="$(mktemp -d)"
+  printf '{"architecture":"%s","os":"linux"}' "$1" > "$d/c.json"
+  printf '[{"Config":"c.json","RepoTags":[],"Layers":[]}]' > "$d/manifest.json"
+  tar -C "$d" -cf "$2" manifest.json c.json; rm -rf "$d"
+}
+
 # Decide from the REAL script's behaviour. "skip" is the ONLY outcome that reports the skip line.
 decide() {
   local out
-  out="$(cd "$T" && BUNDLE_DIR="$T/bundle" REPO_ROOT="$T" \
+  # MIRROR_ARCH PINNED: it is commented in .env.example, so an operator's exported arm64 (normal on
+  # a Mac) would otherwise flip every amd64 fixture below to REBUILD on that box only.
+  out="$(cd "$T" && BUNDLE_DIR="$T/bundle" REPO_ROOT="$T" MIRROR_ARCH=amd64 \
         bash "$T/scripts/14-selfbuilt-build.sh" 2>&1)"
   case "$out" in
     *"already built at"*) printf 'skip' ;;
@@ -54,7 +65,7 @@ decide() {
 printf '%s\n' "== selfbuilt sentinel =="
 
 # The fixture must be able to produce BOTH answers, or the test discriminates nothing.
-: > "$TAR"; printf 'x\n' > "$TAR"          # non-empty
+mkarchive amd64 "$TAR"                     # a valid linux/amd64 archive
 printf '%s\n' "$TAG" > "$STAMP"
 if [ "$(decide)" = skip ]; then ok "current tag + tarball -> SKIP"
 else bad "current tag + tarball -> SKIP (fixture cannot skip; test is vacuous)"
@@ -72,6 +83,18 @@ if [ "$(decide)" = rebuild ]; then ok "bare git ref in stamp -> REBUILD (THE SHI
 else bad "bare git ref in stamp -> REBUILD  <-- ref-keyed sentinel is blind to a dependency-override change"
 fi
 
+# THE ARCH DEFECT (2026-09-26): matching TAG, but the cached tarball is ANOTHER architecture.
+# It used to skip; 22-selfbuilt-push then refused the wrong-arch tarball.
+mkarchive arm64 "$TAR"; printf '%s\n' "$TAG" > "$STAMP"
+xout="$(cd "$T" && BUNDLE_DIR="$T/bundle" REPO_ROOT="$T" MIRROR_ARCH=amd64 \
+       bash "$T/scripts/14-selfbuilt-build.sh" 2>&1)"
+case "$xout" in
+  *"already built at"*) bad "matching tag + an arm64 tarball for an amd64 build -> REBUILD (it SKIPPED)" ;;
+  *"is linux/arm64, this build targets linux/amd64"*) ok "matching tag + an arm64 tarball for an amd64 build -> REBUILD, naming both platforms" ;;
+  *) bad "matching tag + other-arch tarball: rebuilt, but the log did not name both platforms" ;;
+esac
+mkarchive amd64 "$TAR"
+
 # Missing tarball wins over a matching stamp.
 printf '%s\n' "$TAG" > "$STAMP"; rm -f "$TAR"
 if [ "$(decide)" = rebuild ]; then ok "no tarball -> REBUILD"
@@ -85,8 +108,8 @@ else bad "empty tarball -> REBUILD"
 fi
 
 # The force escape hatch.
-printf 'x\n' > "$TAR"; printf '%s\n' "$TAG" > "$STAMP"
-out="$(cd "$T" && BUNDLE_DIR="$T/bundle" REPO_ROOT="$T" SELFBUILT_FORCE=1 \
+mkarchive amd64 "$TAR"; printf '%s\n' "$TAG" > "$STAMP"   # a SKIPPABLE fixture, or FORCE is vacuous
+out="$(cd "$T" && BUNDLE_DIR="$T/bundle" REPO_ROOT="$T" SELFBUILT_FORCE=1 MIRROR_ARCH=amd64 \
       bash "$T/scripts/14-selfbuilt-build.sh" 2>&1)"
 case "$out" in *"already built at"*) bad "SELFBUILT_FORCE=1 -> REBUILD" ;;
                *)                    ok  "SELFBUILT_FORCE=1 -> REBUILD" ;; esac

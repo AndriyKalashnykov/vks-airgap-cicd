@@ -97,9 +97,19 @@ for name in $NAMES; do
   # Deliberately NOT keyed on the tarball alone: a stale tarball from an earlier pin would then be
   # treated as current, which is the failure this is supposed to prevent.
   _sb_stamp="${OUT_DIR}/.${name}.built"
+  # ARCH TOO, read from the ARTIFACT (not the stamp): the tag carries no architecture, so an amd64
+  # tarball satisfied an arm64 run's skip and 22-selfbuilt-push then refused it (MEASURED 2026-09-26,
+  # M1 + MIRROR_ARCH=arm64). Same probe the push side asserts with, so the two cannot disagree.
+  _sb_have="$(tarball_platform "$tarball")"
+  _sb_want="linux/$(target_arch)"
+  if [ "${SELFBUILT_FORCE:-0}" != "1" ] && [ -s "$tarball" ] \
+     && [ "$(head -1 "$_sb_stamp" 2>/dev/null)" = "${tag}" ] && [ "$_sb_have" != "$_sb_want" ]; then
+    log_info "[${name}] cached ${tarball} is ${_sb_have:-unreadable}, this build targets ${_sb_want} — rebuilding"
+  fi
   if [ "${SELFBUILT_FORCE:-0}" != "1" ] \
      && [ -s "$tarball" ] \
-     && [ "$(head -1 "$_sb_stamp" 2>/dev/null)" = "${tag}" ]; then
+     && [ "$(head -1 "$_sb_stamp" 2>/dev/null)" = "${tag}" ] \
+     && [ "$_sb_have" = "$_sb_want" ]; then
     log_info "[${name}] already built at ${tag} (${tarball}) — skipping. SELFBUILT_FORCE=1 to rebuild."
     # ⚠️ RE-EMIT THIS IMAGE'S LOCK RECORD. Without this the lock SELF-ERASES on every warm run, and
     # the skip is the COMMON path: line 70 truncates ${LOCK}.tmp, this `continue` jumps past the
