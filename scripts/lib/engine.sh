@@ -184,10 +184,11 @@ engine_trust_ca() {
   [ -n "$ca" ] && [ -f "$ca" ] || { log_error "no CA file at '${ca:-<unset>}' — cannot wire docker trust"; return 1; }
   dir="$(engine_certs_d_dir "$mode" "$reg")"
   if [ "$mode" = docker-rootless ]; then
-    mkdir -p "$dir" && install -m 0644 "$ca" "${dir}/ca.crt"        # $HOME — no sudo
+    mkdir -p "$dir" && install -m 0644 "$ca" "${dir}/ca.crt" || return 1   # $HOME — no sudo
   else
-    engine_sudo install -D -m 0644 "$ca" "${dir}/ca.crt"            # /etc — root-owned, sudo COUNTED
+    engine_sudo install -D -m 0644 "$ca" "${dir}/ca.crt" || return 1       # /etc — root-owned, sudo COUNTED
   fi
+  # The path is printed only AFTER the install succeeded: the caller logs it as the CA method.
   printf '%s/ca.crt' "$dir"
 }
 

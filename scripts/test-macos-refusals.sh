@@ -27,7 +27,10 @@ check 19-trust-harbor.sh       'Linux-only for now'
 check 17-engine-rootless-docker-check.sh 'engine-trust-check-rootless is Linux-only'
 # The library function itself fails closed, and spends NO sudo, for any future caller that skips the refusal.
 printf 'x' > "$T/ca.crt"
-out="$(PATH="$T:$PATH" SKIP_DOTENV=1 ENGINE_SUDO_COUNT_FILE="$T/sudo" bash -c '. "$1/lib/os.sh"; . "$1/lib/engine.sh"; engine_trust_ca docker 10.0.0.5 "$2"; echo "rc=$?"; echo "sudo=$(engine_sudo_calls)"' _ "$SCRIPT_DIR" "$T/ca.crt" 2>&1)"
+# A STUB sudo, so a regressed guard can never install a trust anchor into this box's /etc (on a
+# passwordless-sudo runner it would do it for real).
+mkdir -p "$T/stub"; printf '#!/bin/sh\necho "STUB sudo $*" >&2\nexit 1\n' > "$T/stub/sudo"; chmod +x "$T/stub/sudo"
+out="$(PATH="$T/stub:$T:$PATH" SKIP_DOTENV=1 ENGINE_SUDO_COUNT_FILE="$T/sudo" bash -c '. "$1/lib/os.sh"; . "$1/lib/engine.sh"; engine_trust_ca docker 10.0.0.5 "$2"; echo "rc=$?"; echo "sudo=$(engine_sudo_calls)"' _ "$SCRIPT_DIR" "$T/ca.crt" 2>&1)"
 n=$((n+1))
 if printf '%s' "$out" | grep -q 'rc=1' && printf '%s' "$out" | grep -q 'sudo=0' && printf '%s' "$out" | grep -q 'not supported on macOS'; then
   echo "  ok    engine_trust_ca refuses on macOS with 0 sudo"
