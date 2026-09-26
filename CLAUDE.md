@@ -1061,53 +1061,70 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-26 — Makefile targets verified on Linux AND macOS (offline + lab); Mac harness in-tree
+## ▶️ HANDOFF 2026-09-26 (evening) — KinD on macOS measured end to end; five cross-platform bugs fixed
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### What landed (#1287, #1288)
+### What landed (#1297–#1303)
 
-- README **Tested platforms**: offline gates via `make platform-report` on Ubuntu 24.04.5 x86_64 and
-  macOS 26.6.2 arm64, plus **lab targets by class** on both OSes at `0440796` — Linux R 28/28, I 32/34;
-  macOS (via tunnel) R 28/28, I 30/34. Every failure is a refusal by design, named in the README.
-  Evidence: `~/walk-evidence/platform-*` and `~/walk-evidence/from-mac/` (0700).
-- Scenario-1 Step 1 / scenario-2 0b: per-OS blocks (Linux `make`, macOS `gmake` + `engine-check`
-  for Rosetta); `walk-doc.sh` runs each twin only on its OS (`test-walk-doc-os-blocks.sh`).
-- `make deps` on macOS puts a NEW podman machine on Rosetta via a drop-in (`lib/rosetta.sh`).
-- `scripts/mac-lab-tunnel.sh up|status|down` — how a macOS box reaches this lab (Mac cannot reach
-  udesk; per-IP `ssh -R` + pf rdr for ports < 1024). Needs `MAC_TUNNEL_HOST=user@mac`.
-- `show-dns-records` now reports an expired Supervisor login instead of "no LoadBalancer address".
+- **KinD on macOS (B740 closed):** every `e2e-kind*` target passed on an **8 GB** M1 in a Colima VM
+  (vz + Rosetta, 4 CPU / 6 GiB, docker, `MIRROR_ARCH=arm64` per session). Peak VM memory 5,686 MiB
+  (cross-cluster). No hardware limit was hit. Setup: `docs/kind-local.md` §"On macOS"; results:
+  `docs/tested-platforms.md`. Evidence: `~/walk-evidence/from-mac/kind-20260926/` (0700).
+  ⚠️ **The fresh-Mac order in that doc was never run** (the test Mac already had its toolchain); a
+  session-end read found its brew line lacked Colima and fixed it. Treat that section as reviewed, not
+  walked.
+- Found on the way, each in its own PR:
+  - **#1297**: the self-built cache ignored architecture, and the go_get check missed docker's gzip layers.
+  - **#1298**: the Harbor probe hard-coded https, so the `HARBOR_INSECURE=1` leg read as down.
+  - **#1299**: `e2e-kind-istio-existing` broke when `install-all` started installing an ingress (#1091).
+    The install steps are now `INSTALL_ALL_STEPS`; `check-install-chain` reads the variable.
+  - **#1300**: `e2e-kind-cross-cluster` needed a `HARBOR_URL` it never had.
+  - **#1301 (security):** git's credential helpers are cumulative, so the demo's Gitea token was offered
+    to the operator's osxkeychain / libsecret on every push. `gitea_git_isolate` resets the list. Measured
+    on the Mac with `GIT_TRACE`: the old shape calls `git credential-osxkeychain store`, the isolated clone
+    0 times.
+  - **#1302**: `build-apps` pushed before the EventListener could receive and lost the webhook (900 s).
+    `el_wait_ready` gates it; the re-fire is deferred (B742).
+- #1299 and #1300 failed the same way on Linux; #1298 is not macOS-specific (reasoned, not re-run on
+  Linux); #1297 needed the arm64 build to surface. So the macOS/arm64 run found things Linux did not.
 
-### State of the lab and the Mac (MEASURED 2026-09-26 — re-measure, do not trust)
+### State (MEASURED 2026-09-26 — re-measure, do not trust)
 
-- Lab: cicd-gc3 live, `verify` end to end for every app from Linux AFTER the Mac's builds replaced the
-  shared Harbor tags. The Supervisor login was renewed 2026-09-25 (`make creds-renew`, one attempt).
-- The I run MIGRATED `.env`: `KUBECONFIG`/`VKS_CONTEXT`/`VKS_AUTH_METHOD`/`ARGOCD_SERVER` now resolve
-  from the stamped `.env.state` (`use-guest-kubeconfig`/`state-stamp`); `load_env` confirms the values.
-  Pre-run copies: `~/walk-evidence/platform-linux-I/before/`.
-- Scaleway Mac `m1@51.159.120.46` (M1, 8 GB, passwordless sudo): repo at `main`, toolchain + an 8.2 GB
-  `bundle/` (public images). Lab `.env`/`secrets/`, Harbor auth and `~/.config/vcf` were WIPED; tunnel
-  DOWN. A re-run must re-seed (`.env`, `.env.state`, `secrets/` incl. `vcenter-ca.pem`, paths rewritten).
+- **Scaleway Mac** `m1@51.159.120.46`: Colima and the podman machine stopped, no kind clusters, no
+  `docker-mac-net-connect`, no stray processes. Repo at `main`, only `bundle/` (public images) left.
+  KinD state, `secrets/` and the `172.18.0.3` docker login were removed. **A `localhost:5000` docker auth
+  entry remains, origin unknown** — not created this session as far as I know; decide before wiping.
+- **Linux:** our KinD cluster is torn down (`golang-web` belongs to something else — leave it). The lab
+  (cicd-gc3) was not touched this session. Since the 2026-09-25 platform run, `KUBECONFIG`/`VKS_CONTEXT`/
+  `VKS_AUTH_METHOD`/`ARGOCD_SERVER` resolve from the stamped `.env.state`, not `.env`; the pre-run `.env`
+  copies are in `~/walk-evidence/platform-linux-I/before/`.
+- **Mac lab re-run:** its lab `.env`, `secrets/` and `~/.config/vcf` were wiped; re-seed them first.
 
 ### 🔴 DISTRUST FIRST
 
 | instrument | what it did |
 |---|---|
-| **`secrets/.env.make` / `.env.state.make`** | GENERATED from `.env` at every make parse — a teardown that deletes only `.env` leaves 23 credential lines behind (measured on the Mac). |
-| **`make --trace` on a measured run** | rides MAKEFLAGS into nested makes and changed a test's captured stdout (it FAILED). platform-report counts in a separate `-n` dry run. |
-| **`podman machine list --format '{{.Name}}'`** | prints the DEFAULT machine with a trailing `*`; never pass it raw to `inspect`. |
-| **a pipe into a backgrounded launcher** | a backgrounded child (ssh -N) holding the pipe makes the caller hang; send it to a log. |
-| **Apple `/usr/bin/make` 3.81** | REFUSED at parse time (`Makefile:89-91`; `test-make-version-guard.sh`). Use `gmake`. |
+| **`kubectl wait … pod -l <sel>`** | returns "no matching resources found" AT ONCE when nothing matches yet — a vacuous gate. Poll for the owner object first (#1302). |
+| **a compound ending `… \| grep \| head`** | its exit code is `head`'s. A gate's result is only its own `rc` on its own line. |
+| **`make static-check-fast`** | does NOT run `lint` — an SC2034 passed it and failed `static-check`. |
+| **`git config credential.helper X`** | APPENDS to the inherited helper list; it does not replace it (#1301). |
+| **`timeout` on the Mac** | not on the default PATH (rc 127); export `/opt/homebrew/bin` first. |
+| **`secrets/.env.make` / `.env.state.make`** | GENERATED from `.env` at every make parse — deleting `.env` leaves 23 credential lines behind. |
+| **`podman machine list --format '{{.Name}}'`** | marks the DEFAULT machine with a trailing `*`; never pass it raw to `inspect`. |
+| **`make --trace`** | rides MAKEFLAGS into nested makes and changes their output. |
+| **Apple `/usr/bin/make` 3.81** | refused at parse time. Use `gmake`. |
 
 ### NOT done — next work, ranked
 
-**The adversary-reviewed plan (2026-09-26) is in [`BACKLOG.md`](BACKLOG.md): row B740 holds the wave
-order.** Wave 1 is offline and parallel: B725 delete + `VC_SS_OUTCOME`, B486 (d)(a)(c)(e), the B735
-brew-list gate, the B739 offline half, the KinD-on-macOS code fixes (A3) and a memory measurement (A0).
-Waves 2-4 run on the Mac. B741 (subagents may write the scratchpad) is in claude-config. Every one of
-those rows carries a dated "Plan 2026-09-26" note. The owner still has to decide two things: a Mac with
-16 GB or more (Scaleway is sold out) and the routing choice.
+1. **B742** — `build-apps` re-fire, after the Tekton write-back push (`kaniko-build.yaml:239`) retries.
+2. **B486** — `ARGOCD_SERVER` published as an IP; `fetch-argocd-ca` refuses on it. B550 is blocked on it.
+3. **B735 residuals** (macOS jump box) and the B740 residuals: the #1298 review's three (3xx on http
+   counts as serving; uninstall advice lacks `--cacert`; an IP `HARBOR_URL` with no PTR is never
+   probed), the fresh-Mac order never walked, the `sudo -b` prompt, and #1300's `GITEA_IMAGE` Harbor test
+   (a plain `${HARBOR_URL}/` prefix match: another spelling of the same registry silently skips the check).
+4. **B722**, **B723**, **B734**.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
