@@ -47,9 +47,14 @@ Measured on an 8 GB M1 (macOS 26.6.2): every KinD e2e target passes
 KinD needs a Docker daemon, so on a Mac it runs in a [Colima](https://github.com/abiosoft/colima) VM.
 Use these commands on a Mac instead of the **Run it** block below.
 
+First install the macOS base tools: the `brew install` line in
+[Common bootstrap](common-bootstrap.md) (GNU bash, sed, coreutils and the rest). The scripts refuse to
+run with macOS's own bash 3.2 and BSD `sed`, so `deps` cannot start without them. Then:
+
 ```bash
-brew install make colima docker docker-buildx chipmk/tap/docker-mac-net-connect
-podman machine stop 2>/dev/null   # the measured runs had it stopped: two VMs on 8 GB is untested
+brew install colima docker docker-buildx chipmk/tap/docker-mac-net-connect
+softwareupdate --install-rosetta --agree-to-license   # no-op if Rosetta is already installed
+podman machine stop 2>/dev/null   # only if you have podman: two VMs on 8 GB is untested
 colima start --cpu 4 --memory 6 --disk 80 --vm-type vz --vz-rosetta --runtime docker
 gmake deps CONTAINER_ENGINE=docker   # kind, helm, kubectl, crane, the docker CLI + buildx
 ```
@@ -76,7 +81,7 @@ explicitly (`sudo -b` asks for your password first, then runs it in the backgrou
 
 ```bash
 sudo -b DOCKER_HOST="unix://$HOME/.colima/default/docker.sock" \
-  "$(brew --prefix)/opt/docker-mac-net-connect/bin/docker-mac-net-connect" > /tmp/dmnc.log 2>&1
+  "$(brew --prefix)/opt/docker-mac-net-connect/bin/docker-mac-net-connect" > "$HOME/Library/Logs/docker-mac-net-connect.log" 2>&1
 ```
 
 Then run it with `gmake` (Apple's `make` 3.81 is refused), building for the node's architecture:
