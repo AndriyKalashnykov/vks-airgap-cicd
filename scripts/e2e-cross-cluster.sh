@@ -157,6 +157,11 @@ export GITEA_SERVICE_TYPE=NodePort
 GITEA_IMAGE="$(grep -oE '^gitea/gitea:[^[:space:]]+' "${SCRIPT_DIR}/../images/images.txt" | head -1 || true)"
 [ -n "$GITEA_IMAGE" ] || die "no gitea/gitea ref in images/images.txt — cannot pick the image"
 export GITEA_IMAGE
+# The seeder (50) still needs a HARBOR_URL to render the deploy repos' image refs, and none reaches
+# this script: SKIP_DOTENV=1, and the stamped .env.state is (correctly) refused for the guest
+# kubeconfig. `.invalid` can never resolve (RFC 6761). Assert C checks the Application's location,
+# repoURL and fetched revision, never workload health, so an unpullable image ref changes nothing.
+export HARBOR_URL="${HARBOR_URL:-harbor.cross-cluster.invalid}"
 export GITEA_HOST="gitea.cc.local"
 export GITEA_ADMIN_PASSWORD="${GITEA_ADMIN_PASSWORD:-CrossCluster12345}"
 export GITEA_CI_PASSWORD="${GITEA_CI_PASSWORD:-CrossCluster12345}"

@@ -11,7 +11,17 @@ load_env
 require_cmd kubectl
 require_cmd envsubst "install gettext (provides envsubst)"
 kubeconfig_ready
-: "${GITEA_NAMESPACE:?}"; : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"
+: "${GITEA_NAMESPACE:?}"
+# Harbor is required, and its mirror is probed, only when the image COMES from Harbor: the default,
+# or an explicit GITEA_IMAGE that starts with ${HARBOR_URL}/ (the form .env.example documents). An
+# explicit non-Harbor image (the cross-cluster e2e's public gitea/gitea) needs neither. Decided BEFORE
+# the defaulting line below, after which GITEA_IMAGE is always set.
+GITEA_IMAGE_FROM_HARBOR=1
+if [ -n "${GITEA_IMAGE:-}" ]; then
+  case "$GITEA_IMAGE" in "${HARBOR_URL:-<unset>}/"*) ;; *) GITEA_IMAGE_FROM_HARBOR=0 ;; esac
+fi
+if [ "$GITEA_IMAGE_FROM_HARBOR" = 1 ]; then : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; fi
+HARBOR_URL="${HARBOR_URL:-}"; HARBOR_INFRA_PROJECT="${HARBOR_INFRA_PROJECT:-}"
 # GITEA_URL DERIVES from GITEA_HOST (the ingress hostname) so the hostname has ONE source of
 # truth. It used to be a second literal in .env.example kept in sync with GITEA_HOST by a prose
 # "keep aligned" comment — i.e. by nothing. Set GITEA_URL explicitly only when the scheme/port
@@ -64,7 +74,8 @@ log_info "installing Gitea into namespace '$GITEA_NAMESPACE' (Service type: ${GI
 # an escape hatch, and every unknown is a LOUD SKIP that says it is not a pass.
 # shellcheck source=scripts/lib/harbor_probe.sh
 . "${SCRIPT_DIR}/lib/harbor_probe.sh"
-harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:-}" "gitea"
+# A non-Harbor image does not pull from Harbor, so a Harbor mirror check would measure the wrong thing.
+[ "$GITEA_IMAGE_FROM_HARBOR" = 0 ] || harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:-}" "gitea"
 ensure_namespace "$GITEA_NAMESPACE" "${PSA_LEVEL_GITEA:-restricted}"
 
 # shellcheck disable=SC2016
