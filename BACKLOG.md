@@ -9622,6 +9622,12 @@ that on the next Supervisor-side `state_set` (08, 09, 43). That is loud, where b
 and `make state-restore` puts the old sink back — a SWAP, not an undo: values written after the archive
 move to a new archive; whether `make state-stamp` should
 refuse on a real lab is an idea-round question, not built.
+**Resolved 2026-09-26:** the idea round REFUTED keeping `make state-stamp` in any form — measured harmful
+on a real lab (the Supervisor READ refuses the overlay before any write, then the first write archives it)
+AND on KinD (it wrote `VKS_STATE_KIND=0` over the KinD flow's 1, so the next kind-up archived the KinD
+overlay). The target is removed; the `state_stamp` function stays for `05-kind-up.sh --kind`. The
+owner's checkout was unstamped in place (`state_unset` under the guest kubeconfig; a copy kept as
+`.env.state.pre-unstamp-*`), then `make creds` read `flow: real lab`.
 
 ## ✅ B723 — (DONE 2026-09-26) the archive is a WRITE-ONLY GRAVEYARD: 8 sinks hold 0600 passwords and nothing reads or prunes them
 

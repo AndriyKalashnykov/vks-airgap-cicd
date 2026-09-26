@@ -125,8 +125,8 @@ elif [ -f "$env_kind" ]; then
   # arms above are the evidence that the promise was already understood here.
   #
   # THE STAMP PROVES CREATION, NOT AUTHORSHIP. `VKS_STATE_KIND=1` proves the KinD flow CREATED this
-  # sink; it does NOT prove the KinD flow wrote every value now in it. `state_stamp` has exactly two
-  # callers — 05-kind-up.sh:222 and a manual `make state-stamp` — so NOTHING re-stamps a sink when the
+  # sink; it does NOT prove the KinD flow wrote every value now in it. `state_stamp` has one
+  # caller — 05-kind-up.sh (the manual `make state-stamp` was removed 2026-09-26) — so NOTHING re-stamps a sink when the
   # LAB path writes into it. An operator who ran the KinD e2e and then went back to the lab has lab
   # values sitting inside a still-KinD-stamped sink. This branch used to delete them with no archive
   # and no way back. (Since B722, state_set ARCHIVES a sink stamped for another cluster before it

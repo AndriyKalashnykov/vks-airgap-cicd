@@ -1357,7 +1357,7 @@ case "$_prov" in
   # ⚠️ REWORDED 2026-09-07. It used to read "saved by an earlier run, and not tied to this cluster
   # — some may be from a lab that no longer exists." Every word of that is defensible and the whole
   # sentence was still wrong to print, because it fires on EVERY real lab, ALWAYS: `state_stamp` has
-  # exactly two callers (05-kind-up.sh and a manual `make state-stamp`) and NOTHING on the real-lab
+  # one caller (05-kind-up.sh; the manual `make state-stamp` was removed 2026-09-26) and NOTHING on the real-lab
   # path calls it — recorded at test-creds-show.sh:211 (B87). A warning that cannot vary carries no
   # information while reading as one, and an operator staring at a fully-serving lab reasonably asks
   # what the hell it means.

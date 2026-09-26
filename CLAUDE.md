@@ -1091,11 +1091,9 @@ is what those PRs actually touched, and rewriting them would falsify the record.
   `https://192.168.101.134:6443`). A KinD repro run had displaced it; it was put back with
   `state-restore` and `make creds` read `flow: real lab`. The KinD overlay it replaced is
   archived as `.env.state.stale-20260926-155917` (`make state-archives` lists 11).
-- **That overlay is hand-STAMPED (guest), and scenario-1 WILL archive it.** §3's
-  `export KUBECONFIG=./secrets/supervisor.kubeconfig` makes the next Supervisor-side `state_set`
-  (`08-install-argocd-service`, `09-argocd-address`, `43-install-istio-package`) archive it (#1315).
-  Unset `KUBECONFIG` first, or expect it. `make state-restore` then puts the old overlay back, but it is a
-  SWAP, not an undo: values written after the archive move to a new archive.
+- **That overlay is now UNSTAMPED (2026-09-26 17:41Z)**, so scenario-1's Supervisor steps read and
+  write it like any real-lab overlay. The stamped copy is kept as `.env.state.pre-unstamp-*` (`make
+  state-archives` lists it).
 - **Lab:** cicd-gc3 untouched except one `make fetch-argocd-kubeconfig` (rc=0; it also rewrites local
   state: `~/.config/vcf` and the kubeconfig context, B744). The Supervisor token was EXPIRED at 15:59Z
   per `make creds` — run `make vks-login` first next session.
@@ -1127,8 +1125,8 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 ### NOT done — next work, ranked
 
-1. **B722 residuals** — F8 (the refused report renders a Harbor URL for an unset `HARBOR_URL`); whether
-   `make state-stamp` should refuse on a real lab (idea round first).
+1. **B722 residual F8** — the refused report renders a Harbor URL for an unset `HARBOR_URL`.
+   (`make state-stamp` is REMOVED, and the owner's checkout was unstamped, 2026-09-26.)
 2. **B486** — F6 needs a lab timing measurement; the IP-versus-SAN decision. B550 is blocked on it.
 3. **The mirror probe checks `HARBOR_INFRA_PROJECT`, not the project a Harbor-hosted `GITEA_IMAGE` names**
    (idea-round finding, owner call: is an explicit image in a non-infra project supported?). The #1300
