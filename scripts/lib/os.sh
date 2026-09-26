@@ -2232,7 +2232,7 @@ el_wait_ready() {
     esac
     if [ $((SECONDS - start)) -ge "$budget" ]; then
       last="$(_el_why "$cls" "$err")"; rm -f "$err"
-      if printf '%s' "$last" | grep -q 'NotFound\|not found'; then
+      if printf '%s' "$last" | grep -qF 'Error from server (NotFound)'; then   # the SERVER said absent
         EL_WAIT_REASON="deploy/${dep} was never created in ${ns} within ${budget}s (did 'make platform' configure Tekton?)"
       else
         EL_WAIT_REASON="deploy/${dep} could not be read within ${budget}s (${last})"
@@ -2252,7 +2252,7 @@ el_wait_ready() {
   cls="$(classify_kube_failure "$err")"; last="$(_el_why "$cls" "$err")"; rm -f "$err"
   case "$cls:$last" in
     FORBIDDEN:*)                 EL_WAIT_REASON="this kubeconfig may not read the rollout of deploy/${dep} (${last})"; return 2 ;;
-    *NotFound*|*"not found"*)    EL_WAIT_REASON="deploy/${dep} was deleted during the wait (${last})" ;;
+    *"Error from server (NotFound)"*) EL_WAIT_REASON="deploy/${dep} was deleted during the wait (${last})" ;;
     *"timed out"*)               EL_WAIT_REASON="deploy/${dep} was not Ready within ${budget}s" ;;
     *)                           EL_WAIT_REASON="deploy/${dep} rollout failed (${last})" ;;
   esac
