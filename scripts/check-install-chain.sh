@@ -37,7 +37,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 # shellcheck source=scripts/lib/os.sh
 . "$PWD/scripts/lib/os.sh"
 
-WANT="$(grep -m1 '^install-all:' Makefile | sed 's/^install-all: *//; s/ *##.*//' | tr -s ' ' | sed 's/ *$//')"
+WANT="$(grep -m1 '^INSTALL_ALL_STEPS *:=' Makefile | sed 's/^INSTALL_ALL_STEPS *:= *//; s/ *##.*//' | tr -s ' ' | sed 's/ *$//')"
 
 # ⚠️ SANITY-GATE THE LEFT-HAND SIDE FIRST. Forgetting the `s/ *##.*//` yields 49 tokens instead of
 # 12 — and then BOTH correct docs go RED, with a message that reads as a DOC defect and sends the

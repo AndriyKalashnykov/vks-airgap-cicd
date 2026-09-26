@@ -54,7 +54,7 @@ _m "reorder two links -> RED (a sort compare would pass)" \
 _m "delete one link -> RED"          's/ → build-apps`/`/' CLAUDE.md
 _m "duplicate a link -> RED"         's/→ gitops → build-apps/→ gitops → gitops → build-apps/' CLAUDE.md
 _m "a target added to the MAKEFILE only -> RED (the historical failure)" \
-   's/^install-all: preflight/install-all: preflight zz-new/' Makefile
+   's/^INSTALL_ALL_STEPS := preflight/INSTALL_ALL_STEPS := preflight zz-new/' Makefile
 
 # ── THE EXCLUSIONS MUST BE TESTED WITH THE FILES PRESENT AND STALE ──────────────────────────────
 # ⚠️ CORRECTED 2026-09-07 by a session-end round: the previous "negative controls" never copied

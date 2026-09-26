@@ -1122,7 +1122,12 @@ e2e-sneakernet-both: ## The sneakernet OS matrix: the SAME carried tarball unpac
 # `make verify` still proves the GitOps loop over a port-forward with no ingress at all; the
 # ingress is what makes the result REACHABLE, which is the difference between a green run and a
 # usable demo.
-install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login harbor-robot-ensure platform install-headlamp install-ingress gitops build-apps ## Run the complete air-gap install end to end (preflight FIRST, mirror integrity-verified, CI robot ensured BEFORE platform bakes the push/pull Secrets, then platform -> headlamp -> ingress -> gitops -> build-apps, so the demo actually SERVES)
+# The ORDERED step list, single-sourced so e2e-kind-istio-existing can run it minus install-ingress
+# (that fixture needs a MESH-FREE cluster before its "platform team" installs Istio). check-install-chain
+# reads THIS line, not the install-all rule below.
+INSTALL_ALL_STEPS := preflight selfbuilt-image mirror mirror-verify builder-image vks-login harbor-robot-ensure platform install-headlamp install-ingress gitops build-apps
+$(if $(filter install-ingress,$(INSTALL_ALL_STEPS)),,$(error install-ingress is no longer in INSTALL_ALL_STEPS — e2e-kind-istio-existing filters it out by that name; update the fixture))
+install-all: $(INSTALL_ALL_STEPS) ## Run the complete air-gap install end to end (preflight FIRST, mirror integrity-verified, CI robot ensured BEFORE platform bakes the push/pull Secrets, then platform -> headlamp -> ingress -> gitops -> build-apps, so the demo actually SERVES)
 	@echo ""
 	@echo "  ── install-all finished ─────────────────────────────────────────────────────"
 	@echo "  Running:      Gitea, Tekton, headlamp, the ingress, and (already present as"
@@ -1190,7 +1195,7 @@ e2e-kind-istio-existing: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind-istio-existing: ## KinD e2e for the ATTACH mode: a "platform team" installs Istio (foreign naming) -> we attach, installing nothing
 	@echo "==> e2e-kind-istio-existing: fresh cluster, platform-owned Istio, attach-only"
 	@$(MAKE) kind-down          # clear the stale STATE SINK (.env.state) so the ingress mode is deterministic
-	@$(MAKE) kind-up install-harbor install-argocd install-all
+	@$(MAKE) kind-up install-harbor install-argocd $(filter-out install-ingress,$(INSTALL_ALL_STEPS))   # install-all MINUS the ingress: the fixture needs a mesh-free cluster
 	@$(SCRIPTS)/90-e2e-istio-existing.sh   # RED 1 + RED 2 + install Istio as the "platform team"
 	@$(MAKE) istio-preflight
 	@echo "==> leg 1/2: attach via the KUBERNETES GATEWAY API (the default, and what VKS uses)"
