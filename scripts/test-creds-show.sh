@@ -2652,8 +2652,8 @@ fi
 # (a) a granted IP (no marker, no CA): the CLI line AND the verify recipe
 _ac_grant="$(render_with_env 'ARGOCD_SERVER=10.0.0.9
 ' '')"
-# (b) marker `discovered`: `make argocd-address` owns ARGOCD_SERVER and would overwrite a hand-set name,
-#     so the recipe would be undone — the CLI line ONLY
+# (b) marker `discovered`: `make argocd-address` owns ARGOCD_SERVER and (B486) publishes argocd-server
+#     itself once it resolves here and the cert carries it — so the recipe is map / re-run / fetch
 _ac_disc="$(render_with_env 'ARGOCD_SERVER=10.0.0.9
 ' 'ARGOCD_SERVER_SOURCE=discovered
 ')"
@@ -2668,10 +2668,12 @@ else
   bad "argocd-cli (a) granted IP: missing the CLI line or the verify recipe" "an IP with no marker is where the recipe can actually work"
 fi
 if grep -qF 'argocd login 10.0.0.9 --insecure' <<< "$_ac_disc" \
-   && ! grep -qF 'to verify instead' <<< "$_ac_disc"; then
-  ok "argocd-cli (b) discovered marker: the CLI line only (a hand-set name would be overwritten)"
+   && grep -qF 'add "10.0.0.9 argocd-server" to /etc/hosts' <<< "$_ac_disc" \
+   && grep -qF 'make argocd-ca-from-cluster' <<< "$_ac_disc" \
+   && ! grep -qF 'make fetch-argocd-ca again' <<< "$_ac_disc"; then
+  ok "argocd-cli (b) discovered marker: the CLI line + the argocd-server recipe (map, re-run, fetch)"
 else
-  bad "argocd-cli (b) discovered marker: the recipe printed, or the CLI line is missing" "make argocd-address rewrites ARGOCD_SERVER while the marker is discovered"
+  bad "argocd-cli (b) discovered marker: the argocd-server recipe or the CLI line is missing" "B486: make argocd-address publishes the name itself; the report must say how to get there"
 fi
 if grep -qF 'ARGOCD_CA_FILE is set; if the cert does not carry this IP' <<< "$_ac_ca" \
    && ! grep -qF 'to verify instead' <<< "$_ac_ca"; then

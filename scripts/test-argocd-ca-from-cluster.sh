@@ -53,7 +53,7 @@ chmod +x "$T/bin/kubectl"
 run() {  # run <cert-the-secret-holds> <out>
   : > "$T/klog"
   env -i HOME="$T" PATH="$T/bin:$PATH" REPO_ROOT="$T/repo" SKIP_DOTENV=1 SECRET_CERT="$1" KLOG="$T/klog" \
-      TLS_MODE="${TLS_MODE:-}" NS_MODE="${NS_MODE:-}" ARGOCD_CA_SHA256="${PIN:-}" \
+      TLS_MODE="${TLS_MODE:-}" NS_MODE="${NS_MODE:-}" ARGOCD_CA_SHA256="${PIN:-}" ARGOCD_SERVER_SOURCE="${SRC:-}" \
       ARGOCD_NAMESPACE=lab ARGOCD_SERVER="127.0.0.1:${PORT}" VKS_SUPERVISOR_KUBECONFIG="$T/repo/secrets/supervisor.kubeconfig" \
       bash "$SCRIPT_DIR/argocd-ca-from-cluster.sh" "$2" 2>&1
 }
@@ -102,6 +102,15 @@ out="$(PIN=':::' run "$T/a.crt" "$T/out-pin3.crt")"; rc=$?
 if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'not a SHA-256 digest' && [ ! -e "$T/out-pin3.crt" ]; then
   ok "a malformed pin -> refused, never silently ignored"
 else bad "pin malformed" "rc=$rc $(printf '%s' "$out" | tail -2)"; fi
+
+# The IP warning names the step that actually publishes the name when 09 owns ARGOCD_SERVER.
+out="$(SRC=discovered run "$T/a.crt" "$T/out-src.crt")"; rc=$?
+if [ "$rc" = 0 ] && grep -qF 'make argocd-address: it publishes argocd-server' <<< "$out" \
+   && ! grep -qF 'set ARGOCD_SERVER to it first' <<< "$out"; then ok "ours (discovered) -> the warning names make argocd-address"
+else bad "discovered wording" "rc=$rc $(tail -3 <<< "$out")"; fi
+out="$(run "$T/a.crt" "$T/out-nosrc.crt")"
+if grep -qF 'set ARGOCD_SERVER to it first' <<< "$out"; then ok "CONTROL: a granted IP keeps the set-it-yourself advice"
+else bad "granted wording" "$(tail -3 <<< "$out")"; fi
 
 kill "$SRV" 2>/dev/null; SRV=""
 out="$(run "$T/a.crt" "$T/out-c.crt")"; rc=$?

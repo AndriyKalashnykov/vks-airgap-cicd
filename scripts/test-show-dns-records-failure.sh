@@ -27,6 +27,8 @@ case "${FAKE_MODE:-}" in
   unauthorized) echo "error: You must be logged in to the server (Unauthorized)" >&2; exit 1 ;;
   empty)        echo '{"items":[]}' ;;
   harbor)       echo '{"items":[{"metadata":{"namespace":"svc-harbor","name":"harbor-nginx"},"spec":{"type":"LoadBalancer"},"status":{"loadBalancer":{"ingress":[{"ip":"192.0.2.30"}]}}}]}' ;;
+  both)         echo '{"items":[{"metadata":{"namespace":"svc-harbor","name":"harbor-nginx"},"spec":{"type":"LoadBalancer"},"status":{"loadBalancer":{"ingress":[{"ip":"192.0.2.30"}]}}},{"metadata":{"namespace":"lab","name":"argocd-server"},"spec":{"type":"LoadBalancer"},"status":{"loadBalancer":{"ingress":[{"ip":"192.0.2.40"}]}}}]}' ;;
+  argocd)       echo '{"items":[{"metadata":{"namespace":"lab","name":"argocd-server"},"spec":{"type":"LoadBalancer"},"status":{"loadBalancer":{"ingress":[{"ip":"192.0.2.40"}]}}}]}' ;;
 esac
 EOF
 chmod +x "$T/bin/kubectl"
@@ -46,6 +48,26 @@ else bad "empty: rc=$rc: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; fi
 out="$(run FAKE_MODE=harbor DNS_RECORDS_WAIT_SECONDS=0)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qE 'harbor\.example\.test +192\.0\.2\.30'; then ok "an address prints its record row"
 else bad "harbor: rc=$rc: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; fi
+
+# B486: make argocd-address publishes the SINGLE-LABEL name argocd-server. It is not an A record: it
+# reaches DNS only through a search domain, and only the jump box dials ArgoCD.
+out="$(run FAKE_MODE=argocd ARGOCD_SERVER=argocd-server DNS_RECORDS_WAIT_SECONDS=0)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -qF '192.0.2.40 argocd-server' <<< "$out" \
+   && grep -qF '/etc/hosts on THIS jump box' <<< "$out" \
+   && ! grep -qF 'Create these as A records' <<< "$out"; then ok "a single-label ArgoCD name is a hosts line, not an A record"
+else bad "argocd single-label: rc=$rc: $(printf '%s' "$out" | tail -4 | tr '\n' ' ')"; fi
+# ONLY ArgoCD: a single-label HARBOR name stays an A-record row (the guest nodes pull from it), and a
+# placeholder is not a name at all.
+out="$(run FAKE_MODE=both HARBOR_URL=harbor ARGOCD_SERVER=argocd-server DNS_RECORDS_WAIT_SECONDS=0)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -qE '^ +harbor +192\.0\.2\.30' <<< "$out" && grep -qF 'Create these as A records' <<< "$out" \
+   && ! grep -qE '192\.0\.2\.30 harbor' <<< "$out"; then ok "a single-label Harbor name stays an A record"
+else bad "harbor single-label: rc=$rc: $(tail -4 <<< "$out" | tr '\n' ' ')"; fi
+out="$(run FAKE_MODE=argocd DNS_RECORDS_WAIT_SECONDS=0)"; rc=$?
+if ! grep -qF '/etc/hosts on THIS jump box' <<< "$out"; then ok "an ArgoCD PLACEHOLDER is not turned into a hosts line"
+else bad "argocd placeholder: $(tail -3 <<< "$out" | tr '\n' ' ')"; fi
+out="$(run FAKE_MODE=argocd ARGOCD_SERVER=argocd.lab.test DNS_RECORDS_WAIT_SECONDS=0)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -qE 'argocd\.lab\.test +192\.0\.2\.40' <<< "$out"; then ok "CONTROL: a dotted ArgoCD name is still an A-record row"
+else bad "argocd dotted: rc=$rc: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; fi
 
 printf 'test-show-dns-records-failure: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

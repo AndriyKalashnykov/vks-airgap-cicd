@@ -3354,9 +3354,11 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
     # ARGOCD_OPTS, lib/os.sh), and scenario-1 logs in at the IP with --insecure (scenario-1.md:446).
     # THREE ARMS, keyed on what this report can see:
     #   ARGOCD_CA_FILE set      -> no CA can verify an IP: say what that breaks, and where the names are.
-    #   marker `discovered`     -> `make argocd-address` owns ARGOCD_SERVER and would overwrite a
-    #                              hand-set name on its next run (09-argocd-address.sh:283), so a verify
-    #                              recipe would be undone: the CLI line only.
+    #   marker `discovered`     -> `make argocd-address` owns ARGOCD_SERVER, and since B486 it publishes
+    #                              the name `argocd-server` ITSELF once that resolves here to this IP and
+    #                              the cert carries it. So the recipe is: map it, re-run that target, fetch
+    #                              the anchor. Only 09 sets this marker, and 09 is Supervisor-only, so this
+    #                              arm may name the Supervisor-only `make argocd-ca-from-cluster`.
     #   otherwise (a granted IP)-> the CLI line, plus the verify recipe built on `make fetch-argocd-ca`,
     #                              which at an IP REFUSES, writes nothing and LISTS the cert's names.
     # The cert's names are NOT read here (C2 refuted: it would be a fifth hand-rolled SAN parser, and
@@ -3412,6 +3414,11 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
         printf '      map one of them to %s in /etc/hosts, set ARGOCD_SERVER=<that name> in .env,\n' "$_a_host"
         printf '      run make fetch-argocd-ca again, set ARGOCD_CA_FILE to the file it writes, then:\n'
         printf '      argocd login <that name>%s --server-crt <that file>\n' "$_a_port"
+      else
+        printf '      to verify instead (Supervisor access): add "%s argocd-server" to /etc/hosts, then\n' "$_a_host"
+        printf '      make argocd-address  — it publishes argocd-server when the certificate carries it —\n'
+        printf '      make argocd-ca-from-cluster, set ARGOCD_CA_FILE to the file it writes, then:\n'
+        printf '      argocd login argocd-server --server-crt <that file>\n'
       fi
     fi
   fi
