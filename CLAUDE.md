@@ -141,6 +141,7 @@ is unavailable to the audience that needs it most, and telling a tenant to run o
 | a push/pull credential | `make harbor-robot` | ⚠️ needs Harbor **project-admin** — a tenant without it must REQUEST robot credentials |
 | recover the admin credential | `make harbor-admin-password` | ❌ **SUPERVISOR ONLY** |
 | the Harbor CA when it is not on the wire | `make harbor-ca-from-cluster` | ❌ **SUPERVISOR ONLY** (`make fetch-harbor-ca` is the tenant path — it reads the wire) |
+| ArgoCD's certificate, without trust-on-first-use | `make argocd-ca-from-cluster` | ❌ **SUPERVISOR ONLY** — an admin-level read of `argocd-secret` (`make fetch-argocd-ca` is the tenant path) |
 | ArgoCD's LB address | `make argocd-address` | ❌ **SUPERVISOR ONLY** |
 | the Supervisor kubeconfig for ArgoCD | `make fetch-argocd-kubeconfig` | ❌ **SUPERVISOR ONLY** |
 | delete ONE guest cluster (waits for ALL its VIPs) | `make vks-cluster-delete` | ❌ **SUPERVISOR ONLY** — the guest serves no Cluster/VMService API at all |
