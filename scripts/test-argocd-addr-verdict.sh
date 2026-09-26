@@ -326,8 +326,12 @@ else
   bad "09 does not branch on \$_eff -- a second copy of the guard predicate can drift from the
       function, and the function-based cases above would stay green while it does"
 fi
-# shellcheck disable=SC2016  # the literal $_eff is the POINT: this greps SOURCE text
-if grep -qE '^[[:space:]]*if \[ "\$\(ca_addr_kind "\$_eff"\)" = ip \]; then' <<< "$_body"; then
+# B486: the disclosure classifies $_shown = the value just WRITTEN (which may now be the published
+# name argocd-server) or, when nothing was written, $_eff. Both halves are asserted, so it can key on
+# neither $ip nor ARGOCD_SERVER.
+# shellcheck disable=SC2016  # the literal $_eff/$_shown are the POINT: this greps SOURCE text
+if grep -qE '^[[:space:]]*if \[ "\$\(ca_addr_kind "\$_shown"\)" = ip \]; then' <<< "$_body" \
+   && grep -qE '^_shown="\$\{_pub:-\$_eff\}"' <<< "$_body"; then
   ok "the disclosure classifies the EFFECTIVE address, via the single-sourced ca_addr_kind"
 else
   bad "the disclosure no longer classifies \$_eff -- keying on \$ip fires on a granted NAME (the
