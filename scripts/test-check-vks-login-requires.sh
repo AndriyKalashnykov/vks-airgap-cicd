@@ -21,14 +21,16 @@ gate_on() {  # gate_on <label> <sed-expr on 30's create line> -> sets R
 }
 
 gate_on "unchanged tree" ""
-[ "$R" = 0 ] && ok "the real tree passes" || bad "the real tree fails the gate (rc=$R)"
+if [ "$R" = 0 ]; then ok "the real tree passes"; else bad "the real tree fails the gate (rc=$R)"; fi
 
 # a redirect naming a file with an `n` BEFORE </dev/null — the old class false-redded exactly this
+# shellcheck disable=SC2016  # the sed expressions are literal: $vars are the TEXT being matched
 gate_on "n-bearing redirect" 's#vcf context create "${create_args\[@\]}" </dev/null 2>"$_vcf_err"#vcf context create "${create_args[@]}" 2>"$errn" </dev/null \# MUTATED#'
-[ "$R" = 0 ] && ok "a redirect with an 'n' before </dev/null still passes" || bad "false red on a correct create line (rc=$R)"
+if [ "$R" = 0 ]; then ok "a redirect with an 'n' before </dev/null still passes"; else bad "false red on a correct create line (rc=$R)"; fi
 
 # </dev/null removed — the gate must go red
+# shellcheck disable=SC2016
 gate_on "no </dev/null" 's#vcf context create "${create_args\[@\]}" </dev/null 2>"$_vcf_err"#vcf context create "${create_args[@]}" 2>"$_vcf_err" \# MUTATED#'
-[ "$R" != 0 ] && [ "$R" != 99 ] && ok "a create without </dev/null is red (rc=$R)" || bad "the gate missed a create that can prompt (rc=$R)"
+if [ "$R" != 0 ] && [ "$R" != 99 ]; then ok "a create without </dev/null is red (rc=$R)"; else bad "the gate missed a create that can prompt (rc=$R)"; fi
 
 if [ "$fail" = 0 ]; then echo "test-check-vks-login-requires: ALL PASS ($n)"; else echo "test-check-vks-login-requires: FAILED" >&2; exit 1; fi
