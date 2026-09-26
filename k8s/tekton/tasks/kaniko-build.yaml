@@ -269,9 +269,16 @@ spec:
                 # ALL heads: git-clone.yaml's `--depth 1 -b` clone is single-branch, so a plain
                 # --unshallow fetches only that branch and misses a newer commit elsewhere, which
                 # would then read as "unresolvable" and be overwritten (caught by the test).
-                git -C "$APPDIR" fetch -q --unshallow origin '+refs/heads/*:refs/remotes/origin/*' 2>/dev/null \
-                  || git -C "$APPDIR" fetch -q origin '+refs/heads/*:refs/remotes/origin/*' || true
-                unshallowed=1
+                # ⚠️ FAIL CLOSED: if the app repo cannot be fetched we cannot tell whether ${up} is
+                # newer, and "unresolvable -> ours" would then roll a NEWER deploy back to ours on an
+                # ordinary Gitea blip (measured in review). Refuse instead; a re-run decides.
+                if git -C "$APPDIR" fetch -q --unshallow origin '+refs/heads/*:refs/remotes/origin/*' \
+                   || git -C "$APPDIR" fetch -q origin '+refs/heads/*:refs/remotes/origin/*'; then
+                  unshallowed=1
+                else
+                  echo "ERROR: cannot fetch the app repo, so cannot tell whether ${up} is newer than ${COMMIT} — refusing to overwrite" >&2
+                  exit 1
+                fi
               fi
               if git -C "$APPDIR" cat-file -e "${up}^{commit}" 2>/dev/null \
                  && git -C "$APPDIR" merge-base --is-ancestor "$COMMIT" "$up"; then
@@ -289,7 +296,7 @@ spec:
           # adjacent to newTag/APP_COMMIT would be reverted silently. Allow only our two lines.
           if ! git diff --numstat "origin/${REV}" HEAD | awk '
                $3 != "kustomization.yaml" && $3 != "deployment.yaml" { bad = 1 }
-               $1 > 1 || $2 > 1 { bad = 1 }
+               $1 == "-" || $2 == "-" || $1 > 1 || $2 > 1 { bad = 1 }
                END { exit bad }'; then
             echo "ERROR: rebasing onto ${REV} would change more than newTag and APP_COMMIT:" >&2
             git diff --stat "origin/${REV}" HEAD >&2 || true

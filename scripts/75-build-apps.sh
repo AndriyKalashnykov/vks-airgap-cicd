@@ -162,7 +162,10 @@ build_app() {
         refired=1
         log_warn "[${app}] no PipelineRun ${wait_s}s after the push — re-firing the webhook (empty commit)"
         git -C "$d" commit -q --allow-empty -m "build: re-fire the webhook for ${app}"
-        git -C "$d" push -q origin "$APP_BRANCH"
+        if ! git -C "$d" push -q origin "$APP_BRANCH"; then
+          log_error "[${app}] the re-fire push failed — is the Gitea port-forward alive? (${BASE})"
+          failed=$((failed+1)); return
+        fi
         pushed="${pushed} $(git -C "$d" rev-parse --short HEAD)"
       fi
     else
@@ -178,9 +181,12 @@ build_app() {
       if [ -n "$ok_run" ]; then
         dd2="${HARBOR_TMP}/deploy-check-${app}"; rm -rf "$dd2"
         up=""
-        if git clone -q --depth 1 "${BASE}/${GITEA_ORG}/${APP_DEPLOY_REPO}.git" "$dd2" 2>/dev/null; then
-          up="$(awk '/name: APP_COMMIT/ { getline; sub(/.*value:[ ]*/, ""); gsub(/[" ]/, ""); print; exit }' "$dd2/deployment.yaml" 2>/dev/null || true)"
+        if ! git clone -q --depth 1 "${BASE}/${GITEA_ORG}/${APP_DEPLOY_REPO}.git" "$dd2" 2>/dev/null; then
+          # Unreadable is not "wrong commit": say so, and keep polling until the budget runs out.
+          log_warn "[${app}] could not read ${APP_DEPLOY_REPO} from ${BASE} (port-forward?) — retrying"
+          sleep "$BUILD_APPS_POLL_SECONDS"; elapsed=$((elapsed + BUILD_APPS_POLL_SECONDS)); continue
         fi
+        up="$(awk '/name: APP_COMMIT/ { getline; sub(/.*value:[ ]*/, ""); gsub(/[" ]/, ""); print; exit }' "$dd2/deployment.yaml" 2>/dev/null || true)"
         # shellcheck disable=SC2086  # $pushed is a space-separated list of shas, split on purpose
         if short_sha_in "$up" $pushed; then
           log_info "[${app}] ${ok_run#*/} Succeeded — ${APP_DEPLOY_REPO} names ${up}"

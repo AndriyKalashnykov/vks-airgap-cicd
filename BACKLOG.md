@@ -10795,6 +10795,10 @@ Shipped instead:
 - `99-verify.sh` judges the newest-CREATED new run, not the alphabetically first.
 Not proven: the step in the real `alpine/git` + busybox image under a real race, and the build-apps
 re-fire branch live (both are hard to induce); the happy paths run in every e2e-kind.
+Implementation review fixes: the ancestry fetch now FAILS CLOSED (a failed app-repo fetch used to read
+as "unresolvable" and roll a newer deploy back — RED-proven); binary numstat lines are refused; the test
+covers a fetch failure and a race on the second and third push. Known false red, safe direction: if the
+app branch moves during build-apps, the correctly built newer tip is reported as "not what was pushed".
 
 ## 🔴 B743 — the deployed image tag is the MUTABLE version, so page and bytes can disagree (2026-09-26)
 
