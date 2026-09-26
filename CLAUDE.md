@@ -1102,11 +1102,12 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 ### NOT done — next work, ranked
 
-1. **B486** — `ARGOCD_SERVER` published as an IP; `fetch-argocd-ca` refuses on it (seen on both OSes).
-2. **B735 residuals** — `trust-harbor`/`engine-trust-check` Linux-only on macOS; walk-doc on a macOS
-   row; argocd via Rosetta. **B739** (values the tools write into `.env` go stale).
-3. **B725** (🔴 HIGH) — fabricated `HARBOR_PASSWORD` (three sites now, incl. `04-install-harbor-service.sh`).
-4. **B722**, **B723**, **B734**, then the tier-3 list.
+**The adversary-reviewed plan (2026-09-26) is in [`BACKLOG.md`](BACKLOG.md): row B740 holds the wave
+order.** Wave 1 is offline and parallel: B725 delete + `VC_SS_OUTCOME`, B486 (d)(a)(c)(e), the B735
+brew-list gate, the B739 offline half, the KinD-on-macOS code fixes (A3) and a memory measurement (A0).
+Waves 2-4 run on the Mac. B741 (subagents may write the scratchpad) is in claude-config. Every one of
+those rows carries a dated "Plan 2026-09-26" note. The owner still has to decide two things: a Mac with
+16 GB or more (Scaleway is sold out) and the routing choice.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 

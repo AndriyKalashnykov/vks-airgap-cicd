@@ -21,7 +21,8 @@ cluster's namespaces and the workloads in them.
 | **The surprise** | there are **no Istio credentials** — no login, no token, no admin API. Mesh access is plain kubectl RBAC; `make istio-preflight` reports what you may do and what to ask for. |
 
 Everything you need is in this section — you do not have to read the other scenario. Dual-homed:
-the jump box reaches both the internet and the lab (Supervisor API + Harbor).
+the jump box reaches both the internet and the lab (Supervisor API + Harbor). It runs Ubuntu, Photon OS 5
+or macOS on Apple silicon ([tested platforms](../README.md#tested-platforms)).
 
 ## 0. Get the repo
 
