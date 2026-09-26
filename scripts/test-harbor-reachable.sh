@@ -16,7 +16,7 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP="$(mktemp -d)"; mkdir -p "$TMP/bin"
-cleanup() { rm -rf "$TMP"; local p; for p in ${SRV:-} ${SRV_H:-} ${SRV_O:-} ${SRV_R1:-} ${SRV_R2:-}; do kill "$p" 2>/dev/null; done; }
+cleanup() { rm -rf "$TMP"; local p; for p in ${SRV:-} ${SRV_H:-} ${SRV_O:-} ${SRV_R1:-} ${SRV_R2:-} ${SRV_R3:-}; do kill "$p" 2>/dev/null; done; }
 trap cleanup EXIT
 pass=0; fail=0
 ok()  { printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); }
@@ -143,6 +143,35 @@ else bad "HARBOR_INSECURE=1 + a redirect to a TLS Harbor" "$(printf '%s' "$o" | 
 o="$(runq 1 127.0.0.1:18094)"
 if printf '%s' "$o" | grep -q 'HARBOR_INSECURE=1 does not match'; then bad "a redirect to a NON-Harbor https front end must NOT blame the scheme" "the #1298 mis-attribution is back"
 else ok "a redirect to a NON-Harbor https front end does not blame the scheme"; fi
+# macOS (implementation round, 2026-09-26): there is no real getent; os.sh appends the repo shim, which
+# resolves through dscacheutil. It accepted only `hosts`, so switching to `ahosts` made every Harbor
+# NAME "unresolved" on a Mac -- invisible here, because the stub above forwards ahosts to glibc. Run the
+# REAL shim first on PATH over a fake dscacheutil that knows one name.
+mkdir -p "$TMP/mac"
+cp "$SCRIPT_DIR/compat/darwin/getent" "$TMP/mac/getent"
+cat > "$TMP/mac/dscacheutil" <<'STUB'
+#!/usr/bin/env bash
+[ "$5" = harbor.mac.test ] && printf 'name: harbor.mac.test\nip_address: 127.0.0.1\n'
+exit 0
+STUB
+chmod +x "$TMP/mac/getent" "$TMP/mac/dscacheutil"
+st="$(PATH="$TMP/mac:$PATH" SKIP_DOTENV=1 HARBOR_URL=harbor.mac.test:18097 bash -c '. "$1/lib/os.sh"; . "$1/lib/harbor.sh"; harbor_reachable_state' _ "$SCRIPT_DIR" 2>/dev/null)"
+if [ "$st" = unresolved ]; then bad "macOS: a Harbor NAME through the getent shim" "unresolved -- the shim refused the verb"
+else ok "macOS: a Harbor NAME resolves through the getent shim (state=${st})"; fi
+st="$(PATH="$TMP/mac:$PATH" SKIP_DOTENV=1 HARBOR_URL=127.0.0.1:18097 bash -c '. "$1/lib/os.sh"; . "$1/lib/harbor.sh"; harbor_reachable_state' _ "$SCRIPT_DIR" 2>/dev/null)"
+if [ "$st" = serving ]; then ok "macOS: an IP literal needs no resolver (serving)"; else bad "macOS literal" "got '${st}'"; fi
+
+# a redirect to a DIFFERENT host that is Harbor: the scheme advice alone would leave HARBOR_URL naming
+# a host the certificate does not cover, so the report must name the host it redirects to.
+python3 "$TMP/redir.py" 18093 https://localhost:18097 & SRV_R3=$!
+for _ in $(seq 1 40); do (exec 3<>/dev/tcp/127.0.0.1/18093) 2>/dev/null && break; sleep 0.25; done
+o="$(runq 1 127.0.0.1:18093)"
+if printf '%s' "$o" | grep -q 'It redirects to localhost:18097, so HARBOR_URL must name that host'; then ok "a redirect to another Harbor HOST names that host"
+else bad "a redirect to another Harbor host" "$(printf '%s' "$o" | grep -m2 -E 'redirect|Harbor')"; fi
+o="$(runq 1 127.0.0.1:18095)"
+if printf '%s' "$o" | grep -q 'It redirects to'; then bad "a same-host redirect must not ask to change HARBOR_URL" "it did"
+else ok "a same-host redirect does not ask to change HARBOR_URL"; fi
+kill "$SRV_R3" 2>/dev/null
 kill "$SRV_H" "$SRV_O" "$SRV_R1" "$SRV_R2" 2>/dev/null
 
 # HARBOR_URL genuinely unset must not invent a problem -- create-from-nothing reaches here before

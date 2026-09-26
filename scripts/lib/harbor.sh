@@ -596,19 +596,28 @@ harbor_url_host() {
 harbor_url_is_literal() {
   case "$1" in
     *:*) return 0 ;;
-    *[!0-9.]*|'') return 1 ;;
-    *.*.*.*) return 0 ;;
+    *[!0-9.]*|''|*..*|.*|*.) return 1 ;;
   esac
-  return 1
+  local IFS=. o n=0
+  # shellcheck disable=SC2086  # splitting on "." is the point
+  set -- $1
+  [ "$#" = 4 ] || return 1
+  for o in "$@"; do n=$((n + 1)); [ "${#o}" -le 3 ] && [ "$o" -le 255 ] || return 1; done
+  return 0
 }
 
-# _harbor_resolve <host> — the first address, or nothing. `getent AHOSTS`, NOT `getent hosts`:
+# _harbor_resolve <host> — the first address, or nothing. A literal is returned as-is; a name goes
+# through `getent AHOSTS`, NOT `getent hosts`:
 # MEASURED 2026-09-26, `getent hosts 172.18.0.3` (an IP with no PTR record) returns rc=2, so every
 # IP-literal HARBOR_URL -- every KinD run, and any lab that hands a tenant an address -- read as
 # "does not resolve yet" while it served. `ahosts` goes through getaddrinfo, which takes a literal
-# numerically and still reads DNS and /etc/hosts for a name. awk DRAINS (no `exit`): an early exit
+# numerically and still reads DNS and /etc/hosts for a name. The macOS shim
+# (scripts/compat/darwin/getent) accepts `ahosts` for exactly this caller. awk DRAINS (no `exit`): an early exit
 # SIGPIPEs getent and pipefail turns a found address into a failure.
 _harbor_resolve() {
+  # A literal needs no resolver at all -- and on macOS `getent` is a repo shim over dscacheutil, so
+  # not calling it for a literal removes a whole platform variable (implementation round, 2026-09-26).
+  if harbor_url_is_literal "$1"; then printf '%s' "$1"; return 0; fi
   timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent ahosts "$1" 2>/dev/null | awk 'NR == 1 { print $1 }' || true
 }
 
@@ -620,6 +629,9 @@ _harbor_resolve() {
 # still names the old one. MEASURED, walk row 1: DNS said .143 while Harbor was at .146, and it cost
 # FIVE downstream failures. harbor_reachable_report diagnoses it in about a second -- so a wait that
 # treats `silent` and `unresolved` alike turns a one-second true positive into a 15-minute one.
+# ⚠️ A TLS Harbor probed over http (HARBOR_INSECURE=1) is `serving` HERE and a PROBLEM in
+# harbor_reachable_report -- deliberately: it does answer, and the scheme is a CONFIG problem the report
+# names. 04-harbor-reachable.sh therefore skips its wait and still exits 1 via the report.
 harbor_reachable_state() {
   [ -n "${HARBOR_URL:-}" ]                          || { printf 'unresolved'; return; }
   # ⚠️ BOUNDED. `getent hosts` is NOT covered by either creds timeout variable, and it is the
@@ -683,6 +695,10 @@ harbor_reachable_report() {
               *'"auth_mode"'*)
                 printf '%sHarbor at %s redirects http to https: it serves TLS, so HARBOR_INSECURE=1 does not match it.\n' "$bad_p" "$HARBOR_URL" >&2
                 printf '%sSet HARBOR_INSECURE=0, or remove it wherever it is set: .env, .env.state, or the make command line.\n' "$note_p" >&2
+                local rhost; rhost="${loc#https://}"; rhost="${rhost%%/*}"
+                if [ "${rhost%%:*}" != "$(harbor_url_host)" ]; then
+                  printf '%sIt redirects to %s, so HARBOR_URL must name that host (its certificate names it, not %s).\n' "$note_p" "$rhost" "$HARBOR_URL" >&2
+                fi
                 printf '%sIts CA, if self-signed: make fetch-harbor-ca\n' "$note_p" >&2
                 return 1 ;;
             esac ;;
