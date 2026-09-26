@@ -2140,6 +2140,11 @@ caller's value; `test-insecure-toggle-snapshot` pins both arms. (a): wording onl
 `.env.example`. This does **not** reopen change 1, whose defects are independent of the
 contract. **(e) closed as unnecessary, 2026-09-26 — measured:** `test-argocd-address-classify.sh` passes with `ARGOCD_HOST=argocd.example.test` exported (rc 0, same as unset), because (c) put `ARGOCD_HOST` in `load_env`'s snapshot list; a fixture blank would guard a leak that no longer happens. What keeps B486 open is the IP-versus-SAN question itself (change 1 stays refuted).
 
+**2026-09-26 — F7 is ALREADY DONE (measured, not built today):** `argocd_endpoint_answers` lives in
+`lib/argocd.sh` and both `09-argocd-address.sh` and `91-e2e-tenant-mechanism.sh` call it;
+`argocd-auth-check.sh` reads the same probe's recorded status. What keeps B486 open: F6 (needs a lab
+timing measurement of VIP stability after the CR's conditions go True) and the IP-versus-SAN decision.
+
 ## 🔴 B484 — the Forbidden-reads-as-absent sweep: a FAIL-OPEN air-gap check outranks the wrong-message bug 🔴 open
 
 **⚠️ 2026-09-10 — RE-GRADED by a `vks-adversary` round; two of this row's residuals are STALE.**
@@ -9543,7 +9548,7 @@ subshell form above, which bypasses `load_env`.
 A round was spent re-deriving a filed refutation. A handoff's task list is a CLAIM about the backlog
 and must be checked against it, not just against the code.
 
-## 🔴 B722 — the REFUSED state arm still misinforms: its only remedy is a no-op LOOP, its cause is wrong, and its citation points at another stream
+## 🟡 B722 — (MOSTLY DONE 2026-09-26: #1312 + #1315) the REFUSED state arm still misinforms: its only remedy is a no-op LOOP, its cause is wrong, and its citation points at another stream
 
 Shipped in #1236: the refused arm no longer prescribes `make install-ingress`. **Four residuals from
 the same two rounds are NOT fixed**, all in `scripts/creds.sh`, all on the path a tenant hits when a
@@ -9604,6 +9609,18 @@ cluster) … The value exists on disk and is not in scope."* Port it, gated on `
 - **F8 (low):** the refused report renders `https://harbor.vks.local` for an unset `HARBOR_URL`, beside
   a line saying the endpoint cannot be named.
 
+**2026-09-26 — the loop is fixed (#1315).** `state_set` archives a sink stamped for another cluster
+before it writes (keyed on `_VKS_STATE_MISMATCH` plus a re-read of the stamp) and starts a fresh,
+UNSTAMPED one. The implementation round measured the stamped alternative at 4 archives in a 5-step
+Supervisor/guest walk; unstamped gives 1 archive with every key in one sink
+(`test-state-archive-on-write`, 12 cases, RED-proven). F3/F7 fixed in #1312.
+**Still open:** F8 (the refused report renders `https://harbor.vks.local` for an unset `HARBOR_URL`);
+the optional `INGRESS_LB_IP_OVERRIDE` in creds for `istio-existing`; and a residual the fix created
+knowingly — a real-lab sink stamped by hand (`make state-stamp`) is ARCHIVED by the first write selected
+for the OTHER server (e.g. a Supervisor-side `state_set` against a guest-stamped sink). That is loud and
+`make state-restore` reverses it, where before it looped silently; whether `make state-stamp` should
+refuse on a real lab is an idea-round question, not built.
+
 ## ✅ B723 — (DONE 2026-09-26) the archive is a WRITE-ONLY GRAVEYARD: 8 sinks hold 0600 passwords and nothing reads or prunes them
 
 `state_archive` is faithful — `mv`, never `rm` (and #1236 closed the one path that still `rm`'d). The
@@ -9641,6 +9658,12 @@ with a per-line `sed 's/…PASSWORD=.*/…=<redacted>/'`, so the CONTINUATION li
 secret would print raw. `state-archives` now reads keys with a quote-state machine; `state_show` should
 reuse it. Reachability: `set_env_var` single-quotes, so a newline-bearing value CAN be stored; today's
 generated passwords are single-line (inferred, not measured).
+
+**Follow-up #1311 (2026-09-26):** `make state-restore` shipped UNRUNNABLE — a bare
+`state-restore: export ARCHIVE` made GNU make read `export` as a prerequisite, and every test called the
+script, so all passed. The line is gone (a command-line `ARCHIVE` reaches the recipe unexported,
+measured) and the test now runs both make targets, RED-proven. Used for real the same day: the main
+checkout's lab overlay (displaced by a KinD repro run) was restored and `make creds` read `flow: real lab`.
 
 ## 🟡 B724 — two offline tests are red on `main`, and one is green in CI and red on every box that has operator state
 
@@ -10398,6 +10421,11 @@ corrected. Tests: `test-fetch-argocd-kubeconfig-output.sh` (12 checks, 5 fail on
 Not measured: whether vcf would prompt on a TTY with the password unset (the SSO account is lockable,
 so it was not tried); the create now cannot prompt either way.
 
+**Lab-verified 2026-09-26 16:08Z** (one run, main `4b1628c`): `make fetch-argocd-kubeconfig` rc=0; vcf
+logged `Reading the password from env`; the benign `[x] … could not be discovered` was followed by the
+end-result check (`argocd-server is visible in ns/lab`) and the note; zero `will prompt` / `could not
+select` lines. The kubeconfig's context was already `argocd-supervisor:lab` before the run (B744).
+
 ## 🔴 B735 — macOS jump box: the Makefile + scripts assume GNU/Linux; port it (Ubuntu + Photon must not regress)
 
 Owner decision 2026-09-23: support a macOS jump box by putting **Homebrew's GNU tools** first on PATH
@@ -10779,6 +10807,15 @@ install. Then, after emptying Homebrew and removing the VMs, mise, `~/.docker`, 
 `e2e-kind` green in 31.5 min (31 images intact, 6/6 built, every app verified, 8 UIs, PSA OK), teardown left
 0 daemons, 0 172.18 routes, 0 containers. Not reset, so still untested: a Mac without Rosetta, and the
 `sudo -b` password prompt. Evidence: `~/walk-evidence/from-mac/kind-20260926/fresh-walk/walk.log`.
+
+**Residuals, 2026-09-26:** the three #1298 residuals are fixed in #1313 — an IP-literal `HARBOR_URL`
+read as unresolved (`getent hosts` rc=2 without a PTR record); `HARBOR_INSECURE=1` against a TLS
+Harbor read green on its 301 (now named, only when the redirect target is demonstrably Harbor); the
+uninstall curl advice lacked `--cacert`. The implementation round caught that the macOS `getent`
+shim accepted only `hosts`, fixed there. The #1300 residual (70's RED 1 discarded its output) is fixed
+in #1314, RED-proven on the real cross-cluster e2e. **Still open (Mac-only):** the A3 trust half
+(trust-harbor / engine-trust-check refuse on Darwin), a Mac without Rosetta, and the `sudo -b` password
+prompt.
 
 ## ✅ B741 — (DONE 2026-09-26, claude-config #117) subagents may write the SESSION SCRATCHPAD (owner-approved 2026-09-26; claude-config hook)
 
