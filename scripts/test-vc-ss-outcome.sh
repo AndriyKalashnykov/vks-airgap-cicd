@@ -18,6 +18,8 @@ bad() { printf 'FAIL  %s\n' "$1" >&2; fail=1; }
 run_case() {
   local T; T="$(mktemp -d)"
   printf '%s\n' "$1" > "$T/responses"
+  # shellcheck disable=SC2016  # the body is single-quoted ON PURPOSE: $1/$2 and the stub functions
+  # must expand in the CHILD bash, not here.
   env -u REPO_ROOT bash -c '
     T="$1"; PRESENT="$2"
     . scripts/lib/os.sh >/dev/null 2>&1
@@ -67,4 +69,4 @@ else
   bad "04 no longer gates the HARBOR_PASSWORD publish on VC_SS_OUTCOME=installed (B725)"
 fi
 
-[ "$fail" -eq 0 ] && echo "vc-ss-outcome: ALL PASS" || { echo "vc-ss-outcome: FAILED"; exit 1; }
+if [ "$fail" -eq 0 ]; then echo "vc-ss-outcome: ALL PASS"; else echo "vc-ss-outcome: FAILED"; exit 1; fi

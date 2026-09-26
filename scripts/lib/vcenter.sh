@@ -516,6 +516,7 @@ vc_ss_install() {
           rm -f "$req"
           log_warn "install returned HTTP ${code}, but ${id} IS present on the cluster - treating as installed."
           log_warn "  vCenter said: $(printf '%s' "$out" | head -c 200)"
+          # shellcheck disable=SC2034  # an OUT-PARAMETER, read by 04-install-harbor-service.sh
           VC_SS_OUTCOME=ambiguous
           return 0
         fi
