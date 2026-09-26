@@ -112,7 +112,12 @@ log_info "  names:    ${sans:-<none>}"
 if [ "$(ca_addr_kind "$_host")" = ip ]; then
   log_warn "  ARGOCD_SERVER is the IP ${_host}, and this certificate verifies ONLY the names above."
   log_warn "  Until ARGOCD_SERVER is one of those names, setting ARGOCD_CA_FILE makes every verifying"
-  log_warn "  argocd call fail on the name. Map one in /etc/hosts to ${_host} and set ARGOCD_SERVER to it first."
+  if [ "${ARGOCD_SERVER_SOURCE:-}" = discovered ]; then
+    log_warn "  argocd call fail on the name. Add '${_host} argocd-server' to /etc/hosts, then re-run"
+    log_warn "  make argocd-address: it publishes argocd-server itself once the name resolves and the cert carries it."
+  else
+    log_warn "  argocd call fail on the name. Map one in /etc/hosts to ${_host} and set ARGOCD_SERVER to it first."
+  fi
 else
   log_info "  It verifies ONLY a name in that list, never an IP."
 fi

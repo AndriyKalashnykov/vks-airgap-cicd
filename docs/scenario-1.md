@@ -506,13 +506,42 @@ working, not failing. Put your new password in your password manager now.
 A non-zero exit from `make argocd-address` says which of the two things is missing — the ArgoCD
 **instance** (it never reconciled) or its **LoadBalancer address** — and they need different fixes.
 
+<details><summary>Verify TLS instead of <code>--insecure</code> (Supervisor access; one sudo edit)</summary>
+
+The default ArgoCD certificate names `argocd-server` and no IP, so an IP can only be used with
+`--insecure`. To verify, give this jump box the name. It is a single-label name, which reaches DNS
+only through a search domain, so `/etc/hosts` is the one mechanism that works everywhere; nothing
+else dials ArgoCD, so the guest nodes do not need it.
+
+```bash
+make argocd-ca-from-cluster          # reads the certificate from the Supervisor; proves it is the one served
+# add to /etc/hosts (sudo), where <ip> is ARGOCD_SERVER's current value:   <ip>  argocd-server
+make argocd-address                  # re-run: it now writes ARGOCD_SERVER=argocd-server
+# set ARGOCD_CA_FILE=./secrets/argocd-ca.crt in .env, then:
+set -a; . ./.env; set +a
+argocd login "$ARGOCD_SERVER" --username admin --server-crt "$ARGOCD_CA_FILE"
+make argocd-auth-check
+```
+
+**Expect:** `wrote ARGOCD_SERVER=` followed by the name argocd-server, `argocd login` succeeding with
+no `--insecure`, and `make argocd-auth-check` printing `VERIFYING against` on its TLS line. That line
+is about trust. The check reads the password from the initial Secret, so after you changed it with
+`argocd account update-password` its credential half fails even though TLS verified. `make argocd-address` publishes the name only when it resolves here to exactly
+the LoadBalancer address and the certificate served there carries it; otherwise it keeps the IP.
+Behind an HTTPS proxy, add `argocd-server` to `NO_PROXY`.
+
+*This block is collapsed, so the walker never runs it.* `make uninstall-all` prints the command that
+removes the `/etc/hosts` line.
+
+</details>
+
 <details><summary>Optional — both already work</summary>
 
 **→ set in `./.env`:** uncomment the key and give it your value. Leave it commented to take the default.
 
 | key | default | how to get the value |
 |---|---|---|
-| `ARGOCD_SERVER` | **written for you by `make argocd-address`** (step 5) — the `argocd-server` LB IP | Normally leave it alone. It is **not** display-only: the `argocd login` above, `make fetch-argocd-ca`, and `make gitops`'s `api` path all dial it. Override it only with a **name the certificate carries** — an IP cannot verify (DNS SANs only, no IP SAN, as noted above), which is why that login needs `--insecure`. |
+| `ARGOCD_SERVER` | **written for you by `make argocd-address`** (step 5) — the `argocd-server` LB IP, or `argocd-server` itself once that resolves here to the LB IP and the certificate carries it (see *Verify TLS* above) | Normally leave it alone. It is **not** display-only: the `argocd login` above, `make fetch-argocd-ca`, and `make gitops`'s `api` path all dial it. Override it only with a **name the certificate carries** — an IP cannot verify (DNS SANs only, no IP SAN, as noted above), which is why that login needs `--insecure`. |
 | `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | what `make fetch-supervisor-ca` wrote. Set it only if you moved it. |
 
 </details>

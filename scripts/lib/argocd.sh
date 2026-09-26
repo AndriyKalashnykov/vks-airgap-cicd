@@ -1056,9 +1056,44 @@ which MISDIAGNOSES an update-RBAC denial.
   printf '%s' "$_create"
 }
 
+
+# B486: the name the DEFAULT VKS ArgoCD certificate carries. A cited constant, not a knob: the
+# lab-verified SAN list (docs/vks-services/argocd.md) is localhost, argocd-server, argocd-server.<ns>,
+# .<ns>.svc, .<ns>.svc.cluster.local -- no IP SAN. Only the bare name is namespace-independent.
+# A platform-issued cert with other names is a GRANTED value (the operator sets ARGOCD_SERVER).
+ARGOCD_DEFAULT_CERT_NAME=argocd-server
+
+# argocd_name_resolves_to <name> <ip> -- 0 when <name> resolves to EXACTLY {<ip>} on this machine.
+# Exact, not "includes": a second address would let the client dial something the cert was not
+# checked on. getent reads /etc/hosts AND DNS, which is how the CLI will resolve it.
+argocd_name_resolves_to() {
+  local got
+  # Bounded, as lib/harbor.sh bounds its resolver: an unreachable DNS server otherwise waits
+  # timeout x attempts x search domains. (os.sh refuses to run on macOS without GNU timeout.)
+  got="$(timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent ahosts "$1" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
+  [ "$got" = "$2 " ]
+}
+
+# argocd_cert_carries_name <ip> <name> -- 0: the certificate served at <ip>:443 carries DNS:<name>
+# EXACTLY (not a prefix: argocd-server.lab does not count for argocd-server); 1: it does not;
+# 2: UNKNOWN -- no certificate was read, which is a connection fact, never a verdict.
+argocd_cert_carries_name() {
+  local pem sans
+  pem="$(timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client -connect "$1:443" -servername "$2" \
+           </dev/null 2>/dev/null | openssl x509 2>/dev/null || true)"
+  [ -n "$pem" ] || return 2
+  # A cert WAS read. If the SAN read itself fails (an openssl without -ext), that is UNKNOWN, not "absent".
+  sans="$(printf '%s\n' "$pem" | openssl x509 -noout -ext subjectAltName 2>/dev/null)" || return 2
+  sans="$(printf '%s\n' "$sans" | tail -n +2 | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  # herestring, not a pipe into `grep -q`: under pipefail an early-exiting grep SIGPIPEs its producer
+  # and a FOUND name reads as absent.
+  grep -qxF "DNS:$2" <<< "$sans"
+}
+
 # argocd_effective_addr <argocd_server> <argocd_server_source> <resolved_ip>
 #   -> the address that is ACTUALLY in effect after 09-argocd-address.sh's write guard: the GRANTED
 #      value when the guard leaves it alone, the RESOLVED ip when it writes.
+#      (Since B486 the write may publish a NAME instead of the ip; `eff == ip` still means "we own it".)
 #
 # ⚠️ IT IS THE DECISION, NOT A SECOND COPY OF IT. 09 calls this ONCE and branches on
 # `[ "$eff" = "$ip" ]`, because `eff == ip` is BICONDITIONAL with "the guard writes" -- verified

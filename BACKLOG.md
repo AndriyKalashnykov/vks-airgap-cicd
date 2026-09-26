@@ -2158,6 +2158,24 @@ write (tri-state probe with timeout, exact-SAN match, ownership predicate), the 
 (re-run `make argocd-address` after the hosts line), show-dns-records' single-label wording, 02-env's
 IP writer, and a scenario-1 walk.
 
+**2026-09-26 — steps 2 and 3 built (one PR, two implementation rounds + one idea round).** 09 publishes
+`argocd-server` on the conditions above; the `--server-crt` login and "verifies" line need a MEASURED
+`ca_verifies_endpoint` (chain AND name), so a stale/garbage/unrelated CA prints `--insecure` (both
+rounds had caught a first version that trusted any non-empty file). Our name dropped from the cert,
+or resolving elsewhere, with a CA set: STOP, nothing written. NO_PROXY warning behind a proxy. `make
+creds` (marker arm) prints the map / re-run / `argocd-ca-from-cluster` recipe; `show-dns-records`
+prints a single-label name as a jump-box `/etc/hosts` line, not an A record; `uninstall-all` prints
+the anchored removal. **02-env's IP writer was NOT changed (idea round, refuted):** env-populate
+discovers with the GUEST kubeconfig, so on a real lab it never finds ArgoCD, and the `discovered`
+marker must keep meaning "09 wrote this" (09 is Supervisor-only; `make creds` relies on it).
+Measured against the live VIP: the SAN helper returns 0 for `argocd-server`, 1 for `argocd`, 2 for an
+unused IP. **Still open:** (1) the §5 *Verify TLS* block is collapsed, so the walker never runs it —
+walk it once on the lab (needs one sudo `/etc/hosts` edit on the jump box): argocd-ca-from-cluster →
+hosts line → argocd-address writes the name → argocd login `--server-crt` → argocd-auth-check shows
+`VERIFYING against`. That is also the only check of the argocd CLI (Go) accepting the CA:FALSE leaf
+as `--server-crt`. (2) F6, VIP stability after the CR goes True. (3) Does argocd-server regenerate
+its self-signed cert on expiry (would invalidate the pinned anchor)? UNVERIFIED.
+
 ## 🔴 B484 — the Forbidden-reads-as-absent sweep: a FAIL-OPEN air-gap check outranks the wrong-message bug 🔴 open
 
 **⚠️ 2026-09-10 — RE-GRADED by a `vks-adversary` round; two of this row's residuals are STALE.**
@@ -10924,6 +10942,18 @@ is decided by write-back order — so the page can name one commit while running
 ancestry guard fixes APP_COMMIT only. Fix direction: deploy by the sha tag (already pushed as the second
 Harbor tag) or by digest, and keep the version for display. Needs its own design round: the `replacements`
 block in each kustomization and the verify predicate both key on the version tag.
+
+## 🔴 B745 — `make argocd-auth-check` fails after the password change scenario-1 §5 tells you to make (2026-09-26)
+
+Found by the B486 step-3 implementation round (source-read, not run on the lab). §5 runs `argocd
+account update-password`, then says **Expect:** `argocd-auth-check: OK`. But `argocd_admin_password`
+(lib/argocd.sh) reads `argocd-initial-admin-secret` FIRST, and nothing deletes that Secret (RULE
+ZERO-V's measured incident), so after the change the check authenticates with the OLD password and
+fails. The walker never runs `update-password` (it is interactive), which is why no walk caught it.
+The new *Verify TLS* block states this and points at the TLS line instead. **Done when:** §5's order
+or wording is true for a human (run the check before the change, or say the credential half needs
+`ARGOCD_ADMIN_PASSWORD` after it — and settle which one wins by reading the code, then measuring once
+on the lab).
 
 ## 🔴 B744 — 31-fetch-argocd-kubeconfig repoints the CURRENT CONTEXT of 30's kubeconfig (2026-09-26)
 

@@ -18,6 +18,40 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin"
+# B486: 09 now asks two things before publishing the argocd-server name -- does it resolve here, and
+# does the served certificate carry it. Both are STUBBED so the harness is hermetic: a real getent
+# would read this box's /etc/hosts, and a real s_client would dial a fake LB for 15s.
+#   GETENT_IP='<addr> ...' -> `getent ahosts argocd-server` answers each <addr> (unset: nothing)
+#   SAN_CERT=<file>    -> `openssl s_client` "serves" that certificate (unset: nothing served)
+REAL_OPENSSL="$(command -v openssl)"
+cat > "$T/bin/getent" <<'STUB'
+#!/usr/bin/env bash
+[ -n "${GETENT_IP:-}" ] || exit 2
+for _ip in $GETENT_IP; do printf '%s STREAM %s\n%s DGRAM\n' "$_ip" "$2" "$_ip"; done
+STUB
+# s_client WITH -CAfile is ca_verifies_endpoint's call: emulate the verdict with a REAL
+# `openssl verify` of the served cert against that anchor and name, printing the lines it keys on.
+cat > "$T/bin/openssl" <<STUB
+#!/usr/bin/env bash
+if [ "\$1" = s_client ]; then
+  [ -n "\${SAN_CERT:-}" ] || exit 1
+  ca=""; hn=""; prev=""
+  for a in "\$@"; do case "\$prev" in -CAfile) ca="\$a" ;; -verify_hostname) hn="\$a" ;; esac; prev="\$a"; done
+  # The probe must dial the fake LB on 443 (a typo in -connect would otherwise stay green).
+  case " \$* " in *" -connect 10.20.30.40:443 "*|*" -connect argocd-server:443 "*) ;; *) echo "STUB: unexpected -connect in: \$*" >&2; exit 1 ;; esac
+  if [ -z "\$ca" ]; then cat "\$SAN_CERT"; exit 0; fi
+  echo "CONNECTED(00000003)"
+  v="\$("$REAL_OPENSSL" verify -CAfile "\$ca" \${hn:+-verify_hostname "\$hn"} "\$SAN_CERT" 2>&1)" && { echo "Verify return code: 0 (ok)"; exit 0; }
+  case "\$v" in *"hostname mismatch"*) echo "Hostname mismatch"; echo "Verify return code: 62"; exit 1 ;; esac
+  echo "Verify return code: 18"; exit 1
+fi
+exec "$REAL_OPENSSL" "\$@"
+STUB
+chmod +x "$T/bin/getent" "$T/bin/openssl"
+_mint() { "$REAL_OPENSSL" req -x509 -newkey rsa:2048 -keyout "$T/$1.key" -out "$T/$1.crt" -days 1 -nodes \
+            -subj "/CN=argocd-server" -addext "subjectAltName=$2" >/dev/null 2>&1; }
+_mint carries 'DNS:localhost,DNS:argocd-server,DNS:argocd-server.lab'
+_mint prefix  'DNS:localhost,DNS:argocd-server.lab,DNS:argocd-server.lab.svc'
 printf 'apiVersion: v1\n' > "$T/sup.kubeconfig"
 : > "$T/.env.example"
 
@@ -222,8 +256,11 @@ _render() {  # _render <ARGOCD_SERVER> <ARGOCD_SERVER_SOURCE> -> the printed blo
     ARGOCD_NAMESPACE=cicd ARGOCD_ADDRESS_WAIT_SECONDS=4 ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS=1 \
     SKIP_DOTENV=1 ARGOCD_SERVER="$1" ARGOCD_SERVER_SOURCE="$2" \
     bash "$SCRIPT_DIR/09-argocd-address.sh" 2>&1
+  _rrc=$?
   rm -f "$T/bin/curl"
+  return "$_rrc"
 }
+_wrote() { grep -m1 '^ARGOCD_SERVER=' "$T/.env" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"; }
 
 _o="$(_render '' '')"
 ck "unset -> the IP arm fires"                 "$(grep -qF 'That address is an IP' <<< "$_o" && echo y || echo n)" "y"
@@ -252,5 +289,68 @@ ck "placeholder -> does NOT claim we wrote it"      "$(grep -qF '(we wrote the p
 _o="$(_render '10.1.1.1' 'discovered')"
 ck "our previous value -> says we wrote it"         "$(grep -qF '(we wrote the previous value)' <<< "$_o" && echo y || echo n)" "y"
 ck "our previous value -> not called a placeholder" "$(grep -qF 'replacing the placeholder' <<< "$_o" && echo y || echo n)" "n"
+
+# ── B486: publish the NAME only when it resolves here to EXACTLY the LB AND the cert carries it ──
+_o="$(GETENT_IP=10.20.30.40 SAN_CERT="$T/carries.crt" _render '' '')"
+ck "resolves + cert carries it -> publishes argocd-server"   "$(_wrote)" "argocd-server"
+ck "  ... and the IP arm does not fire"                      "$(grep -qF 'That address is an IP' <<< "$_o" && echo y || echo n)" "n"
+_o="$(GETENT_IP=10.20.30.40 SAN_CERT="$T/prefix.crt" _render '' '')"
+ck "cert carries only argocd-server.lab -> the IP (exact, not prefix)" "$(_wrote)" "10.20.30.40"
+_o="$(SAN_CERT="$T/carries.crt" _render '' '')"
+ck "cert carries it but the name does not resolve -> the IP" "$(_wrote)" "10.20.30.40"
+_o="$(GETENT_IP=10.9.9.9 SAN_CERT="$T/carries.crt" _render '' '')"
+ck "name resolves ELSEWHERE -> the IP"                       "$(_wrote)" "10.20.30.40"
+_o="$(GETENT_IP='10.20.30.40 10.9.9.9' SAN_CERT="$T/carries.crt" _render '' '')"
+ck "name resolves to the LB AND another address -> the IP (exactly one)" "$(_wrote)" "10.20.30.40"
+_o="$(GETENT_IP=10.20.30.40 _render '' '')"
+ck "cert unreadable on a first write -> the IP"              "$(_wrote)" "10.20.30.40"
+ck "  ... and says it could not read it"                     "$(grep -qF 'could not read the certificate' <<< "$_o" && echo y || echo n)" "y"
+_o="$(GETENT_IP=10.20.30.40 _render argocd-server discovered)"
+ck "our name + cert unreadable -> KEEPS the name (unknown is not absent)" "$(_wrote)" "argocd-server"
+printf 'x\n' > "$T/ca.crt"
+_o="$(GETENT_IP=10.9.9.9 SAN_CERT="$T/carries.crt" ARGOCD_CA_FILE="$T/ca.crt" _render argocd-server discovered)"; _rc=$?
+ck "our name, VIP moved, CA set -> STOPS (rc != 0)"         "$([ "$_rc" != 0 ] && echo stop || echo went-on)" "stop"
+ck "  ... nothing written"                                   "$(_wrote)" ""
+ck "  ... prints the corrected hosts line"                   "$(grep -qF '10.20.30.40 argocd-server' <<< "$_o" && echo y || echo n)" "y"
+_o="$(GETENT_IP=10.9.9.9 SAN_CERT="$T/carries.crt" _render argocd-server discovered)"
+ck "our name, VIP moved, NO CA -> the IP, with the fix printed" "$(_wrote)" "10.20.30.40"
+# A STALE anchor (a different self-signed cert, as after a lab re-cut) must NOT read as verified.
+_mint stale 'DNS:localhost,DNS:argocd-server'
+_o="$(GETENT_IP=10.20.30.40 SAN_CERT="$T/carries.crt" ARGOCD_CA_FILE="$T/stale.crt" _render '' '')"
+ck "name + a STALE CA -> NOT verified (--insecure)"          "$(grep -qF -- '--server-crt' <<< "$_o" && echo verified || echo insecure)" "insecure"
+ck "  ... and says the anchor is not this instance's"         "$(grep -qF 'is not this instance' <<< "$_o" && echo y || echo n)" "y"
+cp "$T/carries.crt" "$T/ca.crt"
+_o="$(GETENT_IP=10.20.30.40 SAN_CERT="$T/carries.crt" ARGOCD_CA_FILE="$T/ca.crt" _render '' '')"
+ck "name + the served cert as CA -> login VERIFIES (--server-crt)" "$(grep -qF -- '--server-crt' <<< "$_o" && echo y || echo n)" "y"
+ck "  ... and does not say --insecure"                       "$(grep -qF -- '--insecure' <<< "$_o" && echo y || echo n)" "n"
+ck "  ... and says it MEASURED it"                           "$(grep -qF 'verifies against' <<< "$_o" && echo y || echo n)" "y"
+# More ways a CA file must NOT produce "verified": garbage, a GRANTED name (no cert read on that
+# branch), and our name whose cert could not be read.
+printf 'x\n' > "$T/garbage.crt"
+_o="$(GETENT_IP=10.20.30.40 SAN_CERT="$T/carries.crt" ARGOCD_CA_FILE="$T/garbage.crt" _render '' '')"
+ck "name + a garbage CA file -> --insecure"                 "$(grep -qF -- '--server-crt' <<< "$_o" && echo verified || echo insecure)" "insecure"
+_o="$(ARGOCD_CA_FILE="$T/ca.crt" _render argocd.lab.test '')"
+ck "granted name + CA, nothing served for it -> --insecure"  "$(grep -qF -- '--server-crt' <<< "$_o" && echo verified || echo insecure)" "insecure"
+_o="$(GETENT_IP=10.20.30.40 ARGOCD_CA_FILE="$T/ca.crt" _render argocd-server discovered)"
+ck "our name, cert unreadable, CA set -> keeps name, --insecure" "$(_wrote) $(grep -qF -- '--server-crt' <<< "$_o" && echo verified || echo insecure)" "argocd-server insecure"
+# The cert no longer carries our published name, CA set -> STOP (same reason as a moved VIP).
+_o="$(GETENT_IP=10.20.30.40 SAN_CERT="$T/prefix.crt" ARGOCD_CA_FILE="$T/ca.crt" _render argocd-server discovered)"; _rc=$?
+ck "our name dropped from the cert, CA set -> STOPS, nothing written" "$([ "$_rc" != 0 ] && echo stop || echo went-on) $(_wrote)" "stop "
+# A RELATIVE ARGOCD_CA_FILE is resolved from the repo root, as make runs it.
+cp "$T/carries.crt" "$T/rel-ca.crt"
+_o="$(cd / && GETENT_IP=10.20.30.40 SAN_CERT="$T/carries.crt" ARGOCD_CA_FILE=./rel-ca.crt _render '' '')"
+ck "a relative CA path is judged from the repo root"         "$(grep -qF -- '--server-crt' <<< "$_o" && echo y || echo n)" "y"
+_o="$(GETENT_IP=10.9.9.9 SAN_CERT="$T/carries.crt" ARGOCD_CA_FILE="$T/ca.crt" _render argocd-server discovered)"
+ck "VIP moved with an existing entry -> says REPLACE, not add"  "$(grep -qF 'replace the argocd-server entry' <<< "$_o" && echo y || echo n)" "y"
+_o="$(SAN_CERT="$T/carries.crt" ARGOCD_CA_FILE="$T/ca.crt" _render argocd-server discovered)"
+ck "name resolves to nothing -> says ADD, not delete"          "$(grep -qF 'add to /etc/hosts:   10.20.30.40 argocd-server' <<< "$_o" && ! grep -qF 'replace the' <<< "$_o" && echo y || echo n)" "y"
+
+# Behind a proxy, a single-label name goes to the proxy unless NO_PROXY lists it.
+_o="$(GETENT_IP=10.20.30.40 SAN_CERT="$T/carries.crt" HTTPS_PROXY=http://proxy:3128 NO_PROXY=localhost _render '' '')"
+ck "proxy set, NO_PROXY lacks the name -> warns"             "$(grep -qF 'NO_PROXY does not list argocd-server' <<< "$_o" && echo y || echo n)" "y"
+_o="$(GETENT_IP=10.20.30.40 SAN_CERT="$T/carries.crt" HTTPS_PROXY=http://proxy:3128 NO_PROXY='localhost, argocd-server' _render '' '')"
+ck "proxy set, NO_PROXY lists it -> silent"                  "$(grep -qF 'NO_PROXY does not list' <<< "$_o" && echo y || echo n)" "n"
+_o="$(GETENT_IP=10.20.30.40 SAN_CERT="$T/carries.crt" _render argocd.lab.test '')"
+ck "a GRANTED name is still never touched"                   "$(_wrote)" ""
 
 printf '\n  %d passed, %d failed\n' "$p" "$f"; [ "$f" -eq 0 ]
