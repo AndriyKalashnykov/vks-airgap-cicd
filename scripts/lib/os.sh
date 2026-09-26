@@ -2196,6 +2196,79 @@ assert_run_sentinel() {
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/state.sh"
 
 # ---------------------------------------------------------------------------
+# el_wait_ready — wait until the Tekton EventListener can RECEIVE a Gitea webhook. Sets
+# EL_WAIT_REASON; returns 0 ready, 1 not ready (timed out / never created / credential refused),
+# 2 cannot tell (Forbidden: a tenant may not read pods).
+#
+# WHY. The EL pod crash-loops until Tekton Triggers populates every https ClusterInterceptor's
+# caBundle, and a one-shot webhook delivered in that window is LOST. MEASURED 2026-09-26 on a cold
+# e2e-kind: build-apps pushed javawebapp at 09:52:57, the EL crashed at 09:53:04 ("Timed out waiting
+# on CaBundle") and went Ready at 09:53:46; that app waited out its full 900s with no PipelineRun.
+# * The pod cannot report Ready before the caBundle check passes: the readiness probe is /live :8080,
+#   and triggers v0.37 registers /live only after getHTTPClient() succeeds (adapter.go, cited in review).
+#   A caBundle read from OUTSIDE is the weaker signal: a process that failed one poll never passes in
+#   that process (a counter bug), so "bundles populated" does not mean "EL can receive".
+# * `kubectl wait … pod -l eventlistener=apps` is VACUOUS before the controller creates the pod: it
+#   returns "no matching resources found" at once (measured, kubectl 1.36). So: poll until the
+#   Deployment EXISTS, then `rollout status` (which also ignores an old Ready pod while a new
+#   ReplicaSet crash-loops).
+# shellcheck disable=SC2034  # EL_WAIT_REASON is this function's OUTPUT, read by its callers
+el_wait_ready() {
+  local ns="${CI_NAMESPACE:?}" dep="el-apps"   # the name 50-seed's hook URL and 60's log also use
+  local budget="${EL_READY_TIMEOUT_SECONDS:-300}" poll="${EL_POLL_SECONDS:-5}" start=$SECONDS
+  local err cls last left ready
+  EL_WAIT_REASON=""
+  err="$(mktemp)" || { EL_WAIT_REASON="mktemp failed, so the wait could not run"; return 1; }
+  # _el_why <cls> <errfile>: the classifier token and kubectl's own first line, so a reason names
+  # the REAL fault (kubeconfig / network / RBAC) instead of guessing Tekton.
+  _el_why() { printf '%s: %s' "$1" "$(head -1 "$2" 2>/dev/null | cut -c1-160)"; }
+  while ! kubectl -n "$ns" get deploy "$dep" -o name >/dev/null 2>"$err"; do
+    cls="$(classify_kube_failure "$err")"
+    case "$cls" in
+      FORBIDDEN)
+        EL_WAIT_REASON="this kubeconfig may not read deploy/${dep} in ${ns} ($(_el_why "$cls" "$err"))"; rm -f "$err"; return 2 ;;
+      UNAUTHORIZED|STALE_CA|KUBECONFIG_UNUSABLE|NO_KUBE_TARGET|PLAINTEXT)
+        EL_WAIT_REASON="the cluster could not be asked ($(_el_why "$cls" "$err")) — nothing about the EventListener is known"; rm -f "$err"; return 1 ;;
+    esac
+    if [ $((SECONDS - start)) -ge "$budget" ]; then
+      last="$(_el_why "$cls" "$err")"; rm -f "$err"
+      if printf '%s' "$last" | grep -qF 'Error from server (NotFound)'; then   # the SERVER said absent
+        EL_WAIT_REASON="deploy/${dep} was never created in ${ns} within ${budget}s (did 'make platform' configure Tekton?)"
+      else
+        EL_WAIT_REASON="deploy/${dep} could not be read within ${budget}s (${last})"
+      fi
+      return 1
+    fi
+    sleep "$poll"
+  done
+  left=$((budget - (SECONDS - start))); [ "$left" -ge 1 ] || left=1
+  if kubectl -n "$ns" rollout status "deploy/${dep}" --timeout="${left}s" >/dev/null 2>"$err"; then
+    # rollout status succeeds at once on a Deployment scaled to 0: require a Ready pod.
+    ready="$(kubectl -n "$ns" get deploy "$dep" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+    rm -f "$err"
+    if [ "${ready:-0}" -ge 1 ] 2>/dev/null; then return 0; fi
+    EL_WAIT_REASON="deploy/${dep} finished rolling out with no Ready pod (readyReplicas='${ready}')"; return 1
+  fi
+  cls="$(classify_kube_failure "$err")"; last="$(_el_why "$cls" "$err")"; rm -f "$err"
+  case "$cls:$last" in
+    FORBIDDEN:*)                 EL_WAIT_REASON="this kubeconfig may not read the rollout of deploy/${dep} (${last})"; return 2 ;;
+    *"Error from server (NotFound)"*) EL_WAIT_REASON="deploy/${dep} was deleted during the wait (${last})" ;;
+    *"timed out"*)               EL_WAIT_REASON="deploy/${dep} was not Ready within ${budget}s" ;;
+    *)                           EL_WAIT_REASON="deploy/${dep} rollout failed (${last})" ;;
+  esac
+  return 1
+}
+
+# el_dump_evidence — the logs that name why a webhook produced no PipelineRun. The rejection of a
+# rotated HMAC secret is logged by tekton-triggers-core-interceptors, a DIFFERENT deployment in a
+# DIFFERENT namespace (walk row 2, 2026-08-12), so both are printed. Diagnostic only: never fails.
+el_dump_evidence() {
+  log_error "--- EventListener sink (${CI_NAMESPACE}/el-apps) ---"
+  kubectl -n "$CI_NAMESPACE" logs deploy/el-apps --tail=50 2>&1 | sed 's/^/    /' >&2 || true
+  log_error "--- Tekton core interceptors (tekton-pipelines) — an HMAC mismatch is logged HERE ---"
+  kubectl -n tekton-pipelines logs deploy/tekton-triggers-core-interceptors --tail=50 2>&1 | sed 's/^/    /' >&2 || true
+}
+
 # classify_kube_failure <stderr-file> -> prints one token
 #   STALE_CA | UNAUTHORIZED | FORBIDDEN | UNREACHABLE | UNKNOWN
 #

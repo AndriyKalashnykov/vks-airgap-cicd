@@ -10716,3 +10716,27 @@ hardlinks, requires the per-user root to be ours, and fails closed on un-encodab
 277 -> 309, every guard mutation-proven. Installed copy verified byte-identical, and live-verified:
 a real worktree subagent's write to its own directory was ALLOWED, a write to the scratchpad root
 was BLOCKED. Open: the macOS `$TMPDIR` layout (unmeasured).
+
+## 🔴 B742 — build-apps has no webhook re-fire; the Tekton write-back push has no retry (2026-09-26)
+
+**Measured.** A cold `e2e-kind` lost javawebapp's first webhook: build-apps pushed at 09:52:57, the
+EventListener crashed at 09:53:04 ("Timed out waiting on CaBundle") and went Ready at 09:53:46, and the
+app waited out its full 900 s. The gate added with this row (`el_wait_ready`, used by build-apps and
+verify) closes the start-up window. Still open, from the adversary-k8s rounds:
+
+- **No re-fire in `75-build-apps.sh`.** Triggers v0.37 re-checks the ClusterInterceptor caBundles every
+  minute and exits on error, so the EL can crash after Ready (e.g. a caBundle rotation), and a
+  delivery lost then still costs 900 s. `99-verify.sh` re-fires with an empty commit.
+- **Why it was not added:** a re-fire after a slow (not lost) delivery starts two PipelineRuns, and
+  the write-back step in `k8s/tekton/tasks/kaniko-build.yaml` (~line 239) is a bare
+  `git push origin HEAD:…` with no fetch/rebase/retry, so one run fails non-fast-forward and the
+  script may be tracking that one. Fix the write-back first (fetch-rebase-retry), then add the re-fire.
+- **Upstream detail worth knowing:** in triggers v0.37 `getCertFromInterceptor`'s counters live outside
+  its poll closure, so after one failed poll that EL process can never pass; recovery needs a restart.
+  That is why reading the caBundles from outside is not a readiness signal. Source-read only
+  (`pkg/adapter/adapter.go` at v0.37.0); search the project's merged PRs before patching anything.
+- **Residual:** `rollout status` Ready does not prove the Service endpoints are programmed; there is a
+  sub-second window before the first push. UNVERIFIED.
+
+**Done when:** the write-back retries on non-fast-forward, and build-apps re-fires once after
+`PIPELINERUN_WAIT_SECONDS`, each RED-proven.

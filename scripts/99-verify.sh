@@ -49,16 +49,12 @@ wait_for() { # wait_for <desc> <cmd...> ; polls until cmd succeeds or timeout
   return 1
 }
 
-# ---- 0. Wait for the EventListener POD to be Ready to receive ----
-# The EL pod crash-loops on startup until the Tekton Triggers controller populates the
-# clusterInterceptor CaBundle ("empty caBundle in clusterInterceptor spec"); meanwhile the
-# EL *resource* already reports Ready=True. A one-shot Gitea webhook pushed during that
-# window is LOST -> no PipelineRun. Gate the push on the POD being Ready (it only stays
-# Ready once the CaBundle is populated).
-log_info "waiting for the EventListener pod to be ready (Tekton Triggers CaBundle race)"
-kubectl -n "$CI_NAMESPACE" wait --for=condition=Ready pod -l eventlistener=apps \
-  --timeout="${EL_READY_TIMEOUT_SECONDS:-180}s" >/dev/null 2>&1 \
-  || log_warn "EventListener pod not confirmed Ready in time — proceeding (the webhook re-fire below covers a lost delivery)"
+# ---- 0. Wait for the EventListener to be able to receive (lib/os.sh el_wait_ready says why) ----
+# verify keeps warn-and-proceed: its webhook re-fire below covers a lost delivery.
+log_info "waiting for the EventListener to be ready (Tekton Triggers CaBundle race)"
+if el_wait_ready; then :; else
+  log_warn "EventListener not confirmed ready: ${EL_WAIT_REASON} — proceeding (the webhook re-fire below covers a lost delivery)"
+fi
 
 # ============================================================================================
 # verify_app <app> — the FULL proof, for ONE app. Run for EVERY app in apps/registry.tsv.
@@ -170,10 +166,7 @@ verify_app() {
     # tekton-triggers-core-interceptors — a SEPARATE deployment in a DIFFERENT namespace that this
     # message never mentioned. On a throwaway walkbox that evidence dies with the VM.
     log_error "[${app}] no PipelineRun for ${app}-ci after 2 attempts. Collecting the logs that name the cause:"
-    log_error "--- EventListener sink (${CI_NAMESPACE}/el-apps) ---"
-    kubectl -n "$CI_NAMESPACE" logs deploy/el-apps --tail=50 2>&1 | sed 's/^/    /' >&2 || true
-    log_error "--- Tekton core interceptors (tekton-pipelines) — an HMAC mismatch is logged HERE ---"
-    kubectl -n tekton-pipelines logs deploy/tekton-triggers-core-interceptors --tail=50 2>&1 | sed 's/^/    /' >&2 || true
+    el_dump_evidence
     die "[${app}] no PipelineRun for ${app}-ci after 2 attempts.
   If the interceptor log above shows a signature/HMAC failure, Gitea's webhook secret and the
   ${CI_NAMESPACE}/gitea-webhook-secret Secret have diverged — re-run 'make seed-gitea', which now
