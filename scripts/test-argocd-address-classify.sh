@@ -21,13 +21,13 @@ mkdir -p "$T/bin"
 # B486: 09 now asks two things before publishing the argocd-server name -- does it resolve here, and
 # does the served certificate carry it. Both are STUBBED so the harness is hermetic: a real getent
 # would read this box's /etc/hosts, and a real s_client would dial a fake LB for 15s.
-#   GETENT_IP=<addr>   -> `getent ahosts argocd-server` answers <addr> (unset: resolves to nothing)
+#   GETENT_IP='<addr> ...' -> `getent ahosts argocd-server` answers each <addr> (unset: nothing)
 #   SAN_CERT=<file>    -> `openssl s_client` "serves" that certificate (unset: nothing served)
 REAL_OPENSSL="$(command -v openssl)"
 cat > "$T/bin/getent" <<'STUB'
 #!/usr/bin/env bash
 [ -n "${GETENT_IP:-}" ] || exit 2
-printf '%s STREAM %s\n%s DGRAM\n' "$GETENT_IP" "$2" "$GETENT_IP"
+for _ip in $GETENT_IP; do printf '%s STREAM %s\n%s DGRAM\n' "$_ip" "$2" "$_ip"; done
 STUB
 cat > "$T/bin/openssl" <<STUB
 #!/usr/bin/env bash
@@ -287,6 +287,8 @@ _o="$(SAN_CERT="$T/carries.crt" _render '' '')"
 ck "cert carries it but the name does not resolve -> the IP" "$(_wrote)" "10.20.30.40"
 _o="$(GETENT_IP=10.9.9.9 SAN_CERT="$T/carries.crt" _render '' '')"
 ck "name resolves ELSEWHERE -> the IP"                       "$(_wrote)" "10.20.30.40"
+_o="$(GETENT_IP='10.20.30.40 10.9.9.9' SAN_CERT="$T/carries.crt" _render '' '')"
+ck "name resolves to the LB AND another address -> the IP (exactly one)" "$(_wrote)" "10.20.30.40"
 _o="$(GETENT_IP=10.20.30.40 _render '' '')"
 ck "cert unreadable on a first write -> the IP"              "$(_wrote)" "10.20.30.40"
 ck "  ... and says it could not read it"                     "$(grep -qF 'could not read the certificate' <<< "$_o" && echo y || echo n)" "y"
