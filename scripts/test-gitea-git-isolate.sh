@@ -12,6 +12,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 
+# GIT_CONFIG_GLOBAL needs git >= 2.32. On an older git it is ignored, the REAL global config applies,
+# and the control `approve` below would hand the fake token to the operator's real keychain. Refuse.
+_gv="$(git --version | awk '{print $3}')"
+if [ "$(printf '%s\n2.32\n' "$_gv" | sort -V | head -1)" != 2.32 ]; then
+  echo "test-gitea-git-isolate: SKIP — git ${_gv} < 2.32 cannot isolate this test from your real config"; exit 0
+fi
+
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 rc=0; checks=0
 ok()  { checks=$((checks+1)); printf '  ok   %s\n' "$1"; }
@@ -31,6 +38,9 @@ cat > "$T/global" <<EOF
 	username = bob
 [credential "http://localhost:3999"]
 	helper = $T/spy
+	username = bob
+[credential "http://localhost:3999/demo"]
+	useHttpPath = true
 EOF
 ( umask 077; printf 'http://admin:REALTOKEN@localhost:3999\n' > "$T/creds" )
 
@@ -62,6 +72,17 @@ echo "== the same approve WITHOUT isolation does reach it (control for the line 
 printf 'protocol=http\nhost=localhost:3999\nusername=admin\npassword=REALTOKEN\n\n' | git -C "$T/c0" credential approve
 if grep -q store "$T/spy.log"; then ok "control: approve fans out to the inherited helper"
 else bad "control: approve never reached the spy, so the isolated check above proves nothing"; fi
+
+echo "== env-injected config beats LOCAL: the scripts must unset it (they do; this proves why) =="
+: > "$T/spy.log"
+printf 'protocol=http\nhost=localhost:3999\nusername=admin\npassword=REALTOKEN\n\n' \
+  | GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0="$T/spy" git -C "$T/c1" credential approve
+if grep -q store "$T/spy.log"; then ok "control: an injected helper still receives the token even after isolation"
+else bad "control: the injected helper was not reached, so the unset in the scripts is untested"; fi
+for f in 50-seed-gitea-repos.sh 75-build-apps.sh 99-verify.sh; do
+  if grep -q '^unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS' "$SCRIPT_DIR/$f"; then ok "$f unsets env-injected git config"
+  else bad "$f does not unset GIT_CONFIG_COUNT/GIT_CONFIG_PARAMETERS"; fi
+done
 
 echo "test-gitea-git-isolate: ${checks} checks, rc=$rc"
 exit "$rc"

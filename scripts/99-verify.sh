@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 export GIT_TERMINAL_PROMPT=0   # these git calls are unattended: a credential miss must FAIL, never prompt (gitea_git_isolate)
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS   # env-injected config is read AFTER local and would re-add a helper (gitea_git_isolate)
 load_env
 
 require_cmd kubectl; require_cmd git; require_cmd curl
