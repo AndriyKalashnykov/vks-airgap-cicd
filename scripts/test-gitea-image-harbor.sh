@@ -81,6 +81,8 @@ run40 harbor.test:443/myproj/gitea/gitea:1.27.2-rootless harbor.test >/dev/null
 case "$(probed)" in *"/projects/myproj "*) ok "host:443 spelling -> myproj probed" ;; *) bad "host:443 spelling probed '$(probed)'" ;; esac
 run40 '' harbor.test >/dev/null
 case "$(probed)" in *"/projects/cicd "*) ok "the DEFAULT image still probes HARBOR_INFRA_PROJECT (cicd)" ;; *) bad "default image probed '$(probed)'" ;; esac
+run40 '' harbor.test/ >/dev/null
+case "$(probed)" in *"/projects/cicd "*) ok "the DEFAULT image with a trailing-slash HARBOR_URL still probes cicd" ;; *) bad "default image + 'harbor.test/' probed '$(probed)' (the re-parse lost the project)" ;; esac
 out="$(run40 harbor.test/gitea:1.27.2-rootless harbor.test)"
 if [ ! -s "$T/curl.calls" ] && printf '%s' "$out" | grep -q 'no Harbor project name given'; then ok "an image with no project segment -> SKIPPED, not probed"
 else bad "no-project image: calls='$(probed)'"; fi

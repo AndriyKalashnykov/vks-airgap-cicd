@@ -49,14 +49,20 @@ GITEA_URL="${GITEA_URL:-http://${GITEA_HOST:?set GITEA_HOST (or GITEA_URL) in .e
 GITEA_SERVICE_TYPE="${GITEA_SERVICE_TYPE:-LoadBalancer}"
 # The air-gap default: the image mirrored into Harbor. Overridable so a test WITHOUT a Harbor (the
 # cross-cluster e2e, which exercises the ArgoCD topology rather than the air gap) can still run Gitea.
+_gi_default=0; [ -n "${GITEA_IMAGE:-}" ] || _gi_default=1
 GITEA_IMAGE="${GITEA_IMAGE:-${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/gitea/gitea:1.27.2-rootless}"
 # The Harbor project the kubelet will actually pull from: the first path segment after the registry.
 # It used to probe HARBOR_INFRA_PROJECT regardless -- measured: an explicit `harbor.test/infra/...`
 # image made the probe query `/projects/cicd`, so an empty image project passed (then ImagePullBackOff,
 # the B527 misdiagnosis) and a missing infra project died "Run: make mirror" for a project gitea never
 # pulls from. A ref with no project segment leaves it empty -> harbor_assert_mirrored says SKIPPED.
+# The DEFAULT image takes HARBOR_INFRA_PROJECT directly, never a re-parse of the built ref: a
+# `HARBOR_URL` with a trailing slash or a scheme yields `h//cicd/...` or `https://...`, whose parse is
+# empty, and the default image would silently lose its mirror probe (implementation round, measured).
 GITEA_IMAGE_PROJECT=""
-if [ "$GITEA_IMAGE_FROM_HARBOR" = 1 ]; then
+if [ "$_gi_default" = 1 ]; then
+  GITEA_IMAGE_PROJECT="${HARBOR_INFRA_PROJECT}"
+elif [ "$GITEA_IMAGE_FROM_HARBOR" = 1 ]; then
   _gi_rest="${GITEA_IMAGE#*/}"
   case "$_gi_rest" in */*) GITEA_IMAGE_PROJECT="${_gi_rest%%/*}" ;; esac
 fi
