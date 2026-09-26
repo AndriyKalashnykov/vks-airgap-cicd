@@ -1062,76 +1062,64 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-26 (night) — B742, B734, B723, B722's loop and the #1298/#1300 residuals merged
+## ▶️ HANDOFF 2026-09-26 (late) — B486 name path, argocd-ca-from-cluster, macOS trust guards, B722 F8
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### What landed (#1305–#1317)
+### What landed (#1319–#1324; #1318 was the previous handoff)
 
-- **#1305–#1307:** the macOS KinD setup was walked verbatim on a wiped Mac; the pre-wipe backup was
-  deleted on a security review (details in B740 and git).
-- **#1308 (B742):** a raced Tekton write-back retries and never rolls APP_COMMIT back to an older commit
-  (an ancestry check; it fails closed when the app repo cannot be fetched); `build-apps` re-fires once.
-  A cold Linux `e2e-kind` passed on it.
-- **#1309 (B734):** 31 no longer claims a prompt or a failure that never happen. Lab-verified 16:08Z.
-- **#1310 + #1311 (B723):** `make state-archives` (read-only, key NAMES only) and `make state-restore
-  ARCHIVE=<name>` (reversible). #1311 fixed the make target, which #1310 shipped unrunnable.
-- **#1312 + #1315 (B722):** no world-claim on a refused overlay; and the LOOP — `state_set` now archives a
-  sink stamped for another cluster and starts a fresh, unstamped one.
-- **#1313:** an IP-literal `HARBOR_URL` is reachable (it read "unresolved"); `HARBOR_INSECURE=1` against
-  a TLS Harbor is named; uninstall advice gains `--cacert`. The macOS `getent` shim accepts `ahosts`.
-- **#1314:** the cross-cluster e2e's RED 1 requires the refusal's own sentence, not any non-zero exit.
-- **#1316:** this handoff. **#1317:** "is this image ours" uses `podimages_is_ours` in 40 and
-  `vks-trust-probe` (a `host:443` spelling skipped the mirror probe; a lookalike host was taken as ours);
-  the mirror-probe URL is normalised.
+- **#1319:** `make state-stamp` REMOVED — harmful on a real lab (Supervisor↔guest alternation) and on
+  KinD. The owner's checkout was unstamped in place.
+- **#1320:** the Gitea mirror probe checks the Harbor project the image names. **#1321 (B722 F8):** an
+  unset `HARBOR_URL` reads `<not set>` in `make creds`, not an invented `harbor.vks.local`.
+- **#1322 (B486 step 1):** `make argocd-ca-from-cluster` — the ArgoCD cert from the Supervisor
+  (argocd-server-tls, else argocd-secret; `tls.crt` only), written only if byte-identical to the served
+  leaf; honours `ARGOCD_CA_SHA256`. SUPERVISOR ONLY; a tenant uses `fetch-argocd-ca`.
+- **#1323:** script 17 and `engine_trust_ca` refuse on macOS (the engine's trust store is in its VM);
+  `engine_trust_ca` fails closed when its install fails; dead `trust_ca` deleted.
+- **#1324 (B486 steps 2–3):** `make argocd-address` publishes `argocd-server` when it resolves here to
+  exactly the LB IP AND the served cert carries it; `--server-crt` only on a MEASURED
+  `ca_verifies_endpoint`. `make creds`, `show-dns-records` (single-label ArgoCD name → `/etc/hosts`
+  line), `uninstall-all` (`sed -i.bak`) and a collapsed scenario-1 *Verify TLS* block.
 
 ### State (MEASURED 2026-09-26 — re-measure, do not trust)
 
-- **Main checkout's `.env.state` is the LAB overlay again** (stamped for cicd-gc3,
-  `https://192.168.101.134:6443`). A KinD repro run had displaced it; it was put back with
-  `state-restore` and `make creds` read `flow: real lab`. The KinD overlay it replaced is
-  archived as `.env.state.stale-20260926-155917` (`make state-archives` lists 11).
-- **That overlay is now UNSTAMPED (2026-09-26 17:41Z)**, so scenario-1's Supervisor steps read and
-  write it like any real-lab overlay. The stamped copy is kept as `.env.state.pre-unstamp-*` (`make
-  state-archives` lists it).
-- **Lab:** cicd-gc3 untouched except one `make fetch-argocd-kubeconfig` (rc=0; it also rewrites local
-  state: `~/.config/vcf` and the kubeconfig context, B744). The Supervisor token was EXPIRED at 15:59Z
-  per `make creds` — run `make vks-login` first next session.
-- **Evidence** (verdict lines only; the full logs could not be certified secret-free):
-  `~/walk-evidence/session-20260926b/` — the B742 cold e2e, the B734 lab run, the post-restore creds
-  context, and the RED 1 e2e plus its mutated RED.
-- **Linux KinD:** torn down at session end (`golang-web` belongs to something else — leave it).
-- **Scaleway Mac** `m1@51.159.120.46`: unchanged since the fresh walk — doc-installed tools, `~/fresh`,
-  the old clone with its 8.2 GB `bundle/`; Colima stopped; no lab files.
+- **Main checkout's `.env.state` is the LAB overlay, UNSTAMPED.** `make vks-login` rc=0 this session
+  (guest cicd-gc3, 3 nodes Ready). The stamped copy is `.env.state.pre-unstamp-*` (`make state-archives`).
+- **Lab:** read-only this session. The ArgoCD LB 192.168.101.131 serves a self-signed leaf with SANs
+  `localhost`, `argocd-server`, `argocd-server.lab`, `.lab.svc`, `.lab.svc.cluster.local`, no IP SAN;
+  it equals `lab/argocd-secret` `tls.crt` (SHA-256 `14:FA:5C:…:89:84`). `argocd-server` does NOT
+  resolve on this box (no hosts line), so `ARGOCD_SERVER` stays the IP until someone adds one.
+- **Evidence:** this session's lab facts are in `~/walk-evidence/session-20260926c/b486-lab-facts.txt`
+  (verdict lines only); `session-20260926b/` is the previous session's.
+- **Linux KinD:** none of ours (`golang-web` belongs to something else — leave it).
+- **Scaleway Mac** `m1@51.159.120.46`: unchanged — doc-installed tools, Colima stopped, no lab files.
 
 ### 🔴 DISTRUST FIRST
 
 | instrument | what it did |
 |---|---|
-| **a test that calls the SCRIPT** | proves nothing about its MAKE TARGET — `state-restore` passed 18 checks while `make state-restore` could not run (#1311). |
-| **`state-restore: export ARCHIVE`** | a bare target-specific `export` is read as a PREREQUISITE. A command-line var already reaches recipes. |
-| **`getent hosts <ip>`** | rc=2 for an IP with no PTR record. Use `getent ahosts` for a name, nothing for a literal (#1313). |
-| **a test stub that forwards to the real tool** | hid the macOS shim's `hosts`-only contract (#1313's implementation round). |
-| **`producer \| awk '{…; exit}'` under pipefail** | SIGPIPE rc=141, intermittently — `state-restore` died on any archive that did not sort last. Let awk drain. |
+| **a "verified" line keyed on a file existing** | both B486 step-2 rounds caught `[ -s ARGOCD_CA_FILE ]` printing "verified" for garbage, a stale CA, and a granted name. Only `ca_verifies_endpoint` counts. |
+| **a RED that fails on the wrong case** | a mutation that disables a feature outright "proves" nothing about its scoping. Read which case failed (#1324, commit 75114d6). |
+| **a backticked span wrapped across a line** | `check-expect-literals` pairs the wrong backticks and reports prose as a missing literal. |
+| **BSD `sed -i '<script>'`** | reads the script as the backup suffix. Print `sed -i.bak`; GNU and Photon toybox accept it (measured). |
+| **a hosts line copied from the terminal** | keeps the report's indent; a `^[0-9.]`-anchored removal silently misses it (#1324, caught by the end-of-session round). |
+| **a test that calls the SCRIPT** | proves nothing about its MAKE TARGET (#1311). |
+| **`producer \| grep -q` under pipefail** | `check-grep-q-pipe` rejects it; use a herestring. |
+| **`make static-check-fast`** | does NOT run `lint`, and it is the only CODE gate PR CI runs (plus docs-lint, diagrams-check, secrets). Run full `static-check` locally. |
 | **`kubectl wait … pod -l <sel>`** | returns "no matching resources found" AT ONCE when nothing matches yet. |
-| **`make static-check-fast`** | does NOT run `lint`. It is the only code gate PR CI runs (plus `secrets-scan`); lint runs nowhere on a PR, so run full `static-check` locally. |
-| **`git config credential.helper X`** | APPENDS to the inherited helper list (#1301). |
-| **a compound ending `… \| grep \| head`** | its exit code is `head`'s. A gate's result is only its own `rc` on its own line. |
-| **`secrets/.env.make` / `.env.state.make`** | GENERATED from `.env` at every make parse — deleting `.env` leaves 23 credential lines behind. |
-| **`timeout` on the Mac** | not on the default PATH (rc 127); export `/opt/homebrew/bin` first. |
-| **`podman machine list --format '{{.Name}}'`** | marks the DEFAULT machine with a trailing `*`; never pass it raw to `inspect`. |
-| **`make --trace`** | rides MAKEFLAGS into nested makes and changes their output. |
+| **`secrets/.env.make` / `.env.state.make`** | GENERATED from `.env` at every make parse. |
 | **Apple `/usr/bin/make` 3.81** | refused at parse time. Use `gmake`. |
 
 ### NOT done — next work, ranked
 
-1. **B722 residual F8** — the refused report renders a Harbor URL for an unset `HARBOR_URL`.
-   (`make state-stamp` is REMOVED, and the owner's checkout was unstamped, 2026-09-26.)
-2. **B486** — F6 needs a lab timing measurement; the IP-versus-SAN decision. B550 is blocked on it.
-3. *(done: the Gitea mirror probe checks the project the image names)*
-4. **Mac-only (B740):** the A3 trust half on Darwin, a Mac without Rosetta, the `sudo -b` prompt.
-5. **B743** (mutable version tag), **B744** (31 repoints 30's kubeconfig context), **B724**.
+1. **B486** — walk the *Verify TLS* block once on the lab (one sudo `/etc/hosts` edit): it is the only
+   check that the argocd CLI accepts the CA:FALSE leaf via `--server-crt`. Then F6 (VIP stability).
+   B550 is now unblocked in part (`argocd-ca-from-cluster` is the first writer of `ARGOCD_CA_FILE`).
+2. **B745** — §5's `argocd-auth-check: OK` after `update-password` reads the OLD password.
+3. **Mac-only (B740):** a Mac without Rosetta, the `sudo -b` prompt.
+4. **B743** (mutable version tag), **B744** (31 repoints 30's kubeconfig context), **B724**.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
