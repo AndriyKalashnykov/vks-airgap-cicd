@@ -10722,6 +10722,14 @@ Mac: `sudo pkill -f "$(brew --prefix)/opt/docker-mac-net-connect/bin/docker-mac-
 daemon and removes its 172.18 route (1 -> 0). NOT measured: the documented fresh-Mac order (colima start
 before `gmake deps CONTAINER_ENGINE=docker`) on a wiped Mac — the test Mac already had its toolchain — and
 `sudo -b` on a Mac whose sudo asks for a password (the test Mac's sudo is passwordless). The session-end review (2026-09-26) found the brew line lacked `colima docker docker-buildx` although the doc starts Colima before `deps` — fixed; still not walked on a wiped Mac.
+**Walked on a wiped Mac 2026-09-26 at a9be214.** A pre-walk review found a fresh Mac could not run
+`gmake deps` at all (os.sh refuses bash 3.2 and BSD sed, and the packages that fix it are installed later in
+the same script); #1305 points the section at common-bootstrap's base line first and adds the Rosetta
+install. Then, after emptying Homebrew and removing the VMs, mise, `~/.docker`, `~/.kube`, `.zshrc` and
+`/usr/local/bin`: every doc command rc 0 (podman stop rc 127, podman absent, as the doc expects), cold
+`e2e-kind` green in 31.5 min (31 images intact, 6/6 built, every app verified, 8 UIs, PSA OK), teardown left
+0 daemons, 0 172.18 routes, 0 containers. Not reset, so still untested: a Mac without Rosetta, and the
+`sudo -b` password prompt. Evidence: `~/walk-evidence/from-mac/kind-20260926/fresh-walk/walk.log`.
 
 ## ✅ B741 — (DONE 2026-09-26, claude-config #117) subagents may write the SESSION SCRATCHPAD (owner-approved 2026-09-26; claude-config hook)
 

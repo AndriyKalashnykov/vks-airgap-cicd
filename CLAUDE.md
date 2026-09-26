@@ -1072,9 +1072,11 @@ is what those PRs actually touched, and rewriting them would falsify the record.
   (vz + Rosetta, 4 CPU / 6 GiB, docker, `MIRROR_ARCH=arm64` per session). Peak VM memory 5,686 MiB
   (cross-cluster). No hardware limit was hit. Setup: `docs/kind-local.md` §"On macOS"; results:
   `docs/tested-platforms.md`. Evidence: `~/walk-evidence/from-mac/kind-20260926/` (0700).
-  ⚠️ **The fresh-Mac order in that doc was never run** (the test Mac already had its toolchain); a
-  session-end read found its brew line lacked Colima and fixed it. Treat that section as reviewed, not
-  walked.
+  **Walked verbatim on a WIPED Mac at a9be214 (2026-09-26, #1305):** Homebrew emptied, Colima/podman
+  VMs, mise, `~/.docker`/`~/.kube`, `.zshrc` and `/usr/local/bin` removed; every doc command rc 0, cold
+  `e2e-kind` green in 31.5 min, teardown left no daemon, route or container. Two things the walk could
+  not reset: Rosetta was already installed, and the Mac's sudo is passwordless (`sudo -b` prompt untested).
+  The pre-wipe config is in `~/wipe-backup-20260926/` on the Mac (0700), including the `localhost:5000` auth.
 - Found on the way, each in its own PR:
   - **#1297**: the self-built cache ignored architecture, and the go_get check missed docker's gzip layers.
   - **#1298**: the Harbor probe hard-coded https, so the `HARBOR_INSECURE=1` leg read as down.
@@ -1122,7 +1124,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 2. **B486** — `ARGOCD_SERVER` published as an IP; `fetch-argocd-ca` refuses on it. B550 is blocked on it.
 3. **B735 residuals** (macOS jump box) and the B740 residuals: the #1298 review's three (3xx on http
    counts as serving; uninstall advice lacks `--cacert`; an IP `HARBOR_URL` with no PTR is never
-   probed), the fresh-Mac order never walked, the `sudo -b` prompt, and #1300's `GITEA_IMAGE` Harbor test
+   probed), the `sudo -b` password-prompt path, and #1300's `GITEA_IMAGE` Harbor test
    (a plain `${HARBOR_URL}/` prefix match: another spelling of the same registry silently skips the check).
 4. **B722**, **B723**, **B734**.
 

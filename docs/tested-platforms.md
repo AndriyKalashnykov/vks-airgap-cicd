@@ -66,6 +66,9 @@ up is in [KinD, on macOS](kind-local.md#on-macos-apple-silicon). The later rows 
 - Harbor publishes amd64 images only; they ran on the arm64 kind node under Rosetta.
 - `e2e-kind-cross-cluster` needs the VM's `fs.inotify.max_user_instances` raised to 512 first (the
   setting is in the setup page).
+- **The setup page was walked verbatim on a wiped Mac** (Homebrew emptied, no VMs, no toolchain): every
+  command succeeded and a cold `e2e-kind` passed in 31.5 min. Rosetta was already installed and sudo was
+  passwordless, so a Mac without Rosetta and the `sudo` password prompt are untested.
 - Three failures found on the way were not macOS-specific and are fixed: the Harbor probe ignored
   `HARBOR_INSECURE` (#1298); the Istio attach test broke when `install-all` started installing an
   ingress (#1299); the cross-cluster test needed a Harbor address it never had (#1300).
