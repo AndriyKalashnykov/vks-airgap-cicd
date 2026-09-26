@@ -168,6 +168,27 @@ if grep -q '_json_hits=$((_json_hits + _jh))' "$SCRIPT_DIR/14-selfbuilt-build.sh
   ok "the vacuity guard is present (metadata hits counted separately)"
 else bad "the vacuity guard is gone — image METADATA could satisfy the check on its own"; fi
 
+# BEHAVIOURAL (impl round, 2026-09-26): the probe's real route on a GZIP layer — the docker-29 save
+# shape the raw-tarball grep was blind to. Built offline with crane's empty base. Three assertions,
+# and the first is what makes the other two mean anything: the fixture must REPRODUCE the defect.
+if command -v crane >/dev/null 2>&1; then
+  mkdir -p "$TMP/gz"
+  printf 'dep\tgithub.com/google/go-containerregistry\tv0.21.9\th1:x\n' > "$TMP/gz/executor"
+  tar -C "$TMP/gz" -czf "$TMP/gz/layer.tgz" executor
+  if crane append --oci-empty-base -f "$TMP/gz/layer.tgz" -t localhost/fx:1 -o "$TMP/gz/fx.tar" >/dev/null 2>&1; then
+    raw=$(grep -acw 'github.com/google/go-containerregistry.v0.21.9' "$TMP/gz/fx.tar" || true)
+    crane export - "$TMP/gz/fx.flat" < "$TMP/gz/fx.tar" 2>/dev/null
+    right=$(grep -acw 'github.com/google/go-containerregistry.v0.21.9' "$TMP/gz/fx.flat" || true)
+    wrong=$(grep -acw 'github.com/google/go-containerregistry.v0.21.1' "$TMP/gz/fx.flat" || true)
+    if [ "${raw:-0}" = 0 ]; then ok "gzip fixture reproduces the defect: raw tarball grep finds 0"
+    else bad "gzip fixture is not compressed (raw grep found ${raw}); the next two cases prove nothing"; fi
+    if [ "${right:-0}" -ge 1 ]; then ok "the flattened image finds the override in a gzip layer (${right})"
+    else bad "the flattened image did NOT find the override in a gzip layer"; fi
+    if [ "${wrong:-0}" = 0 ]; then ok "a wrong-version control finds 0 in the flattened image"
+    else bad "a wrong-version control matched (${wrong}): -w boundary broken"; fi
+  else bad "could not build the offline gzip fixture with 'crane append --oci-empty-base'"; fi
+else bad "crane is not on PATH (make deps): the gzip-layer behaviour is untested"; fi
+
 rm -rf "$TMP"
 printf '  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

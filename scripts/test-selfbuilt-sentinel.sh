@@ -153,7 +153,7 @@ done
 exit 0
 FAKEENGINE
   chmod +x "$d/bin/git" "$d/bin/podman"
-  ( cd "$T" && PATH="$d/bin:$PATH" CONTAINER_ENGINE=podman SELFBUILT_FORCE=1 \
+  ( cd "$T" && PATH="$d/bin:$PATH" CONTAINER_ENGINE=podman SELFBUILT_FORCE=1 MIRROR_ARCH=amd64 \
       bash "$T/scripts/14-selfbuilt-build.sh" >/dev/null 2>&1 ) || return 1
   [ -s "$STAMP" ] || return 1
 }

@@ -47,7 +47,6 @@ if [ -z "${NAMES// /}" ]; then
 fi
 
 require_cmd git "install git"
-require_cmd crane "run make deps (crane flattens the saved image to verify the go_get override)"
 ENGINE="$(container_engine)"
 _arch_checked=0   # B736: checked lazily, right before the first real build — the skip path needs no engine
 OUT_DIR="${BUNDLE_DIR}/selfbuilt"
@@ -67,7 +66,7 @@ src=""
 # every successful image (see the end of the loop) and is never set at all when every image is
 # skipped — so this script exited 1 on a fully-successful run. It went unnoticed because nothing
 # called it from a flow that checked: wiring it into install-all is what made it matter.
-_selfbuilt_cleanup() { [ -n "${src:-}" ] && rm -rf -- "$src"; return 0; }
+_selfbuilt_cleanup() { [ -n "${src:-}" ] && rm -rf -- "$src"; [ -n "${_flat:-}" ] && rm -f -- "$_flat" "${_flat}.err"; return 0; }
 trap _selfbuilt_cleanup EXIT
 : > "${LOCK}.tmp"
 
@@ -249,7 +248,15 @@ for name in $NAMES; do
     log_warn "cgroup v1 detected — building with BUILDAH_ISOLATION=${_iso}: rootless podman cannot"
     log_warn "  create a container cgroup here. Weaker isolation, bounded — our Dockerfile, our base."
   fi
-  if [ "$_arch_checked" = 0 ]; then require_build_arch "$ENGINE"; _arch_checked=1; fi
+  if [ "$_arch_checked" = 0 ]; then
+    require_build_arch "$ENGINE"
+    # LAZY, like the arch check: a warm run that skips every image needs neither. Here, before a
+    # 10-minute build, rather than at the end of it: crane flattens the saved image for the go_get
+    # proof, jq reads its platform (tarball_platform / assert_tarball_platform).
+    require_cmd crane "run make deps (crane flattens the saved image to verify the go_get override)"
+    require_cmd jq    "run make deps (jq reads the saved image's platform)"
+    _arch_checked=1
+  fi
   build_args=(build --platform "linux/$(target_arch)" -f "${src}/${dfile}" -t "$local_ref")
   [ -n "$target" ] && build_args+=(--target "$target")
   build_args+=("$src")
@@ -317,7 +324,8 @@ for name in $NAMES; do
       #    retries, which is exactly wrong on an air-gap box.
       #
       # The tarball has none of those problems: no cgroups, no engine call, no symlink divergence,
-      # no temp copy, nothing to leak, and grep's three-way status stays intact.
+      # and grep's three-way status stays intact. (It does need ONE temp file, the flattened image;
+      # _selfbuilt_cleanup removes it on any exit.)
       #
       # ⚠️ BUT NOT THE RAW TARBALL (corrected 2026-09-26). This used to grep "$tarball" directly and
       # said the result was "identical for a docker-saved and a podman-saved tar". FALSE on docker
@@ -330,12 +338,14 @@ for name in $NAMES; do
       # is gone too. STDIN, not a path: `crane export <path>` treats the path as a REMOTE ref and goes
       # to Docker Hub (measured, 404). MEASURED on the real podman kaniko.tar: 0.1 s, 4 hits.
       _flat="$(mktemp "${TMPDIR:-/tmp}/selfbuilt-flat.XXXXXX")"
-      if crane export - "$_flat" < "$tarball" 2>/dev/null; then
+      _crane_err=""
+      if crane export - "$_flat" < "$tarball" 2>"${_flat}.err"; then
         _hits="$(grep -acw "${_want_mod}.${_want_ver}" "$_flat")" && _grc=0 || _grc=$?
       else
         _hits=""; _grc=2   # crane could not read it: a TOOLING failure, reported UNVERIFIED below
+        _crane_err="$(head -c 300 "${_flat}.err" 2>/dev/null || true)"
       fi
-      rm -f "$_flat"
+      rm -f "$_flat" "${_flat}.err"
 
       # VACUITY GUARD. The tar also carries manifest.json and the image config, and the config's
       # history records the very `RUN go get <mod>@<ver>` line THIS SCRIPT injects. Today the go_get
@@ -373,7 +383,15 @@ for name in $NAMES; do
 $(tar -tvf "$tarball" 2>/dev/null | awk '$1 !~ /^d/ { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) { print $i, $NF; break } }')
 EOF
 
-      if [ "$_json_hits" -gt 0 ]; then
+      # ORDER MATTERS (impl round, 2026-09-26): the hits now come from the FLATTENED filesystem,
+      # which holds no image config or history, so metadata can no longer satisfy the check. A
+      # binary miss (rc 1) must therefore `die` BEFORE the metadata guard is consulted, or a
+      # metadata hit would soften a real "did not reach the artifact" into a warning.
+      if [ "$_grc" = 1 ]; then
+        die "[${name}] the go_get override did not reach the artifact: '${_want_mod} ${_want_ver}'
+  is not present anywhere in the saved image's filesystem (${tarball}). The Dockerfile text was
+  injected and the build exited 0, so this is the difference between 'we asked' and 'it happened'."
+      elif [ "$_json_hits" -gt 0 ]; then
         log_warn "[${name}] the image METADATA in ${tarball} contains '${_want_mod} ${_want_ver}' (${_json_hits} hit(s)) — this check cannot tell metadata from binary, so the go_get override is UNVERIFIED. The go_get must run in a DISCARDED build stage, not the final one."
       else
         case "$_grc" in
@@ -387,7 +405,11 @@ EOF
           1) die "[${name}] the go_get override did not reach the artifact: '${_want_mod} ${_want_ver}'
   is not present anywhere in the saved image (${tarball}). The Dockerfile text was injected and the
   build exited 0, so this is the difference between 'we asked' and 'it happened'." ;;
-          *) log_warn "[${name}] could not read ${tarball} (grep rc=${_grc}) — the go_get override is UNVERIFIED. This is a TOOLING failure, not a finding about the binary." ;;
+          *) if [ -n "$_crane_err" ]; then
+               log_warn "[${name}] crane could not flatten ${tarball} (${_crane_err}) — the go_get override is UNVERIFIED. This is a TOOLING failure, not a finding about the binary."
+             else
+               log_warn "[${name}] could not read the flattened ${tarball} (grep rc=${_grc}) — the go_get override is UNVERIFIED. This is a TOOLING failure, not a finding about the binary."
+             fi ;;
         esac
       fi
     done
