@@ -9617,8 +9617,10 @@ Supervisor/guest walk; unstamped gives 1 archive with every key in one sink
 **Still open:** F8 (the refused report renders `https://harbor.vks.local` for an unset `HARBOR_URL`);
 the optional `INGRESS_LB_IP_OVERRIDE` in creds for `istio-existing`; and a residual the fix created
 knowingly — a real-lab sink stamped by hand (`make state-stamp`) is ARCHIVED by the first write selected
-for the OTHER server (e.g. a Supervisor-side `state_set` against a guest-stamped sink). That is loud and
-`make state-restore` reverses it, where before it looped silently; whether `make state-stamp` should
+for the OTHER server — and scenario-1 §3's `export KUBECONFIG=./secrets/supervisor.kubeconfig` does exactly
+that on the next Supervisor-side `state_set` (08, 09, 43). That is loud, where before it looped silently,
+and `make state-restore` puts the old sink back — a SWAP, not an undo: values written after the archive
+move to a new archive; whether `make state-stamp` should
 refuse on a real lab is an idea-round question, not built.
 
 ## ✅ B723 — (DONE 2026-09-26) the archive is a WRITE-ONLY GRAVEYARD: 8 sinks hold 0600 passwords and nothing reads or prunes them
@@ -9661,7 +9663,7 @@ generated passwords are single-line (inferred, not measured).
 
 **Follow-up #1311 (2026-09-26):** `make state-restore` shipped UNRUNNABLE — a bare
 `state-restore: export ARCHIVE` made GNU make read `export` as a prerequisite, and every test called the
-script, so all passed. The line is gone (a command-line `ARCHIVE` reaches the recipe unexported,
+script, so all passed. The line is gone (a command-line `ARCHIVE` reaches the recipe without an export directive,
 measured) and the test now runs both make targets, RED-proven. Used for real the same day: the main
 checkout's lab overlay (displaced by a KinD repro run) was restored and `make creds` read `flow: real lab`.
 
@@ -10425,6 +10427,7 @@ so it was not tried); the create now cannot prompt either way.
 logged `Reading the password from env`; the benign `[x] … could not be discovered` was followed by the
 end-result check (`argocd-server is visible in ns/lab`) and the note; zero `will prompt` / `could not
 select` lines. The kubeconfig's context was already `argocd-supervisor:lab` before the run (B744).
+Evidence (verdict lines): `~/walk-evidence/session-20260926b/b734-lab-fetch-argocd.verdict.txt`.
 
 ## 🔴 B735 — macOS jump box: the Makefile + scripts assume GNU/Linux; port it (Ubuntu + Photon must not regress)
 
@@ -10813,7 +10816,11 @@ read as unresolved (`getent hosts` rc=2 without a PTR record); `HARBOR_INSECURE=
 Harbor read green on its 301 (now named, only when the redirect target is demonstrably Harbor); the
 uninstall curl advice lacked `--cacert`. The implementation round caught that the macOS `getent`
 shim accepted only `hosts`, fixed there. The #1300 residual (70's RED 1 discarded its output) is fixed
-in #1314, RED-proven on the real cross-cluster e2e. **Still open (Mac-only):** the A3 trust half
+in #1314, RED-proven on the real cross-cluster e2e. The #1300 `GITEA_IMAGE` prefix match (another spelling of our registry
+silently skipped the mirror probe) and the same class in `vks-trust-probe.sh` (a lookalike host was taken
+as ours) now use `podimages_is_ours`; the mirror-probe URL is normalised (a trailing slash made `//api`).
+Deferred, owner call: the probe checks `HARBOR_INFRA_PROJECT`, not the project a Harbor-hosted
+`GITEA_IMAGE` names. **Still open (Mac-only):** the A3 trust half
 (trust-harbor / engine-trust-check refuse on Darwin), a Mac without Rosetta, and the `sudo -b` password
 prompt.
 

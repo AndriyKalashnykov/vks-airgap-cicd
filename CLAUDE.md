@@ -1086,12 +1086,19 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 - **Main checkout's `.env.state` is the LAB overlay again** (stamped for cicd-gc3,
   `https://192.168.101.134:6443`). A KinD repro run had displaced it; it was put back with
-  `state-restore` and `make creds` read `flow: real lab` with 12 lab URLs. The KinD overlay it replaced is
+  `state-restore` and `make creds` read `flow: real lab`. The KinD overlay it replaced is
   archived as `.env.state.stale-20260926-155917` (`make state-archives` lists 11).
-- **That overlay is hand-STAMPED**, so B722's knowing residual applies to this checkout: a `state_set`
-  selected for the Supervisor server would archive it. Nothing in the normal guest-side flow does that;
-  `make state-restore` reverses it if it happens.
-- **Lab:** cicd-gc3 untouched except one `make fetch-argocd-kubeconfig` (read of the Supervisor, rc=0).
+- **That overlay is hand-STAMPED (guest), and scenario-1 WILL archive it.** §3's
+  `export KUBECONFIG=./secrets/supervisor.kubeconfig` makes the next Supervisor-side `state_set`
+  (`08-install-argocd-service`, `09-argocd-address`, `43-install-istio-package`) archive it (#1315).
+  Unset `KUBECONFIG` first, or expect it. `make state-restore` then puts the old overlay back, but it is a
+  SWAP, not an undo: values written after the archive move to a new archive.
+- **Lab:** cicd-gc3 untouched except one `make fetch-argocd-kubeconfig` (rc=0; it also rewrites local
+  state: `~/.config/vcf` and the kubeconfig context, B744). The Supervisor token was EXPIRED at 15:59Z
+  per `make creds` — run `make vks-login` first next session.
+- **Evidence** (verdict lines only; the full logs could not be certified secret-free):
+  `~/walk-evidence/session-20260926b/` — the B742 cold e2e, the B734 lab run, the post-restore creds
+  context, and the RED 1 e2e plus its mutated RED.
 - **Linux KinD:** torn down at session end (`golang-web` belongs to something else — leave it).
 - **Scaleway Mac** `m1@51.159.120.46`: unchanged since the fresh walk — doc-installed tools, `~/fresh`,
   the old clone with its 8.2 GB `bundle/`; Colima stopped; no lab files.
@@ -1106,9 +1113,13 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 | **a test stub that forwards to the real tool** | hid the macOS shim's `hosts`-only contract (#1313's implementation round). |
 | **`producer \| awk '{…; exit}'` under pipefail** | SIGPIPE rc=141, intermittently — `state-restore` died on any archive that did not sort last. Let awk drain. |
 | **`kubectl wait … pod -l <sel>`** | returns "no matching resources found" AT ONCE when nothing matches yet. |
-| **`make static-check-fast`** | does NOT run `lint`; PR CI runs only it, so run full `static-check` locally. |
+| **`make static-check-fast`** | does NOT run `lint`. It is the only code gate PR CI runs (plus `secrets-scan`); lint runs nowhere on a PR, so run full `static-check` locally. |
 | **`git config credential.helper X`** | APPENDS to the inherited helper list (#1301). |
-| **`secrets/.env.make` / `.env.state.make`** | GENERATED from `.env` at every make parse. |
+| **a compound ending `… \| grep \| head`** | its exit code is `head`'s. A gate's result is only its own `rc` on its own line. |
+| **`secrets/.env.make` / `.env.state.make`** | GENERATED from `.env` at every make parse — deleting `.env` leaves 23 credential lines behind. |
+| **`timeout` on the Mac** | not on the default PATH (rc 127); export `/opt/homebrew/bin` first. |
+| **`podman machine list --format '{{.Name}}'`** | marks the DEFAULT machine with a trailing `*`; never pass it raw to `inspect`. |
+| **`make --trace`** | rides MAKEFLAGS into nested makes and changes their output. |
 | **Apple `/usr/bin/make` 3.81** | refused at parse time. Use `gmake`. |
 
 ### NOT done — next work, ranked
@@ -1116,8 +1127,9 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 1. **B722 residuals** — F8 (the refused report renders a Harbor URL for an unset `HARBOR_URL`); whether
    `make state-stamp` should refuse on a real lab (idea round first).
 2. **B486** — F6 needs a lab timing measurement; the IP-versus-SAN decision. B550 is blocked on it.
-3. **#1300's `GITEA_IMAGE` Harbor test** — a plain `${HARBOR_URL}/` prefix match, so another spelling of
-   the same registry silently skips the check.
+3. **The mirror probe checks `HARBOR_INFRA_PROJECT`, not the project a Harbor-hosted `GITEA_IMAGE` names**
+   (idea-round finding, owner call: is an explicit image in a non-infra project supported?). The #1300
+   prefix match itself is fixed on branch `fix/gitea-image-ours` (also `vks-trust-probe`'s lookalike match).
 4. **Mac-only (B740):** the A3 trust half on Darwin, a Mac without Rosetta, the `sudo -b` prompt.
 5. **B743** (mutable version tag), **B744** (31 repoints 30's kubeconfig context), **B724**.
 
