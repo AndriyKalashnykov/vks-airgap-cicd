@@ -1066,7 +1066,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### What landed (#1305–#1315)
+### What landed (#1305–#1317)
 
 - **#1305–#1307:** the macOS KinD setup was walked verbatim on a wiped Mac; the pre-wipe backup was
   deleted on a security review (details in B740 and git).
@@ -1081,6 +1081,9 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 - **#1313:** an IP-literal `HARBOR_URL` is reachable (it read "unresolved"); `HARBOR_INSECURE=1` against
   a TLS Harbor is named; uninstall advice gains `--cacert`. The macOS `getent` shim accepts `ahosts`.
 - **#1314:** the cross-cluster e2e's RED 1 requires the refusal's own sentence, not any non-zero exit.
+- **#1316:** this handoff. **#1317:** "is this image ours" uses `podimages_is_ours` in 40 and
+  `vks-trust-probe` (a `host:443` spelling skipped the mirror probe; a lookalike host was taken as ours);
+  the mirror-probe URL is normalised.
 
 ### State (MEASURED 2026-09-26 — re-measure, do not trust)
 
@@ -1129,7 +1132,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 2. **B486** — F6 needs a lab timing measurement; the IP-versus-SAN decision. B550 is blocked on it.
 3. **The mirror probe checks `HARBOR_INFRA_PROJECT`, not the project a Harbor-hosted `GITEA_IMAGE` names**
    (idea-round finding, owner call: is an explicit image in a non-infra project supported?). The #1300
-   prefix match itself is fixed on branch `fix/gitea-image-ours` (also `vks-trust-probe`'s lookalike match).
+   prefix match itself is fixed in #1317 (also `vks-trust-probe`'s lookalike match).
 4. **Mac-only (B740):** the A3 trust half on Darwin, a Mac without Rosetta, the `sudo -b` prompt.
 5. **B743** (mutable version tag), **B744** (31 repoints 30's kubeconfig context), **B724**.
 
