@@ -1515,6 +1515,13 @@ fi
 # including this very case. A gate that greps prose is testing the prose -- STATE 1's own comment
 # says so. The defect is the sentence `no ingress is installed, so ... nothing serves those hosts`,
 # and its absence is the property.
+# B722 F3: the refused report said "nothing is installed yet" -- a world-claim about the cluster that
+# a refused overlay CONTRADICTS (an installer ran for some cluster). Assert its absence, not new prose.
+if printf '%s' "$out" | grep -q 'nothing is installed yet'; then
+  bad "STATE 11: the report claims 'nothing is installed yet' beside an overlay that proves an installer ran"
+else
+  ok "STATE 11: no 'nothing is installed yet' world-claim"
+fi
 if printf '%s' "$out" | grep -q 'no ingress is installed'; then
   bad "STATE 11: the ingress note still asserts 'no ingress is installed ... nothing serves those hosts' from a REFUSED overlay — the measured case had all eight hosts serving 200"
 else
