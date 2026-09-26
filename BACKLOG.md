@@ -2132,6 +2132,13 @@ note that reconciling the contracts does NOT reopen change 1 (its defects 2-4 ar
 **(c)** `ARGOCD_HOST` into both selector lists in ONE commit (`check-env-clobber` requires PROTECTED ⊆
 SELECTORS); **(e)** fixture prefix as defence only, not coverage. **(b) is already DONE** (#1212).
 Seen live 2026-09-25 on BOTH OSes: `fetch-argocd-ca` refuses because `ARGOCD_SERVER` is an IP.
+**2026-09-26 — (a), (c) and (d) are DONE** (one PR). (d): 09 now says "replacing the placeholder" for a
+template value and keeps "(we wrote the previous value)" only for a value it did write; the render
+harness pins both, and the new cases were proven RED on the old 09. (c): `ARGOCD_HOST` is now in load_env's
+snapshot list and in the clobber gate's SELECTORS. Measured before the fix, the overlay beat a
+caller's value; `test-insecure-toggle-snapshot` pins both arms. (a): wording only, in
+`.env.example`. This does **not** reopen change 1, whose defects are independent of the
+contract. (e) is not done: the fixture prefix is defence only.
 
 ## 🔴 B484 — the Forbidden-reads-as-absent sweep: a FAIL-OPEN air-gap check outranks the wrong-message bug 🔴 open
 
