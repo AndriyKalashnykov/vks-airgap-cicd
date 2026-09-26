@@ -492,6 +492,37 @@ vcf_create_flag_rejected() {
   grep -qE 'unknown (shorthand )?flag|invalid argument .*--(type|username|auth-type)' "$1" 2>/dev/null
 }
 
+# vcf_create_rejection_hint <errfile> — when `vcf context create` failed because the installed CLI
+# rejected one of OUR arguments, name the argument and point at the upgrade. Prints nothing for any
+# other failure. It never offers a by-hand create or a TLS downgrade: a re-run of the calling script
+# recreates the context with the same flags. Shared by 30-vks-login.sh and 31-fetch-argocd-kubeconfig.sh,
+# whose create flag sets are identical, so the version claim below holds for both (B734).
+vcf_create_rejection_hint() {
+  vcf_create_flag_rejected "$1" || return 0
+  local rej ver
+  rej="$(grep -oE 'unknown (shorthand )?flag: [^ ]+|invalid argument .*' "$1" | head -1 || true)"
+  log_error "your vcf CLI rejected an argument this script passes: ${rej:-see the [x] line above}"
+  ver="$(vcf version 2>/dev/null | head -1 || true)"; ver="${ver#version: }"
+  log_error "  Installed vcf: ${ver:-unknown}. These arguments are lab-verified with vcf v9.1.1.0;"
+  log_error "  install a vcf CLI that accepts them from your licensed archive:"
+  log_error "    make install-vcf-cli VCF_CLI_SRC_DIR=<dir>"
+}
+
+# vcf_use_plugin_note <what> <current-context> — the reassurance for the benign `[x] … system Harbor
+# registry could not be discovered` error that `vcf context use` prints. Call it only after
+# vcf_use_plugin_note_ok AND after the caller verified the Supervisor answered. <what> names the
+# caller's own operation ("login", "ArgoCD kubeconfig fetch"): "did not stop the login" is false for a
+# script that is not a login.
+vcf_use_plugin_note() {
+  log_info "note: the vcf '[x] ... system Harbor registry could not be discovered' error above did not"
+  log_info "  stop the ${1}: the Supervisor answered (verified above) and the kubeconfig's current"
+  log_info "  context is '${2}'. The error concerns the vcf CLI's plugin-source discovery, which"
+  log_info "  looks for a Harbor registered as this Supervisor's system plugin registry and could not"
+  log_info "  find one. This repo's scripts use no vcf plugins. If your platform team DID set up a system"
+  log_info "  plugin registry, report the error to them; otherwise ignore it. For manual 'vcf cluster ...'"
+  log_info "  commands, install plugins from your archive: make install-vcf-plugins"
+}
+
 # engine_choice — which engine is the BOOTSTRAP going to install? podman unless the operator asked for
 # docker BY NAME. Pure: it prints, it installs nothing, it touches no PATH. Kept separate from
 # container_engine() (which asks "what is INSTALLED on this box?") because the gate must be able to prove

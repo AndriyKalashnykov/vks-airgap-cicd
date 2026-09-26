@@ -44,7 +44,10 @@ missing="$(comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "$have"))"
 soft='VCF_CLI_VSPHERE_PASSWORD'
 if printf '%s\n' "$have" | grep -qx 'VCF_CLI_VSPHERE_PASSWORD'; then
   _joined="$(sed 's/#.*//' "$LOGIN" | sed -e :a -e '/\\$/N; s/\\\n//; ta')"
-  if ! grep -qE 'vcf context create[^\n]*</dev/null' <<< "$_joined"; then
+  # `.*`, not `[^\n]*`: in ERE that class means "not a backslash and not the LETTER n", so a redirect
+  # naming a file with an `n` between create and </dev/null false-reds a correct script (B734). grep
+  # is line-based and the continuation lines are joined above, so `.*` cannot span two commands' lines.
+  if ! grep -qE 'vcf context create.*</dev/null' <<< "$_joined"; then
     echo "ERROR: the map lists VCF_CLI_VSPHERE_PASSWORD as fatal, but ${LOGIN} no longer runs"
     echo "       'vcf context create' with </dev/null - so it CAN prompt now, and the map is wrong."
     exit 1

@@ -10331,7 +10331,7 @@ the right discipline for an agent; printing it as a fact is the question.
 
 **Done when:** the printed claim matches a measured or primary-sourced 9.1 fact, in every home.
 
-## 🔴 B734 — the sibling of the 30-vks-login.sh output fix: `31-fetch-argocd-kubeconfig.sh` prints the same misleading vcf output, and `check-vks-login-requires` has a `[^\n]` class that reads as "not the letter n"
+## ✅ B734 — (DONE 2026-09-26) the sibling of the 30-vks-login.sh output fix: `31-fetch-argocd-kubeconfig.sh` prints the same misleading vcf output, and `check-vks-login-requires` has a `[^\n]` class that reads as "not the letter n"
 
 Filed 2026-09-23 from the design review of the `30-vks-login.sh` output fix, deliberately left out of
 that PR to keep it to one script.
@@ -10348,6 +10348,17 @@ that PR to keep it to one script.
   RED-prove the gate again.
 
 **Done when:** 31 prints no claim its run contradicts, and the gate's class no longer depends on filenames.
+**2026-09-26 — DONE.** 31 now mirrors 30: `</dev/null` on create and use with stderr captured and
+replayed; the flag-rejection hint and the benign-Harbor note are ONE printer each in `lib/os.sh`
+(`vcf_create_rejection_hint`, `vcf_use_plugin_note <what>`), shared by 30 and 31 — the note names the
+caller's operation, since "did not stop the login" is false for 31. 31's three false claims are gone
+(the header's "prompts for the password", its runtime "will prompt", and the "9.1 docs redirect to 9.0"
+provenance, now lab-verified). `.env.example` names `make fetch-argocd-kubeconfig` as a consumer of
+VCF_CLI_VSPHERE_PASSWORD. The gate uses `.*`, and 30's comment that explained the old redirect order is
+corrected. Tests: `test-fetch-argocd-kubeconfig-output.sh` (12 checks, 5 fail on the old 31) and
+`test-check-vks-login-requires.sh` (3 checks, the n-bearing redirect goes red with the old class).
+Not measured: whether vcf would prompt on a TTY with the password unset (the SSO account is lockable,
+so it was not tried); the create now cannot prompt either way.
 
 ## 🔴 B735 — macOS jump box: the Makefile + scripts assume GNU/Linux; port it (Ubuntu + Photon must not regress)
 

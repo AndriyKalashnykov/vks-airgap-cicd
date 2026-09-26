@@ -404,9 +404,8 @@ back to skipping TLS verification: that would silently downgrade a connection yo
 
     # stderr is CAPTURED and replayed so it can be classified; the replay is post-hoc (after the
     # call), deliberately not a `2> >(tee ...)` process substitution, which races the grep below.
-    # `2>` sits AFTER `</dev/null` on purpose: check-vks-login-requires asserts
-    # `vcf context create[^\n]*</dev/null`, and GNU grep reads that class as "not a backslash and
-    # not the LETTER n" -- a redirect naming a file with an `n` in between would false-red it.
+    # check-vks-login-requires asserts this call keeps `</dev/null` (so it can never prompt); the
+    # order of `</dev/null` and `2>` does not matter to it (B734 fixed its character class).
     _vcf_err="$(mktemp)"; trap 'rm -f "$_vcf_err"' EXIT
     KUBECONFIG="$SUP_KUBECONFIG" VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
       vcf context create "${create_args[@]}" </dev/null 2>"$_vcf_err" && _vcf_rc=0 || _vcf_rc=$?
@@ -415,14 +414,7 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # without this every create failure would fall through into namespace discovery and die later
     # with an unrelated message.
     if [ "$_vcf_rc" -ne 0 ]; then
-      if vcf_create_flag_rejected "$_vcf_err"; then
-        _vcf_rej="$(grep -oE 'unknown (shorthand )?flag: [^ ]+|invalid argument .*' "$_vcf_err" | head -1 || true)"
-        log_error "your vcf CLI rejected an argument this script passes: ${_vcf_rej:-see the [x] line above}"
-        _vcf_ver="$(vcf version 2>/dev/null | head -1 || true)"; _vcf_ver="${_vcf_ver#version: }"
-        log_error "  Installed vcf: ${_vcf_ver:-unknown}. These arguments are lab-verified with vcf v9.1.1.0;"
-        log_error "  install a vcf CLI that accepts them from your licensed archive:"
-        log_error "    make install-vcf-cli VCF_CLI_SRC_DIR=<dir>"
-      fi
+      vcf_create_rejection_hint "$_vcf_err"
       exit "$_vcf_rc"
     fi
 
@@ -486,13 +478,7 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # whether this Supervisor was MEANT to have a system plugin registry.
     _vcf_cur="$(kubectl --kubeconfig "$SUP_KUBECONFIG" config current-context 2>/dev/null || true)"
     if vcf_use_plugin_note_ok "$_vcf_err" "$_vcf_cur" "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}"; then
-      log_info "note: the vcf '[x] ... system Harbor registry could not be discovered' error above did not"
-      log_info "  stop the login: the Supervisor answered (verified above) and the kubeconfig's current"
-      log_info "  context is '${_vcf_cur}'. The error concerns the vcf CLI's plugin-source discovery, which"
-      log_info "  looks for a Harbor registered as this Supervisor's system plugin registry and could not"
-      log_info "  find one. This repo's scripts use no vcf plugins. If your platform team DID set up a system"
-      log_info "  plugin registry, report the error to them; otherwise ignore it. For manual 'vcf cluster ...'"
-      log_info "  commands, install plugins from your archive: make install-vcf-plugins"
+      vcf_use_plugin_note "login" "$_vcf_cur"
     fi
 
     # PUBLISH IT — this pairing is MANDATORY, not a nicety. 70-configure-argocd.sh does

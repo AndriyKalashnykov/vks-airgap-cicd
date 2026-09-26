@@ -19,10 +19,14 @@
 #   Creating a Supervisor context also auto-creates the per-vSphere-Namespace contexts
 #   (`<ctx>` and `<ctx>:<namespace>`), which is why we then `vcf context use <ctx>:<ns>`.
 #
-# PROVENANCE: the Broadcom 9.1 doc URLs 301-redirect to the 9.0 tree, so this flow is
-# **documented for 9.0 and INFERRED for 9.1** — re-verify on a real 9.1 lab. It is also
-# INTERACTIVE: `vcf context create` prompts for the password (no non-interactive flag is
-# documented, and a password on argv is forbidden anyway).
+# PROVENANCE: on VCF 9.1 the create reads the password from VCF_CLI_VSPHERE_PASSWORD — lab-verified
+# in the walk logs of 2026-09-25/26 (Linux and macOS, "[i] Reading the password from env variable"),
+# with the invocation before B734. The </dev/null form below is 30's, lab-verified through 30 in the
+# matrix runs of 2026-08-25..27. The earlier "9.1 docs 301-redirect to 9.0" belief was measured false
+# on 2026-07-14.
+# NOT INTERACTIVE: the create runs with </dev/null, so it cannot prompt — set VCF_CLI_VSPHERE_PASSWORD
+# in .env (a password on argv is forbidden, and `vcf config set env.…` would write it in plaintext to
+# ~/.config/vcf/config.yaml, outside every teardown here).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -120,7 +124,12 @@ fi
 
 log_info "creating a SUPERVISOR context '${CTX}' at ${SUPERVISOR_HOST} as ${VCF_USER}"
 log_info "  -> the kubeconfig is written to ARGOCD_KUBECONFIG=${ARGOCD_KUBECONFIG}"
-log_info "  (interactive: the VCF CLI will prompt for the password — a password on argv is forbidden)"
+if [ -z "${VCF_CLI_VSPHERE_PASSWORD:-}" ]; then
+  log_warn "VCF_CLI_VSPHERE_PASSWORD is not set. This run CANNOT prompt for it - vcf context"
+  log_warn "  create runs with </dev/null below - so it fails HERE."
+  log_warn "  Set it in .env (scenario-1 §1) or export it. NEVER 'vcf config set env.…', which"
+  log_warn "  writes it in plaintext to ~/.config/vcf/config.yaml, outside every teardown here."
+fi
 
 # KUBECONFIG scopes WHERE the VCF CLI writes the context (Broadcom: it "respects the KUBECONFIG
 # environment variable for writing to alternate locations"). Without this it would land in
@@ -139,23 +148,40 @@ log_info "  (interactive: the VCF CLI will prompt for the password — a passwor
 #   --skip-delete-kubeconfig-context : -y otherwise also mutates the caller's kubeconfig
 run vcf context delete "$CTX" -y --skip-delete-kubeconfig-context >/dev/null 2>&1 || true
 
-KUBECONFIG="$ARGOCD_KUBECONFIG" run vcf context create "$CTX" \
+# stderr is CAPTURED and replayed (after the call) so it can be classified, exactly as in 30.
+_vcf_err="$(mktemp)"; trap 'rm -f "$_vcf_err"' EXIT
+KUBECONFIG="$ARGOCD_KUBECONFIG" VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 run vcf context create "$CTX" \
   --endpoint "${SUPERVISOR_HOST}" \
   --username "$VCF_USER" \
   --type kubernetes \
   --auth-type basic \
-  "${TLS_ARGS[@]}"
+  "${TLS_ARGS[@]}" </dev/null 2>"$_vcf_err" && _vcf_rc=0 || _vcf_rc=$?
+cat "$_vcf_err" >&2
+if [ "$_vcf_rc" -ne 0 ]; then
+  vcf_create_rejection_hint "$_vcf_err"
+  exit "$_vcf_rc"
+fi
 
 # A Supervisor context auto-creates per-vSphere-Namespace contexts as `<ctx>:<namespace>`.
 # ArgoCD lives in ARGOCD_NAMESPACE, so select that one.
 log_info "selecting the vSphere-Namespace context '${CTX}:${ARGOCD_NAMESPACE}'"
-KUBECONFIG="$ARGOCD_KUBECONFIG" run vcf context use "${CTX}:${ARGOCD_NAMESPACE}" \
-  || log_warn "could not select '${CTX}:${ARGOCD_NAMESPACE}' — list them with: KUBECONFIG=${ARGOCD_KUBECONFIG} vcf context list"
+# Judged by the END RESULT below, not by the rc: `vcf context use` routinely exits non-zero on the
+# benign "[x] … system Harbor registry could not be discovered" (B97, B734) after activating the context.
+: > "$_vcf_err"
+KUBECONFIG="$ARGOCD_KUBECONFIG" VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
+  run vcf context use "${CTX}:${ARGOCD_NAMESPACE}" </dev/null 2>"$_vcf_err" && _vcf_rc=0 || _vcf_rc=$?
+cat "$_vcf_err" >&2
+[ "$_vcf_rc" -eq 0 ] \
+  || log_warn "'vcf context use' exited non-zero — verifying the end result before judging it"
 
 # Prove the kubeconfig actually reaches the ArgoCD instance — a file that exists is not a file that works.
 log_info "verifying the Supervisor kubeconfig can see the ArgoCD instance..."
 if kubectl --kubeconfig "$ARGOCD_KUBECONFIG" -n "$ARGOCD_NAMESPACE" get deploy argocd-server >/dev/null 2>&1; then
   log_info "OK — argocd-server is visible in ns/${ARGOCD_NAMESPACE} via ${ARGOCD_KUBECONFIG}"
+  _vcf_cur="$(kubectl --kubeconfig "$ARGOCD_KUBECONFIG" config current-context 2>/dev/null || true)"
+  if vcf_use_plugin_note_ok "$_vcf_err" "$_vcf_cur" "${CTX}:${ARGOCD_NAMESPACE}"; then
+    vcf_use_plugin_note "ArgoCD kubeconfig fetch" "$_vcf_cur"
+  fi
   log_info "next: make gitops   (it auto-invokes 'make argocd-register-guest' now that ARGOCD_KUBECONFIG is set)"
 else
   log_error "the kubeconfig was written, but 'argocd-server' is NOT visible in ns/${ARGOCD_NAMESPACE}."
