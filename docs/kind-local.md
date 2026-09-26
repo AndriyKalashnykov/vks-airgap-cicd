@@ -38,7 +38,65 @@ cd vks-airgap-cicd
 containers, so this one path needs Docker specifically — with `CONTAINER_ENGINE` unset, `make deps`
 installs **podman** and zero docker packages, and `make kind-up` then stops at `require_cmd docker`.
 Install Docker from your distribution first, or run `make deps CONTAINER_ENGINE=docker`, which
-installs it together with its rootless prerequisites.
+installs it together with its rootless prerequisites. On a Mac, follow **On macOS** below instead.
+
+## On macOS (Apple silicon)
+
+Measured on an 8 GB M1 (macOS 26.6.2): every KinD e2e target passes
+([results](tested-platforms.md)). `e2e-kind` takes about 25 minutes and the VM peaks at about 4.3 GiB.
+KinD needs a Docker daemon, so on a Mac it runs in a [Colima](https://github.com/abiosoft/colima) VM.
+Use these commands on a Mac instead of the **Run it** block below.
+
+```bash
+brew install make chipmk/tap/docker-mac-net-connect
+podman machine stop 2>/dev/null   # the measured runs had it stopped: two VMs on 8 GB is untested
+colima start --cpu 4 --memory 6 --disk 80 --vm-type vz --vz-rosetta --runtime docker
+gmake deps CONTAINER_ENGINE=docker   # kind, helm, kubectl, crane, the docker CLI + buildx
+```
+
+Start Colima **before** `deps`: if no docker daemon answers, `deps` runs `colima start` itself, with
+no flags, so the VM would come up without Rosetta and without the memory above. `--vz-rosetta` matters: Harbor publishes amd64 images only, and they
+run on the arm64 node under Rosetta.
+
+For `e2e-kind-cross-cluster`, which creates more than one kind cluster, raise the VM's inotify limit
+first. At Colima's default of 128 the second extra cluster's control plane never started; at 512 it
+did. That is one of the two values kind's
+[known-issues page](https://kind.sigs.k8s.io/docs/user/known-issues/) recommends (the other is
+`fs.inotify.max_user_watches=524288`). `sysctl -w` sets it only until the VM restarts (not measured
+here), so run it again after a `colima start`:
+
+```bash
+colima ssh -- sudo sysctl -w fs.inotify.max_user_instances=512
+```
+
+**Reach the LoadBalancer IPs.** kind's LoadBalancer addresses (`172.18.x.x`) live inside the VM and are
+not routable from macOS. `docker-mac-net-connect` routes them over WireGuard, and it must run as root.
+On the test Mac its `brew services` daemon did not find Colima, so start it with Colima's socket named
+explicitly (`sudo -b` asks for your password first, then runs it in the background):
+
+```bash
+sudo -b DOCKER_HOST="unix://$HOME/.colima/default/docker.sock" \
+  "$(brew --prefix)/opt/docker-mac-net-connect/bin/docker-mac-net-connect" > /tmp/dmnc.log 2>&1
+```
+
+Then run it with `gmake` (Apple's `make` 3.81 is refused), building for the node's architecture:
+
+```bash
+export MIRROR_ARCH=arm64 CONTAINER_ENGINE=docker   # this shell only — never in .env
+gmake e2e-kind
+```
+
+Set `MIRROR_ARCH=arm64` for **every** command in the session, including a re-run of one step: it
+decides what `mirror` pulls, what `mirror-verify` checks and what the build guard accepts. **Never put
+it in `.env`**: a later lab run would then mirror and build arm64 images, the guard would accept them,
+and they would replace the lab's amd64 images in Harbor.
+
+When you are done, stop the root daemon as well as the cluster (`make kind-down` does not stop it):
+
+```bash
+gmake kind-down
+sudo pkill -f "$(brew --prefix)/opt/docker-mac-net-connect/bin/docker-mac-net-connect"
+```
 
 ## Run it
 
