@@ -16,7 +16,8 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP="$(mktemp -d)"; mkdir -p "$TMP/bin"
-trap 'rm -rf "$TMP"; [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null' EXIT
+cleanup() { rm -rf "$TMP"; local p; for p in ${SRV:-} ${SRV_H:-} ${SRV_O:-} ${SRV_R1:-} ${SRV_R2:-}; do kill "$p" 2>/dev/null; done; }
+trap cleanup EXIT
 pass=0; fail=0
 ok()  { printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf '  FAIL  %s — %s\n' "$1" "$2"; fail=$((fail + 1)); }
@@ -87,6 +88,62 @@ o="$(runi 0 127.0.0.1:18098)"
 if printf '%s' "$o" | grep -q 'NOTHING is serving there'; then ok "HARBOR_INSECURE=0 vs a plain-HTTP-only server -> flagged (control)"
 else bad "HARBOR_INSECURE=0 vs a plain-HTTP-only server -> flagged (control)" "the probe never fails, so the case above measures nothing"; fi
 kill "$SRV" 2>/dev/null; SRV=""
+
+# ── IP LITERALS (2026-09-26) ─────────────────────────────────────────────────────────────────────
+# `getent hosts <ip>` returns rc=2 for an IP with no PTR record (MEASURED: 172.18.0.3, 192.0.2.10), so
+# every IP-literal HARBOR_URL read as "does not resolve yet" while it served. 127/8 ALWAYS resolves on a
+# dev box (myhostname), so a real-getent fixture cannot RED this: the stub below makes `hosts` fail on a
+# literal exactly as a lab IP does, and passes `ahosts` through to the real getent.
+REAL_GETENT="$(command -v getent)"
+mkdir -p "$TMP/gbin"
+cat > "$TMP/gbin/getent" <<STUB
+#!/usr/bin/env bash
+if [ "\$1" = hosts ]; then case "\$2" in *[!0-9.]*) ;; *) exit 2 ;; esac; fi
+exec "$REAL_GETENT" "\$@"
+STUB
+chmod +x "$TMP/gbin/getent"
+runq() { PATH="$TMP/gbin:$TMP/bin:$PATH" KUBECONFIG="$TMP/kc" SKIP_DOTENV=1 HARBOR_INSECURE="$1" HARBOR_URL="$2" \
+         timeout 90 bash "$SCRIPT_DIR/24-lab-preflight.sh" 2>&1; }
+mkdir -p "$TMP/www/api/v2.0"
+printf '{"auth_mode":"db_auth","harbor_version":"v2.test"}' > "$TMP/www/api/v2.0/systeminfo"
+( cd "$TMP/www" && exec openssl s_server -quiet -accept 18097 -cert "$TMP/c.pem" -key "$TMP/k.pem" -WWW ) >/dev/null 2>&1 & SRV_H=$!
+openssl s_server -quiet -accept 18096 -cert "$TMP/c.pem" -key "$TMP/k.pem" -www >/dev/null 2>&1 & SRV_O=$!
+cat > "$TMP/redir.py" <<'PYS'
+import http.server, sys
+port, target = int(sys.argv[1]), sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(301); self.send_header('Location', target + self.path); self.end_headers()
+    def log_message(self, *a): pass
+http.server.HTTPServer(('127.0.0.1', port), H).serve_forever()
+PYS
+python3 "$TMP/redir.py" 18095 https://127.0.0.1:18097 & SRV_R1=$!
+python3 "$TMP/redir.py" 18094 https://127.0.0.1:18096 & SRV_R2=$!
+for p in 18097 18096 18095 18094; do for _ in $(seq 1 40); do (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && break; sleep 0.25; done; done
+
+o="$(runq 0 127.0.0.1:18097)"
+if printf '%s' "$o" | grep -q 'Harbor answers at 127.0.0.1:18097'; then ok "an IP-literal HARBOR_URL that serves -> answers (no PTR needed)"
+else bad "an IP-literal HARBOR_URL that serves -> answers" "$(printf '%s' "$o" | grep -m1 -E 'resolve|NOTHING|answers' || echo no-verdict)"; fi
+if printf '%s' "$o" | grep -q 'does not resolve yet'; then bad "an IP literal is never 'does not resolve yet'" "the getent-hosts PTR trap is back"
+else ok "an IP literal is never 'does not resolve yet'"; fi
+st="$(PATH="$TMP/gbin:$PATH" SKIP_DOTENV=1 HARBOR_URL=127.0.0.1:18097 bash -c '. "$1/lib/os.sh"; . "$1/lib/harbor.sh"; harbor_reachable_state' _ "$SCRIPT_DIR" 2>/dev/null)"
+if [ "$st" = serving ]; then ok "harbor_reachable_state: a serving IP literal is 'serving'"; else bad "state for a serving literal" "got '${st}'"; fi
+
+o="$(runq 0 127.0.0.1:1)"
+if printf '%s' "$o" | grep -q 'HARBOR_URL must name the current one' && ! printf '%s' "$o" | grep -q 'A record'; then
+  ok "a dead IP literal gets HARBOR_URL advice, not A-record advice"
+else bad "a dead IP literal" "$(printf '%s' "$o" | grep -m2 -E 'NOTHING|A record|current one')"; fi
+o="$(runq 0 localhost:1)"
+if printf '%s' "$o" | grep -q 'resolves to' && printf '%s' "$o" | grep -q 'update the A record'; then ok "a dead NAME keeps the A-record advice"
+else bad "a dead NAME keeps the A-record advice" "$(printf '%s' "$o" | grep -m2 -E 'NOTHING|resolve')"; fi
+
+o="$(runq 1 127.0.0.1:18095)"
+if printf '%s' "$o" | grep -q 'it serves TLS, so HARBOR_INSECURE=1 does not match it'; then ok "HARBOR_INSECURE=1 + a redirect to a TLS HARBOR -> named"
+else bad "HARBOR_INSECURE=1 + a redirect to a TLS Harbor" "$(printf '%s' "$o" | grep -m1 -E 'Harbor|NOTHING')"; fi
+o="$(runq 1 127.0.0.1:18094)"
+if printf '%s' "$o" | grep -q 'HARBOR_INSECURE=1 does not match'; then bad "a redirect to a NON-Harbor https front end must NOT blame the scheme" "the #1298 mis-attribution is back"
+else ok "a redirect to a NON-Harbor https front end does not blame the scheme"; fi
+kill "$SRV_H" "$SRV_O" "$SRV_R1" "$SRV_R2" 2>/dev/null
 
 # HARBOR_URL genuinely unset must not invent a problem -- create-from-nothing reaches here before
 # Harbor exists, and .env.example ships it COMMENTED (`# HARBOR_URL=<SET-IN-.env>`) for that reason.

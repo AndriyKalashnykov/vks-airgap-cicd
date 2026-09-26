@@ -2413,6 +2413,20 @@ k_can_i() {
 # rule, single-sourced, so the two cannot drift again.
 harbor_scheme() { if [ "${HARBOR_INSECURE:-0}" = 1 ]; then printf 'http'; else printf 'https'; fi; }
 
+# harbor_curl_cacert_opt — the ` --cacert '<ABSOLUTE path>'` a PRINTED curl command needs for a
+# self-signed Harbor, or nothing. For advice an operator pastes: without it the command fails rc=60;
+# with the default RELATIVE ./secrets/... path, a paste from another directory exits 77 and a DELETE
+# they believe they sent is never sent. rc 2 (nothing printed) when the path holds a single quote,
+# which cannot be quoted safely here. Only for https with a non-empty CA file.
+# Lives in os.sh, beside harbor_scheme, because 98-uninstall-all.sh sources os.sh and NOT harbor.sh.
+harbor_curl_cacert_opt() {
+  [ "$(harbor_scheme)" = https ] && [ -s "${HARBOR_CA_FILE:-}" ] || return 0
+  local abs
+  abs="$(cd "$(dirname "$HARBOR_CA_FILE")" && pwd)/$(basename "$HARBOR_CA_FILE")"
+  case "$abs" in *"'"*) return 2 ;; esac
+  printf " --cacert '%s'" "$abs"
+}
+
 # ── harbor_settle_note <indent> — the ONE place that names the Harbor-401 remedies (B209) ─────────
 # FOUR sites report a Harbor 401. Until 2026-08-22 exactly ONE named the fix; of the other three, two
 # named a remedy that CANNOT WORK in that state:

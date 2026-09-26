@@ -65,7 +65,11 @@ if [ "$WAIT" -gt 0 ]; then
     harbor_reachable_report || true
     printf '  ^ that is the diagnosis NOW. It is also what a Harbor that is still booting looks\n' >&2
     printf '    like, so this waits up to %ss anyway. If the address above is the PREVIOUS\n' "$WAIT" >&2
-    printf '    install'"'"'s, stop here and fix the A record -- waiting cannot fix it.\n' >&2
+    if harbor_url_is_literal "$(harbor_url_host)"; then
+      printf '    install'"'"'s, stop here and set HARBOR_URL to the current one -- waiting cannot fix it.\n' >&2
+    else
+      printf '    install'"'"'s, stop here and fix the A record -- waiting cannot fix it.\n' >&2
+    fi
   fi
   if [ "$_state" != serving ]; then
     printf '\n  waiting up to %ss for %s to answer ...\n' "$WAIT" "${HARBOR_URL:-<unset>}" >&2
