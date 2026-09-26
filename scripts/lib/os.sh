@@ -1788,27 +1788,6 @@ set_env_var() {
 }
 
 # ---------------------------------------------------------------------------
-# Internal-CA trust — install a self-signed CA (Harbor/Gitea) into system trust.
-# ---------------------------------------------------------------------------
-# trust_ca /path/to/ca.crt [friendly-name]
-trust_ca() {
-  local ca="$1" name="${2:-vks-internal}"
-  [ -f "$ca" ] || { log_warn "CA file '$ca' not found — skipping system trust"; return 0; }
-  case "$(os_id)" in
-    ubuntu|debian)
-      $SUDO cp "$ca" "/usr/local/share/ca-certificates/${name}.crt"
-      $SUDO update-ca-certificates
-      ;;
-    photon|rhel|centos|fedora|rocky|almalinux)
-      $SUDO cp "$ca" "/etc/pki/ca-trust/source/anchors/${name}.crt"
-      $SUDO update-ca-trust extract
-      ;;
-    *) log_warn "unknown OS '$(os_id)': add $ca to the system trust store manually" ;;
-  esac
-  log_info "trusted CA $ca as $name"
-}
-
-# ---------------------------------------------------------------------------
 # Shared-secret token: read from a gitignored file, generating it once if absent
 # (umask 077). Used so the Gitea webhook (50) and the EventListener secret (60)
 # agree on the same HMAC token. Prints the token to stdout.

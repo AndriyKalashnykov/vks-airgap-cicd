@@ -172,6 +172,10 @@ engine_certs_d_dir() {
 # --cert-dir per command, which is why podman is sudo-free by construction.
 engine_trust_ca() {
   local eng="${1:?}" reg="${2:?}" ca="${3:-}" mode dir
+  # macOS: the engine runs inside a VM, and Colima's dockerd is rootful there, so engine_mode would say
+  # docker-rootful and this would SUDO-install into the MAC's /etc/docker/certs.d -- a CA nothing reads.
+  # Every caller refuses on macOS first; this makes the function fail closed for any future caller.
+  if [ "$(os_id)" = macos ]; then log_error "engine_trust_ca: not supported on macOS (the engine's trust store is inside its VM)"; return 1; fi
   mode="$(engine_mode "$eng")"
   if [ "$mode" = podman ]; then
     printf 'podman --cert-dir (per-command, no install)'
@@ -180,10 +184,11 @@ engine_trust_ca() {
   [ -n "$ca" ] && [ -f "$ca" ] || { log_error "no CA file at '${ca:-<unset>}' — cannot wire docker trust"; return 1; }
   dir="$(engine_certs_d_dir "$mode" "$reg")"
   if [ "$mode" = docker-rootless ]; then
-    mkdir -p "$dir" && install -m 0644 "$ca" "${dir}/ca.crt"        # $HOME — no sudo
+    mkdir -p "$dir" && install -m 0644 "$ca" "${dir}/ca.crt" || return 1   # $HOME — no sudo
   else
-    engine_sudo install -D -m 0644 "$ca" "${dir}/ca.crt"            # /etc — root-owned, sudo COUNTED
+    engine_sudo install -D -m 0644 "$ca" "${dir}/ca.crt" || return 1       # /etc — root-owned, sudo COUNTED
   fi
+  # The path is printed only AFTER the install succeeded: the caller logs it as the CA method.
   printf '%s/ca.crt' "$dir"
 }
 

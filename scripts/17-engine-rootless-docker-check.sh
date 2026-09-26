@@ -38,6 +38,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
 
+# macOS: rootless docker is a Linux daemon feature; on a Mac docker runs inside a VM (Colima) and this
+# died at the dockerd-rootless.sh check below, naming the wrong cause and the wrong fix.
+[ "$(os_id)" != macos ] || die "make engine-trust-check-rootless is Linux-only: on macOS docker runs inside a VM,
+  where rootless docker is not configured by this repo."
 [ "$(id -u)" -ne 0 ] || die "run this as a NORMAL USER — the entire point is that rootless docker needs no root"
 require_cmd dockerd-rootless.sh "docker's rootless extras (docker-ce-rootless-extras)"   # docker-ok: this script EXISTS to validate rootless DOCKER; it is a developer/validation tool, never part of the air-gap operator flow (which is podman + crane).
 require_cmd newuidmap "apt install uidmap  (Ubuntu's apt DROPS it under --no-install-recommends)"

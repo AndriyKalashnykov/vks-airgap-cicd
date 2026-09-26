@@ -685,7 +685,7 @@ Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#
 
 - **Scripts are numbered by execution order** (`scripts/NN-*.sh`) and all source
   `scripts/lib/os.sh` — the shared library providing OS detection (Ubuntu `apt` /
-  PhotonOS `tdnf`), `pkg_install`, logging, `load_env`, and `trust_ca`. Add new OS
+  PhotonOS `tdnf`), `pkg_install`, logging and `load_env`. Add new OS
   support in `lib/os.sh`, not in individual scripts.
 - **`.env.example` is the single source of truth** for every tunable. The Makefile
   `-include .env` + `?=` defaults and every script's `load_env` both read it. Never
