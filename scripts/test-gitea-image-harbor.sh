@@ -72,5 +72,42 @@ out="$(run40 '' '')"
 if printf '%s' "$out" | grep -q 'HARBOR_URL: parameter'; then ok "dies on the missing HARBOR_URL"; else bad "must still require HARBOR_URL: $out"; fi
 if printf '%s' "$out" | grep -q 'STUB-KUBECTL'; then bad "touched the cluster before failing"; else ok "failed before any cluster call"; fi
 
+echo "== the probe checks the project the IMAGE names, not HARBOR_INFRA_PROJECT (measured: it asked for cicd) =="
+probed() { grep -o '/api/v2.0/projects/[A-Za-z0-9._-]*' "$T/curl.calls" 2>/dev/null | sort -u | tr '\n' ' '; }
+run40 harbor.test/myproj/gitea/gitea:1.27.2-rootless harbor.test >/dev/null
+case "$(probed)" in *"/projects/myproj "*) ok "an explicit Harbor image -> its own project (myproj) is probed" ;; *) bad "probed '$(probed)' for an image in myproj" ;; esac
+case "$(probed)" in *"/projects/cicd "*) bad "HARBOR_INFRA_PROJECT (cicd) was probed for an image that names myproj" ;; *) ok "HARBOR_INFRA_PROJECT is not probed for it" ;; esac
+run40 harbor.test:443/myproj/gitea/gitea:1.27.2-rootless harbor.test >/dev/null
+case "$(probed)" in *"/projects/myproj "*) ok "host:443 spelling -> myproj probed" ;; *) bad "host:443 spelling probed '$(probed)'" ;; esac
+run40 '' harbor.test >/dev/null
+case "$(probed)" in *"/projects/cicd "*) ok "the DEFAULT image still probes HARBOR_INFRA_PROJECT (cicd)" ;; *) bad "default image probed '$(probed)'" ;; esac
+run40 '' harbor.test/ >/dev/null
+case "$(probed)" in *"/projects/cicd "*) ok "the DEFAULT image with a trailing-slash HARBOR_URL still probes cicd" ;; *) bad "default image + 'harbor.test/' probed '$(probed)' (the re-parse lost the project)" ;; esac
+out="$(run40 harbor.test/gitea:1.27.2-rootless harbor.test)"
+if [ ! -s "$T/curl.calls" ] && printf '%s' "$out" | grep -q 'no Harbor project name given'; then ok "an image with no project segment -> SKIPPED, not probed"
+else bad "no-project image: calls='$(probed)'"; fi
+
+echo "== the FALSE-DIE direction: an empty infra project must not kill an image that lives elsewhere =="
+# A routing curl that answers the probe's own `body\ncode` contract: cicd is 404, myproj holds repos.
+cp "$T/bin/curl" "$T/curl.plain"
+cat > "$T/bin/curl" <<STUB
+#!/bin/sh
+echo "STUB-CURL \$*" >> "$T/curl.calls"
+case "\$*" in
+  */projects/cicd*)   printf '{"errors":[]}\n404' ;;
+  */projects/myproj*) printf '{"name":"myproj","repo_count":3}\n200' ;;
+  *) exit 7 ;;
+esac
+exit 0
+STUB
+chmod +x "$T/bin/curl"
+out="$(run40 harbor.test/myproj/gitea/gitea:1.27.2-rootless harbor.test)"
+if printf '%s' "$out" | grep -q 'STUB-KUBECTL' && ! printf '%s' "$out" | grep -q 'Nothing has been mirrored'; then ok "infra project absent, image project full -> no false die, reached the cluster"
+else bad "false die: $(printf '%s' "$out" | grep -m2 -E 'harbor:|mirrored')"; fi
+out="$(run40 '' harbor.test)"
+if printf '%s' "$out" | grep -q 'Nothing has been mirrored'; then ok "the default image against an ABSENT infra project still dies (B527 kept)"
+else bad "default image vs absent cicd did not die: $out"; fi
+cp "$T/curl.plain" "$T/bin/curl"
+
 echo "test-gitea-image-harbor: $((checks)) checks, rc=$rc"
 exit "$rc"
