@@ -47,11 +47,11 @@ else bad "classification/denominator: $out"; fi
 
 restore() { R=0; O="$(ARCHIVE="$1" bash "$SCRIPT_DIR/state-restore.sh" 2>&1)" || R=$?; }
 echo "== restore refuses anything that is not a plain archive =="
-restore '';                               [ "$R" != 0 ] && ok "empty name refused"      || bad "empty name accepted"
-restore '../etc/passwd';                  [ "$R" != 0 ] && ok "a path refused"          || bad "a path accepted"
-restore '.env.state.a1B2c3';              [ "$R" != 0 ] && ok "temp leftover refused"   || bad "temp accepted"
-restore '.env.state.stale-20260102-000000'; [ "$R" != 0 ] && [ ! -L "$VKS_STATE_FILE" ] && ok "symlink refused, the sink is not a link" || bad "symlink restored"
-restore '.env.state.stale-19990101-000000'; [ "$R" != 0 ] && ok "a missing archive refused" || bad "missing archive accepted"
+restore ''; if [ "$R" != 0 ]; then ok "empty name refused"; else bad "empty name accepted"; fi
+restore '../etc/passwd'; if [ "$R" != 0 ]; then ok "a path refused"; else bad "a path accepted"; fi
+restore '.env.state.a1B2c3'; if [ "$R" != 0 ]; then ok "temp leftover refused"; else bad "temp accepted"; fi
+restore '.env.state.stale-20260102-000000'; if [ "$R" != 0 ] && [ ! -L "$VKS_STATE_FILE" ]; then ok "symlink refused, the sink is not a link"; else bad "symlink restored"; fi
+restore '.env.state.stale-19990101-000000'; if [ "$R" != 0 ]; then ok "a missing archive refused"; else bad "missing archive accepted"; fi
 
 echo "== restore with NO current sink =="
 restore '.env.state.stale-20260101-000000'
@@ -68,9 +68,8 @@ else bad "restore over a sink: rc=$R undo='${undo}' $O"; fi
 restore "$undo"
 if [ "$R" = 0 ] && grep -q 'HUNTER2SECRET' "$VKS_STATE_FILE" && grep -rqx 'Y=other' "$T"/.env.state.stale-*; then ok "the undo restores it, and nothing was lost"
 else bad "undo: rc=$R $O"; fi
-if find "$T" -maxdepth 1 -name '.env.state*' | xargs grep -l 'HUNTER2SECRET' | grep -q .; then :; fi
 left="$(find "$T" -maxdepth 1 -name '.env.state*' ! -type l | wc -l | tr -d ' ')"
-[ "$left" -ge 3 ] && ok "no file was deleted (${left} state files)" || bad "files lost: ${left}"
+if [ "$left" -ge 3 ]; then ok "no file was deleted (${left} state files)"; else bad "files lost: ${left}"; fi
 
 echo "test-state-archives: ${checks} checks, rc=$rc"
 exit "$rc"

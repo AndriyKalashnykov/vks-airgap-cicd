@@ -17,7 +17,9 @@ case "$a" in */*|.|..) die "ARCHIVE must be a bare file name from 'make state-ar
 
 sink="$(state_file)"
 path="$(dirname "$sink")/$a"
-cls="$(state_archive_candidates | awk -F'\t' -v p="$path" '$2 == p { print $1; exit }')"
+# ⚠️ awk must DRAIN its input: an early `exit` SIGPIPEs the producer and pipefail + set -e then kills
+# this script with rc=141 -- measured, intermittently, in test-state-archives.sh.
+cls="$(state_archive_candidates | awk -F'\t' -v p="$path" '$2 == p && !f { print $1; f = 1 }')"
 case "$cls" in
   stale|other) : ;;
   temp)    die "'${a}' is a state_unset temp leftover, not an archive" ;;
