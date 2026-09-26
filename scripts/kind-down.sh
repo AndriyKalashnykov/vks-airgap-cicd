@@ -128,8 +128,10 @@ elif [ -f "$env_kind" ]; then
   # sink; it does NOT prove the KinD flow wrote every value now in it. `state_stamp` has exactly two
   # callers — 05-kind-up.sh:222 and a manual `make state-stamp` — so NOTHING re-stamps a sink when the
   # LAB path writes into it. An operator who ran the KinD e2e and then went back to the lab has lab
-  # values (state_set is unconditional; only READS are stamp-checked) sitting inside a still-KinD-
-  # stamped sink. This branch used to delete them with no archive and no way back.
+  # values sitting inside a still-KinD-stamped sink. This branch used to delete them with no archive
+  # and no way back. (Since B722, state_set ARCHIVES a sink stamped for another cluster before it
+  # writes -- but only when load_env saw an explicit selection that contradicts the stamp. A write
+  # with no selection still lands in place, so this archive stays: it is the backstop, not the fix.)
   #
   # The protection was ASYMMETRIC: state_claim_kind (05-kind-up.sh:134) stops KinD writing into the
   # LAB's sink, and nothing stopped kind-down deleting the LAB's values out of KIND's sink.

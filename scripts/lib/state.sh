@@ -54,8 +54,35 @@ state_kubeconfig_server() {
 }
 
 # state_set KEY VALUE — write to the stamped sink, 0600 (it holds generated passwords).
+#
+# B722 -- A WRITE NEVER LANDS IN A SINK STAMPED FOR ANOTHER CLUSTER. state_check refuses to SOURCE such
+# a sink, but writes used to go into it anyway: an installer published INGRESS_LB_IP for the cluster
+# you selected into the file stamped for the OTHER one, so the next `make creds` refused it again (a
+# loop), `make kind-down` could archive lab values as KinD state (F5), and `make state-stamp` re-stamped
+# another cluster's passwords as yours (F6). Now the first write ARCHIVES that sink (rename, never rm;
+# `make state-archives` / `make state-restore` get it back) and starts a fresh, UNSTAMPED one (see
+# below for why not stamped).
+# ⚠️ KEYED ON _VKS_STATE_MISMATCH, NEVER ON _VKS_STATE_SOURCED: that is 0 for an ABSENT sink too, and
+# refusing there would drop every clean-box publish. And the stamp is RE-READ here and compared with the
+# live selection, so a sink this process already replaced is never archived twice (it is unstamped).
+# NOTE: state_set has never honoured DRY_RUN, so under DRY_RUN=1 it both writes and may archive.
 state_set() {
   local f; f="$(state_file)"
+  if [ "${_VKS_STATE_MISMATCH:-0}" = 1 ] && [ -f "$f" ]; then
+    local stamped want
+    stamped="$(grep -m1 '^VKS_STATE_SERVER=' "$f" 2>/dev/null | cut -d= -f2- || true)"; stamped="${stamped//\"/}"
+    want="$(state_kubeconfig_server "${_VKS_EXPLICIT_KUBECONFIG:-}" || true)"
+    if [ -n "$stamped" ] && [ -n "$want" ] && [ "$stamped" != "$want" ]; then
+      state_archive "a write for ${want} will not land in a sink stamped for ${stamped}" || return 1
+      export _VKS_STATE_MISMATCH=0 _VKS_STATE_SOURCED=1
+      # ⚠️ THE FRESH SINK IS LEFT UNSTAMPED (implementation round, measured). Stamping it for `want`
+      # armed state_check against the OTHER server scenario-1 legitimately uses next (Supervisor at
+      # Section 3, then the guest): each alternation archived again -- 4 archives in a 5-step walk, with
+      # HARBOR_PASSWORD stranded in one of them. Unstamped is the real-lab policy (B120/B86): sourced
+      # whatever is selected, so the loop still breaks. `make state-stamp` still stamps it on request.
+      log_warn "state: started a fresh $(basename "$f"); the one stamped for ${stamped} is archived (make state-archives)"
+    fi
+  fi
   ( umask 077; set_env_var "$1" "$2" "$f" )
 }
 
