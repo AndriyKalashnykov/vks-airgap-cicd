@@ -1384,6 +1384,27 @@ is_placeholder() { case "${1:-}" in ''|'<SET-IN-.env>'|*'<SET-'*) return 0 ;; *)
 #   already yields `unmatched '` -> the var ends up UNSET -> a 401 that blames the password.
 esc_sq() { local s=$1; s=${s//\'/\'\\\'\'}; printf '%s' "$s"; }
 
+# gitea_git_isolate <clone-dir> <store-file> <user> — make a temp clone use ONLY our store file for the
+# Gitea credential. git's credential.helper list is CUMULATIVE across system/global/local, so a bare
+# `config credential.helper store` APPENDS: the operator's osxkeychain (Apple/Homebrew git ship it in
+# system config) or libsecret/GCM/cache also receives `store` on every push, and the demo's Gitea token
+# persists in their keychain after every teardown. OBSERVED 2026-09-26: `fatal: failed to store: -25308`
+# on a headless Mac (keychain locked, so nothing stored there; an unlocked Mac would have stored it).
+# And on `get` the FIRST helper answering wins, so a stale keychain entry for localhost:<port> beat our
+# file (measured in review with a spy helper). So:
+#   * helper ""       — an empty value RESETS the inherited list (gitcredentials(7)), then add ours;
+#   * useHttpPath=false and username=<user> — both single-valued, so LOCAL (read last) overrides an
+#     inherited value; an inherited useHttpPath=true or username made our store line never match
+#     (measured: "could not read Username", exit 128).
+# Callers also export GIT_TERMINAL_PROMPT=0, so a lookup miss fails instead of prompting.
+gitea_git_isolate() {
+  local d="$1" f="$2" u="$3"
+  git -C "$d" config credential.helper ""
+  git -C "$d" config --add credential.helper "store --file=${f}"
+  git -C "$d" config credential.useHttpPath false
+  git -C "$d" config credential.username "$u"
+}
+
 # doc_robot_line_is_bad LINE — return 0 (BAD) iff LINE is a shell assignment whose value EXPOSES a
 # Harbor robot-name expansion `robot$<letter>` OUTSIDE a single-quoted span, so a `set -a` source
 # would expand it away (`HARBOR_USERNAME=robot$vks-cicd` -> `robot-cicd` -> Harbor 401). A robot

@@ -25,6 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+export GIT_TERMINAL_PROMPT=0   # these git calls are unattended: a credential miss must FAIL, never prompt (gitea_git_isolate)
 # shellcheck source=scripts/lib/tls.sh
 . "${SCRIPT_DIR}/lib/tls.sh"
 # shellcheck source=scripts/lib/harbor.sh
@@ -116,7 +117,7 @@ build_app() {
   before="$(kubectl -n "$CI_NAMESPACE" get pipelinerun -l "tekton.dev/pipeline=${app}-ci" \
               --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -1 || true)"
 
-  git -C "$d" config credential.helper "store --file=${GITCREDS}"
+  gitea_git_isolate "$d" "${GITCREDS}" "$GITEA_ADMIN_USER"   # ONLY our store file; see lib/os.sh
   git -C "$d" config user.email "build-apps@vks-airgap-cicd.local"
   git -C "$d" config user.name  "vks-airgap-cicd-build"
   # An EMPTY commit: the source is already what the operator wants built. This is the documented

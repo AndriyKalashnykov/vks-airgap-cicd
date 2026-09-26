@@ -11,6 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+export GIT_TERMINAL_PROMPT=0   # these git calls are unattended: a credential miss must FAIL, never prompt (gitea_git_isolate)
 load_env
 
 require_cmd kubectl; require_cmd git; require_cmd curl; require_cmd yq
@@ -271,7 +272,7 @@ push_repo() {
   git -C "$d" config user.email "$GITEA_ADMIN_EMAIL"
   git -C "$d" config user.name "$GITEA_CI_USER"
   # store helper supplies creds via the credential protocol (stdin), not argv.
-  git -C "$d" config credential.helper "store --file=${gitcreds}"
+  gitea_git_isolate "$d" "${gitcreds}" "$GITEA_ADMIN_USER"   # ONLY our store file; see lib/os.sh
   git -C "$d" add -A
   git -C "$d" commit -q -m "seed: initial ${repo}"
   git -C "$d" remote add origin "${base}/${GITEA_ORG}/${repo}.git"
