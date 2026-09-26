@@ -90,12 +90,15 @@ rm -f "$T/unrelated.md"
 # ⚠️ THE LHS SANITY GATE. Forgetting the '##' strip yields ~49 tokens instead of 12 and then BOTH
 # correct docs go RED — with a message that reads as a DOC defect and sends the fixer to the wrong
 # file. The gate must name ITSELF as the fault instead.
-sed -i 's/ *sed .s\/\^install-all: \*\/\/; s\/ \*##\.\*\/\/./ sed "s|^install-all: *||"/' "$T/scripts/check-install-chain.sh" 2>/dev/null || true
+# The realistic regression: someone points the extractor back at the install-all RULE line, which now
+# reads `install-all: $(INSTALL_ALL_STEPS) ##...` -> 2 tokens, below the 8-20 window.
+sed -i "s|grep -m1 '^INSTALL_ALL_STEPS \\*:='|grep -m1 '^install-all:'|" "$T/scripts/check-install-chain.sh"
+grep -q "grep -m1 '^install-all:'" "$T/scripts/check-install-chain.sh" || bad "the LHS mutation did not apply — this RED-proof measures nothing"
 run
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q 'fault in THIS GATE'; then
   ok "a broken LHS extraction blames the GATE, not the documents"
 elif [ "$RC" -eq 0 ]; then
-  ok "the LHS extraction could not be broken by this mutation (sanity gate untested here)"
+  bad "a broken LHS extraction PASSED the gate — the sanity window no longer fires"
 else
   bad "a broken LHS extraction blamed the DOCUMENTS — the fixer goes to the wrong file. $OUT"
 fi

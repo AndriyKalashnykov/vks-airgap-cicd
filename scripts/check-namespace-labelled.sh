@@ -7,7 +7,7 @@
 #   #290. Prose. Loaded. And when this gate was written, `make install-all` — the documented real-lab
 #   install — labelled NEITHER gitea NOR tekton, because their only ensure_namespace calls lived
 #   inside lib/istio.sh's route functions, reachable solely from `make install-ingress`, which
-#   install-all (Makefile:459) does not run. The label landed never. On a VKS guest, which enforces
+#   install-all did not run then (it has since #1091). The label landed never. On a VKS guest, which enforces
 #   Pod Security `restricted` by default, that is the difference between a working demo and every
 #   pod rejected.
 #
@@ -68,7 +68,7 @@
 # The first draft of this gate grepped scripts/ repo-wide for `ensure_namespace "$VAR"`. An adversary
 # deleted the calls from 40-install-gitea.sh AND 41-install-tekton.sh — restoring F2 exactly, with the
 # calls surviving only in lib/istio.sh (reachable solely from `make install-ingress`, which
-# `make install-all` does not run) — and the gate reported **OK, rc=0**. It was blind to the precise
+# `make install-all` did not run then) — and the gate reported **OK, rc=0**. It was blind to the precise
 # regression it was written for. Its RED-proof had passed only because $TRAEFIK_NAMESPACE happened to
 # have no call ANYWHERE; once any call exists, a repo-wide grep is satisfied forever, on any path.
 #
@@ -336,8 +336,8 @@ if [ "${#HITS[@]}" -gt 0 ]; then
   echo "  ensure_namespace (scripts/lib/psa.sh) is the ONLY place a namespace we own gets its PSA"
   echo "  level and its istio-injection=disabled label. KinD enforces no PSA, so a namespace missing"
   echo "  both is INVISIBLE locally and has its pods REJECTED on a real VKS guest."
-  echo "  Add the call to the installer that creates the namespace — NOT to the ingress step, which"
-  echo "  'make install-all' does not run (that was the F2 bug this gate exists to prevent)."
+  echo "  Add the call to the installer that creates the namespace — NOT to the ingress step, which the"
+  echo "  attach fixture and the traefik mode skip (the F2 bug this gate exists to prevent)."
   exit 1
 fi
 
