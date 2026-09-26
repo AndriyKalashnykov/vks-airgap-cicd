@@ -10407,6 +10407,11 @@ under a distinct name. **(3)** brew lists: the install list has **4** copies (`b
 (`os.sh:41-44`, `shell-init.sh:42`, `Makefile:96`); gate with SUBSET semantics, `bootstrap-jumpbox.sh`
 as source. **(4)** a verbatim scenario-1 walk on a macOS row (the Done-when) is still not done.
 KinD moved IN scope by owner decision 2026-09-26 → B740.
+**2026-09-26 — residual (3) is DONE:** `check-brew-lists` is in static-check-fast. The docs must
+EQUAL the bootstrap's macOS list; every tool in `lib/os.sh`'s hint must be installed by the
+bootstrap, the docs and `00-install-prereqs.sh`; the three gnubin lists must be the same set, and
+each must be installed. Every check was proven RED, and a moved line dies rather than passing on
+an empty list. `os.sh`'s error now also points at the bootstrap.
 
 ## 🔴 B736 — an arm64 build host overwrites Harbor's amd64 tags; the builds pass no `--platform`
 
