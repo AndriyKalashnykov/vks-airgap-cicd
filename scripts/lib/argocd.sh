@@ -1074,6 +1074,36 @@ which MISDIAGNOSES an update-RBAC denial.
 # "the consequence of disagreement is a FALSE REFUSE".
 #
 # is_placeholder is lib/os.sh's, sourced at the top of this file -- see the warning there.
+# B486: the name the DEFAULT VKS ArgoCD certificate carries. A cited constant, not a knob: the
+# lab-verified SAN list (docs/vks-services/argocd.md) is localhost, argocd-server, argocd-server.<ns>,
+# .<ns>.svc, .<ns>.svc.cluster.local -- no IP SAN. Only the bare name is namespace-independent.
+# A platform-issued cert with other names is a GRANTED value (the operator sets ARGOCD_SERVER).
+ARGOCD_DEFAULT_CERT_NAME=argocd-server
+
+# argocd_name_resolves_to <name> <ip> -- 0 when <name> resolves to EXACTLY {<ip>} on this machine.
+# Exact, not "includes": a second address would let the client dial something the cert was not
+# checked on. getent reads /etc/hosts AND DNS, which is how the CLI will resolve it.
+argocd_name_resolves_to() {
+  local got
+  got="$(getent ahosts "$1" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
+  [ "$got" = "$2 " ]
+}
+
+# argocd_cert_carries_name <ip> <name> -- 0: the certificate served at <ip>:443 carries DNS:<name>
+# EXACTLY (not a prefix: argocd-server.lab does not count for argocd-server); 1: it does not;
+# 2: UNKNOWN -- no certificate was read, which is a connection fact, never a verdict.
+argocd_cert_carries_name() {
+  local pem sans
+  pem="$(timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client -connect "$1:443" -servername "$2" \
+           </dev/null 2>/dev/null | openssl x509 2>/dev/null || true)"
+  [ -n "$pem" ] || return 2
+  sans="$(printf '%s\n' "$pem" | openssl x509 -noout -ext subjectAltName 2>/dev/null | tail -n +2 \
+            | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
+  # herestring, not a pipe into `grep -q`: under pipefail an early-exiting grep SIGPIPEs its producer
+  # and a FOUND name reads as absent.
+  grep -qxF "DNS:$2" <<< "$sans"
+}
+
 argocd_effective_addr() {
   local server="${1:-}" source="${2:-}" ip="${3:?argocd_effective_addr: resolved ip required}"
   if ! is_placeholder "$server" && [ "$server" != "$ip" ] && [ "$source" != discovered ]; then

@@ -269,36 +269,71 @@ ip="$st"
 # adding the function beside it: deleting one clause from the inline copy left .env holding the
 # stale value while the report claimed the new one, and the function-based test stayed GREEN.
 _eff="$(argocd_effective_addr "${ARGOCD_SERVER:-}" "${ARGOCD_SERVER_SOURCE:-}" "$ip")"
+_pub=""
 if [ "$_eff" != "$ip" ]; then
   log_warn "ARGOCD_SERVER is already set to '${ARGOCD_SERVER}' - NOT overwriting it with the discovered ${ip}."
   log_warn "  Nothing here wrote that value, so it is treated as one you were GRANTED and is left alone."
   log_warn "  If ${ip} is the one you want, change it in .env yourself."
 else
+  # B486: PUBLISH THE NAME WHEN IT PROVABLY WORKS, else the IP. The default certificate carries
+  # DNS SANs only, so an IP can be used only with --insecure. The name is published when BOTH hold:
+  #   - it resolves on THIS machine to EXACTLY {ip} (an /etc/hosts line or a DNS record), and
+  #   - the certificate served at ip carries it EXACTLY (argocd-server.lab does not count).
+  # A certificate that cannot be read is UNKNOWN, never "absent": a value we already published
+  # stays, and a first write falls back to the IP.
+  _N="$ARGOCD_DEFAULT_CERT_NAME"
+  _pub="$ip"
+  if argocd_name_resolves_to "$_N" "$ip"; then
+    _crc=0; argocd_cert_carries_name "$ip" "$_N" || _crc=$?
+    case "$_crc" in
+      0) _pub="$_N" ;;
+      2) log_warn "could not read the certificate at ${ip}:443 — keeping $([ "${ARGOCD_SERVER:-}" = "$_N" ] && printf '%s' "$_N" || printf 'the IP')."
+         [ "${ARGOCD_SERVER:-}" = "$_N" ] && _pub="$_N" ;;
+      *) log_warn "${_N} resolves to ${ip}, but the certificate served there does not carry it — publishing the IP." ;;
+    esac
+  elif [ "${ARGOCD_SERVER:-}" = "$_N" ]; then
+    # We published the name and it no longer resolves to the Service. The VIP moved, or the hosts
+    # line is gone. With ARGOCD_CA_FILE set, falling back to the IP would turn every verifying call
+    # into a name failure, so STOP and say exactly what to change.
+    _now_at="$(getent ahosts "$_N" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
+    if [ -n "${ARGOCD_CA_FILE:-}" ]; then
+      die "${_N} resolves to '${_now_at:-nothing}', but svc/argocd-server is now at ${ip}.
+  ARGOCD_SERVER=${_N} and ARGOCD_CA_FILE are left as they are. Update the resolution, then re-run:
+    in /etc/hosts, DELETE the existing ${_N} line and ADD:   ${ip} ${_N}
+    make argocd-address"
+    fi
+    log_warn "${_N} resolves to '${_now_at:-nothing}', not ${ip} — publishing the IP (ARGOCD_CA_FILE is unset)."
+    log_warn "  To go back to the name: in /etc/hosts, delete the ${_N} line, add '${ip} ${_N}', re-run this."
+  fi
   # B486(d): this arm is reached for TWO different reasons, and the log must say which. It used to
   # claim "(we wrote the previous value)" for a template placeholder too, which we never wrote.
-  if [ -n "${ARGOCD_SERVER:-}" ] && [ "${ARGOCD_SERVER}" != "$ip" ]; then
+  if [ -n "${ARGOCD_SERVER:-}" ] && [ "${ARGOCD_SERVER}" != "$_pub" ]; then
     if is_placeholder "${ARGOCD_SERVER}"; then
-      log_info "replacing the placeholder ARGOCD_SERVER '${ARGOCD_SERVER}' with the discovered ${ip}."
+      log_info "replacing the placeholder ARGOCD_SERVER '${ARGOCD_SERVER}' with ${_pub}."
     else
-      log_warn "correcting ARGOCD_SERVER ${ARGOCD_SERVER} -> ${ip} (we wrote the previous value)."
+      log_warn "correcting ARGOCD_SERVER ${ARGOCD_SERVER} -> ${_pub} (we wrote the previous value)."
     fi
   fi
-  set_env_var ARGOCD_SERVER "$ip" "${REPO_ROOT}/.env"
+  set_env_var ARGOCD_SERVER "$_pub" "${REPO_ROOT}/.env"
   # PROVENANCE, so a later run may correct this value (see the guard above). It goes to the STATE
   # overlay, not .env: it is something the system observed about itself, never an operator tunable.
   state_set ARGOCD_SERVER_SOURCE discovered 2>/dev/null || true
-  log_info "wrote ARGOCD_SERVER=${ip} to ./.env"
-  # DEBT, recorded where it is created: .env.example:439 says this should be
-  # `<SET-a-name-the-cert-carries>`, and the lab-verified SAN list carries NO IP SAN -- so this IP
-  # works only because every consumer runs --insecure/-k. Harbor survives VIP churn precisely because
-  # HARBOR_URL is a NAME. show-dns-records.sh already emits an A-record row for argocd-server, so the
-  # name path exists and is unused here. Publishing a name is a separate change (it needs the A
-  # record to be a documented step); see BACKLOG.md B486.
+  log_info "wrote ARGOCD_SERVER=${_pub} to ./.env"
 fi
+# What the operator will use: the value just written, or the granted one left alone.
+_shown="${_pub:-$_eff}"
 
 echo
-echo "  ArgoCD:   https://${_eff}"
-echo "  Log in:   argocd login \"\$ARGOCD_SERVER\" --username admin --insecure"
+echo "  ArgoCD:   https://${_shown}"
+# Verify when it can: a NAME plus a readable CA file. Otherwise say --insecure, and the block below
+# explains why.
+_verify=0
+if [ "$(ca_addr_kind "$_shown")" != ip ] && [ -s "${ARGOCD_CA_FILE:-}" ]; then _verify=1; fi
+if [ "$_verify" = 1 ]; then
+  echo "  Log in:   argocd login \"\$ARGOCD_SERVER\" --username admin --server-crt \"\$ARGOCD_CA_FILE\""
+else
+  echo "  Log in:   argocd login \"\$ARGOCD_SERVER\" --username admin --insecure"
+fi
 echo "  Password: make argocd-password"
 # SAY WHY THE LOGIN LINE CARRIES --insecure. This script has just written an IP, and the operator --
 # who is the one typing --insecure -- had no way to know that from the output. The reason lived only
@@ -314,12 +349,12 @@ echo "  Password: make argocd-password"
 #     where the operator holds a GRANTED NAME, it printed "That address is an IP" about a name --
 #     and that is the state the remedy's own step 3 produces, so following the advice re-triggered
 #     it. The deictic "That address" binds to the line above, which prints the effective address.
-# $_eff is what the operator will actually use, which is what both lines are about.
+# $_shown is what the operator will actually use (the value just written, or the granted one).
 #
 # ⚠️ ONE CLASSIFIER, from lib/tls.sh. Its header records that two hand-typed copies of this same
 # predicate once disagreed, "and the consequence of disagreement is a FALSE REFUSE". A third copy
 # here (`*[a-zA-Z]*`) disagreed with it on `10.0.0.1:8443` and `10-0-0-1` -- measured.
-if [ "$(ca_addr_kind "$_eff")" = ip ]; then
+if [ "$(ca_addr_kind "$_shown")" = ip ]; then
   echo "  ⚠️  That address is an IP. An IP can only be verified if the certificate carries an IP SAN,"
   echo "      and argocd-server's DEFAULT self-signed certificate carries DNS SANs only — which is why"
   echo "      the login line above says --insecure. If your platform team issued a cert WITH an IP SAN,"
@@ -350,9 +385,10 @@ if [ "$(ca_addr_kind "$_eff")" = ip ]; then
   # printed the granted-value text having just published the marker. `_eff = ip` IS the write
   # branch (biconditional, see above), so it needs no third expression to drift.
   if [ "$_eff" = "$ip" ]; then
-    echo "        3. publish the record, set ARGOCD_SERVER to the same name in .env, and REMOVE"
-    echo "           ARGOCD_SERVER_SOURCE=discovered from ${VKS_STATE_FILE:-.env.state} — otherwise the"
-    echo "           this script treats the name as ours to correct and overwrites it back to ${ip}"
+    echo "        3. if that name is ${ARGOCD_DEFAULT_CERT_NAME}: map it to ${ip} and re-run 'make argocd-address' —"
+    echo "           it checks both and publishes the name itself. Another name: set ARGOCD_SERVER to it"
+    echo "           in .env and remove ARGOCD_SERVER_SOURCE=discovered from ${VKS_STATE_FILE:-.env.state},"
+    echo "           or this script overwrites it back to ${ip}"
   else
     echo "        3. publish the record and set ARGOCD_SERVER to the same name in .env"
     echo "           (nothing here wrote the current value, so no run of this script will change it)"
@@ -371,11 +407,17 @@ else
   # ⚠️ AND THIS ARM CARRIES THE SAME ESCAPE HATCH THE IP ARM HAS. The NAME arm IS the LEAVE/granted
   # branch -- i.e. exactly the platform-issued case where "self-signed" is MOST likely to be false --
   # so asserting it flat here, while hedging it on the IP arm, had the hedge on the wrong one.
+  if [ "$_verify" = 1 ]; then
+  echo "  Verified against ${ARGOCD_CA_FILE}: the name ${_shown} is in the certificate and that file is its anchor."
+  else
   echo "  ⚠️  That address is a NAME, so --insecure above is about the ISSUER, not the address:"
   echo "      argocd-server's DEFAULT certificate is self-signed, and a matching SAN is necessary"
   echo "      but not sufficient — this machine must also trust the CA that issued it. If your"
   echo "      platform team issued that cert from a CA you already trust, this does not apply."
   echo "        make fetch-argocd-ca    # fetches it and says whether it verifies for this address"
+  echo "        make argocd-ca-from-cluster    # with Supervisor access: no trust-on-first-use"
+  echo "      then set ARGOCD_CA_FILE in .env to the file it writes."
+  fi
 fi
 echo
 # ⚠️ DO NOT tell the reader to override this with an env PREFIX. .env.example:345 records the
