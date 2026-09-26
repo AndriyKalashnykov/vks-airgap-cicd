@@ -2145,6 +2145,19 @@ contract. **(e) closed as unnecessary, 2026-09-26 — measured:** `test-argocd-a
 `argocd-auth-check.sh` reads the same probe's recorded status. What keeps B486 open: F6 (needs a lab
 timing measurement of VIP stability after the CR's conditions go True) and the IP-versus-SAN decision.
 
+**2026-09-26 — design settled (research + idea round, not an owner decision) and step 1 built.**
+Measured live 17:40Z: the ArgoCD LB 192.168.101.131 serves a self-signed leaf with SANs `localhost`,
+`argocd-server`, `argocd-server.lab`, `.lab.svc`, `.lab.svc.cluster.local` and NO IP SAN. Direction:
+scenario-1 publishes `argocd-server` once it resolves to exactly the discovered IP and the served
+certificate carries it EXACTLY (never downgrade to the IP while a CA is set; on a moved VIP, stop and
+print a delete-then-add hosts line); `/etc/hosts` on the jump box, not a bare single-label DNS record.
+The CA comes from the Supervisor, not TOFU: `make argocd-ca-from-cluster` (measured 18:10Z — VKS keeps
+it in `lab/argocd-secret` `.data.tls.crt`, SHA-256 `14:FA:5C:...:89:84`, byte-identical to the served
+leaf). It is the first production writer of `ARGOCD_CA_FILE` (B550). Remaining: 09's conditional name
+write (tri-state probe with timeout, exact-SAN match, ownership predicate), the scenario-1 §5 order
+(re-run `make argocd-address` after the hosts line), show-dns-records' single-label wording, 02-env's
+IP writer, and a scenario-1 walk.
+
 ## 🔴 B484 — the Forbidden-reads-as-absent sweep: a FAIL-OPEN air-gap check outranks the wrong-message bug 🔴 open
 
 **⚠️ 2026-09-10 — RE-GRADED by a `vks-adversary` round; two of this row's residuals are STALE.**

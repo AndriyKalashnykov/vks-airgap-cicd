@@ -765,6 +765,10 @@ uninstall-all: ## DESTRUCTIVE (real lab): remove what scenario-1 created — our
 harbor-ca-from-cluster: ## Get the lab Harbor's CA from the Supervisor when it is NOT on the wire (scenario-1 §8 route B; costs an ADMIN-level read — see the header)
 	@$(SCRIPTS)/27-harbor-ca-from-cluster.sh "$(if $(HARBOR_CA_FILE),$(HARBOR_CA_FILE),./secrets/harbor-ca.crt)"
 
+.PHONY: argocd-ca-from-cluster
+argocd-ca-from-cluster: ## Get ArgoCD's certificate from the SUPERVISOR (authenticated, no trust-on-first-use) and prove it is the one served; costs an ADMIN-level read
+	@$(SCRIPTS)/argocd-ca-from-cluster.sh "$(if $(ARGOCD_CA_FILE),$(ARGOCD_CA_FILE),./secrets/argocd-ca.crt)"
+
 .PHONY: fetch-argocd-ca
 # ⚠️ ARGOCD_SERVER FIRST (B168). This picks a TRUST ANCHOR, not a display string, so the rule
 # applies with more force here than anywhere: a DISCOVERED ARGOCD_LB_IP used to outrank an
