@@ -435,6 +435,11 @@ vc_cluster_moid() {
 # it is base64'd into the body and every temp file is removed on all paths.
 vc_ss_install() {
   local moid="$1" id="$2" ver="$3" values="${4:-}" req out b64
+  # B725: WHICH success. Every arm below returns 0, but only `installed` means OUR request created it
+  # (so any secret we sent in $values is the live one). `existed` = it was there before our first
+  # attempt; `ambiguous` = present, but a transport error or a 5xx means we cannot tell whose it is.
+  # A global, not a return code: callers run under `set -e` and 08 shares this function.
+  VC_SS_OUTCOME=""
   req="$(mktemp)"; chmod 600 "$req"
   if [ -n "$values" ] && [ -s "$values" ]; then
     b64="$(mktemp)"; chmod 600 "$b64"
@@ -461,7 +466,7 @@ vc_ss_install() {
   while :; do
     if out="$(vc_api POST "/api/vcenter/namespace-management/clusters/${moid}/supervisor-services" \
                 --data-binary "@${req}")"; then
-      rm -f "$req"; return 0
+      rm -f "$req"; VC_SS_OUTCOME=installed; return 0
     fi
     code="$(vc_last_code)"
     case "$out" in
@@ -499,6 +504,8 @@ vc_ss_install() {
       *"already exists"*)
         # IDEMPOTENT. Re-running an install is a normal thing to do -- after a transport error,
         # after a partial run, or just twice. Dying here made the target non-re-runnable.
+        # First attempt -> it pre-dated us. A later attempt -> an earlier one of OURS may have landed.
+        if [ "$i" = 1 ]; then VC_SS_OUTCOME=existed; else VC_SS_OUTCOME=ambiguous; fi
         rm -f "$req"; log_info "${id} is already installed on this cluster - nothing to do"; return 0 ;;
       *)
         # ⚠️ VERIFY THE END STATE, do not trust the status code. MEASURED on a clean lab: the
@@ -509,6 +516,7 @@ vc_ss_install() {
           rm -f "$req"
           log_warn "install returned HTTP ${code}, but ${id} IS present on the cluster - treating as installed."
           log_warn "  vCenter said: $(printf '%s' "$out" | head -c 200)"
+          VC_SS_OUTCOME=ambiguous
           return 0
         fi
         # ⚠️ POLARITY: a 5xx here is RETRYABLE BY DEFAULT, not fatal by default.

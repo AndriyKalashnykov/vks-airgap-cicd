@@ -176,8 +176,18 @@ log_info "install issued for ${SVC_ID}"
 # which is the same rule the repo already applies in the other direction (never read back your own
 # published state; see INGRESS_LB_IP_OVERRIDE and gitea_clone_url).
 [ -n "${HARBOR_USERNAME:-}" ] || state_set HARBOR_USERNAME admin
-[ -n "${HARBOR_PASSWORD:-}" ] || state_set HARBOR_PASSWORD "$H_ADMIN"
-log_info "published HARBOR_USERNAME/HARBOR_PASSWORD to the state overlay (only the ones not already set)"
+# B725 third site: H_ADMIN is the password WE SENT. It is Harbor's password only if OUR request
+# created the service; for one that already existed it authenticates against nothing, and publishing
+# it would be the same fabrication 02-env.sh no longer does.
+if [ -z "${HARBOR_PASSWORD:-}" ]; then
+  if [ "${VC_SS_OUTCOME:-}" = installed ]; then
+    state_set HARBOR_PASSWORD "$H_ADMIN"
+  else
+    log_warn "HARBOR_PASSWORD NOT published: ${SVC_ID} was ${VC_SS_OUTCOME:-of unknown origin}, so the password"
+    log_warn "  this run sent may not be Harbor's. Read the live one: make harbor-admin-password"
+  fi
+fi
+log_info "published HARBOR_USERNAME/HARBOR_PASSWORD to the state overlay (only the ones not already set, and the password only for a Harbor this run installed)"
 # `make harbor-service-status` DOES NOT EXIST — this line named it for months and nobody ran it.
 # The real next step is to wait for the LoadBalancer ADDRESS, which is what the DNS record needs.
 log_info "next: wait for its LoadBalancer address, then create that A record:"
