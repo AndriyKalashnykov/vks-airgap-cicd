@@ -180,12 +180,23 @@ export GITEA_INTERNAL_URL="http://gitea-http.${GITEA_NAMESPACE:-gitea}.svc:3000"
 # --- RED 1: the OLD repoURL (guest cluster-local DNS) must be REFUSED -------------------------
 # This is CRITICAL #2, reproduced. An off-cluster repo-server cannot resolve gitea-http.gitea.svc.
 log_info "== RED 1: 70 must REFUSE a guest cluster-local repoURL when ArgoCD is off-cluster =="
+# ⚠️ A NON-ZERO EXIT IS NOT THIS RED. The output used to go to /dev/null, so 70 dying for ANY reason
+# read as "refused" -- #1300 found it failing on a missing HARBOR_URL, which this check would have
+# scored as a pass. Require the refusal's OWN sentence (lib/argocd.sh argocd_assert_clonable_url).
+red1_log="$(mktemp)"
 if KUBECONFIG="$GUEST_KC" ARGOCD_KUBECONFIG="$HUB_KC" ARGOCD_NAMESPACE="$ARGOCD_NS" \
    GITEA_ARGOCD_URL_OVERRIDE="$GITEA_INTERNAL_URL" ARGOCD_DEST_CLUSTER_NAME="$GUEST" \
-   "${SCRIPT_DIR}/70-configure-argocd.sh" >/dev/null 2>&1; then
+   "${SCRIPT_DIR}/70-configure-argocd.sh" >"$red1_log" 2>&1; then
+  rm -f "$red1_log"
   die "FAIL: 70 ACCEPTED a cluster-local repoURL for an OFF-CLUSTER ArgoCD — CRITICAL #2 would ship again."
 fi
-log_info "RED 1 OK — refused (the repo-server could never have cloned it)"
+if ! grep -q 'GITEA_ARGOCD_URL is a CLUSTER-LOCAL address' "$red1_log"; then
+  log_error "70 failed, but NOT with the cluster-local refusal this RED exists to see. Its output:"
+  tail -20 "$red1_log" >&2; rm -f "$red1_log"
+  die "FAIL: RED 1 did not measure what it names — fix the cause above first."
+fi
+rm -f "$red1_log"
+log_info "RED 1 OK — refused for the right reason (the repo-server could never have cloned it)"
 
 # --- the REAL run: ArgoCD in HUB, workload in GUEST, Gitea reachable ---------------------------
 log_info "== running the REAL 70-configure-argocd.sh across the two clusters =="
