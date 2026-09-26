@@ -10640,6 +10640,7 @@ kind-up on Colima. **A3 trust half still open:** a `docker-vm` mode for `engine_
 `colima ssh`), which needs an adversary-docker idea round first.
 
 **2026-09-26 — measurements from the first W1/W2 pass:**
+
 - **A0 (memory), rendered from this repo's pins and matched EXACTLY against a live KinD cluster:**
   pod memory REQUESTS total **3050Mi** for the full istio `e2e-kind`, **2154Mi** with traefik, and
   **802Mi** for the infra subset (kind-up + Harbor + ArgoCD + traefik). 28 of 50 containers set no
