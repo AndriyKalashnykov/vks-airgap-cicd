@@ -79,5 +79,17 @@ else bad "undo: rc=$R $O"; fi
 left="$(find "$T" -maxdepth 1 -name '.env.state*' ! -type l | wc -l | tr -d ' ')"
 if [ "$left" -ge 3 ]; then ok "no file was deleted (${left} state files)"; else bad "files lost: ${left}"; fi
 
+echo "== the MAKE TARGETS are wired (a script that passes proves nothing about its target) =="
+# MEASURED 2026-09-26: `state-restore: export ARCHIVE` (a bare target-specific export) made GNU make
+# read `export` as a PREREQUISITE -- "No rule to make target 'export'" -- and every test above still
+# passed, because they call the script. The target must reach the script and hand it ARCHIVE.
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+mo="$(make -s -C "$REPO" state-restore ARCHIVE=.env.state.stale-19990101-000000 VKS_STATE_FILE="$VKS_STATE_FILE" 2>&1)"
+if printf '%s' "$mo" | grep -q 'is not an archive'; then ok "make state-restore reaches the script with ARCHIVE"
+else bad "make state-restore is not wired: $mo"; fi
+mo="$(make -s -C "$REPO" state-archives VKS_STATE_FILE="$VKS_STATE_FILE" 2>&1)"
+if printf '%s' "$mo" | grep -q 'archive(s) beside'; then ok "make state-archives reaches the script"
+else bad "make state-archives is not wired: $mo"; fi
+
 echo "test-state-archives: ${checks} checks, rc=$rc"
 exit "$rc"
