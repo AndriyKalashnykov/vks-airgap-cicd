@@ -10632,6 +10632,13 @@ container on the kind network (no sudo; certifies a container).
 one lab-mutating box at a time; any Harbor on arm64 differs from the lab's amd64 2.15.x — a green run
 certifies the Mac's plumbing, not Harbor parity. Sneakernet/bundle on a Mac stay out (B735 item 11).
 
+**2026-09-26 — A3 socket half DONE:** `cpk_docker_socket` (lib/os.sh) mounts the VM's
+`/var/run/docker.sock` on macOS and checks that the daemon ANSWERS instead of a host `-S`. Linux is
+unchanged (rootful, rootless and DOCKER_HOST); `test-cpk-docker-socket.sh` has 5 cases, and both
+macOS cases were proven RED without the branch. Unit-tested only: the first real proof is W3's
+kind-up on Colima. **A3 trust half still open:** a `docker-vm` mode for `engine_trust_ca` (via
+`colima ssh`), which needs an adversary-docker idea round first.
+
 **Done when:** the W4 targets pass on a >=16 GB Mac (or the infra subset on 8 GB, with a measured
 refusal for the rest), recorded as a README row with commit, date and each class's result.
 
