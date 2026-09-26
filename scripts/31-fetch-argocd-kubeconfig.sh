@@ -19,9 +19,11 @@
 #   Creating a Supervisor context also auto-creates the per-vSphere-Namespace contexts
 #   (`<ctx>` and `<ctx>:<namespace>`), which is why we then `vcf context use <ctx>:<ns>`.
 #
-# PROVENANCE: lab-verified on VCF 9.1 (walk logs 2026-09-25/26, Linux and macOS: the create reads
-# the password from VCF_CLI_VSPHERE_PASSWORD, "[i] Reading the password from env variable"). The
-# earlier "9.1 docs 301-redirect to 9.0" belief was measured false on 2026-07-14.
+# PROVENANCE: on VCF 9.1 the create reads the password from VCF_CLI_VSPHERE_PASSWORD — lab-verified
+# in the walk logs of 2026-09-25/26 (Linux and macOS, "[i] Reading the password from env variable"),
+# with the invocation before B734. The </dev/null form below is 30's, lab-verified through 30 in the
+# matrix runs of 2026-08-25..27. The earlier "9.1 docs 301-redirect to 9.0" belief was measured false
+# on 2026-07-14.
 # NOT INTERACTIVE: the create runs with </dev/null, so it cannot prompt — set VCF_CLI_VSPHERE_PASSWORD
 # in .env (a password on argv is forbidden, and `vcf config set env.…` would write it in plaintext to
 # ~/.config/vcf/config.yaml, outside every teardown here).
@@ -177,7 +179,7 @@ log_info "verifying the Supervisor kubeconfig can see the ArgoCD instance..."
 if kubectl --kubeconfig "$ARGOCD_KUBECONFIG" -n "$ARGOCD_NAMESPACE" get deploy argocd-server >/dev/null 2>&1; then
   log_info "OK — argocd-server is visible in ns/${ARGOCD_NAMESPACE} via ${ARGOCD_KUBECONFIG}"
   _vcf_cur="$(kubectl --kubeconfig "$ARGOCD_KUBECONFIG" config current-context 2>/dev/null || true)"
-  if [ "$_vcf_rc" -ne 0 ] && vcf_use_plugin_note_ok "$_vcf_err" "$_vcf_cur" "${CTX}:${ARGOCD_NAMESPACE}"; then
+  if vcf_use_plugin_note_ok "$_vcf_err" "$_vcf_cur" "${CTX}:${ARGOCD_NAMESPACE}"; then
     vcf_use_plugin_note "ArgoCD kubeconfig fetch" "$_vcf_cur"
   fi
   log_info "next: make gitops   (it auto-invokes 'make argocd-register-guest' now that ARGOCD_KUBECONFIG is set)"
