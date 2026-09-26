@@ -112,8 +112,12 @@ if [ -z "$PROBE_IMAGE" ]; then
     if podimages_is_ours "$_i" "" "$HARBOR_URL"; then PROBE_IMAGE="$_i"; _probe_src_ns="$_ns"; break; fi
   done
 fi
+if [ -z "$PROBE_IMAGE" ] && [ -z "${HARBOR_URL:-}" ]; then
+  echo "     SKIP - HARBOR_URL is unset, so no image can be judged ours. Set it in .env, or pass PROBE_IMAGE=<ref>."
+  exit 0
+fi
 if [ -z "$PROBE_IMAGE" ]; then
-  echo "     SKIP - found no running workload using a ${HARBOR_URL:-<HARBOR_URL unset>} image to probe with."
+  echo "     SKIP - found no running workload using a ${HARBOR_URL} image to probe with."
   exit 0
 fi
 echo "     image: ${PROBE_IMAGE}  (from namespace ${_probe_src_ns:-?})"

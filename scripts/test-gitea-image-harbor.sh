@@ -56,6 +56,7 @@ out="$(run40 harbor.test:443/infra/gitea/gitea:1.27.2-rootless harbor.test)"
 if [ -s "$T/curl.calls" ]; then ok "host:443 in the image -> probed"; else bad "host:443 skipped the mirror check: $out"; fi
 out="$(run40 harbor.test/infra/gitea/gitea:1.27.2-rootless harbor.test/)"
 if [ -s "$T/curl.calls" ]; then ok "a trailing slash on HARBOR_URL -> probed"; else bad "trailing slash skipped the mirror check: $out"; fi
+if grep -q '//api' "$T/curl.calls" 2>/dev/null; then bad "the probe URL carries '//api' (some proxies 404 it -> a false 'absent')"; else ok "the probe URL is normalised (no '//api')"; fi
 
 echo "== a LOOKALIKE host is NOT ours, and the skip is SAID, not silent =="
 out="$(run40 harbor.test.evil/infra/gitea/gitea:1.27.2-rootless harbor.test)"

@@ -89,7 +89,7 @@ ck "detect: host:443 in the image IS ours"         "$(printf '%s' "$out" | grep 
 out="$(det 'HARBOR_URL=harbor.env1.lab.test')"
 ck "detect: plain HARBOR_URL, lookalike is NOT ours" "$(printf '%s' "$out" | grep -c 'image: harbor.env1.lab.test.evil')" "0"
 out="$(det 'HARBOR_URL=')"
-ck "detect: no HARBOR_URL -> SKIP, never a guess"  "$(printf '%s' "$out" | grep -c 'SKIP - found no running workload')" "1"
+ck "detect: no HARBOR_URL -> SKIP, never a guess"  "$(printf '%s' "$out" | grep -c 'SKIP - HARBOR_URL is unset')" "1"
 
 mk_kubectl 0
 
