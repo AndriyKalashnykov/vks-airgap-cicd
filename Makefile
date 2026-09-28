@@ -359,6 +359,15 @@ deps-mise: ## Install mise itself (if absent) + the mise-managed tools from .mis
 	   echo "  NOT cover it (CI fails instead). Usually a network block (e.g. PyPI for yamllint): behind a"; \
 	   echo "  proxy, export HTTPS_PROXY and re-run make deps."; \
 	 }; \
+	 pypi_skip=""; \
+	 for t in $$("$$MISE" ls --local --missing 2>/dev/null | awk '{print $$1}'); do \
+	   case "$$ci_only" in *" $$t "*) ;; *) continue ;; esac; \
+	   case "$$("$$MISE" tool "$$t" 2>/dev/null | awk '/^Backend/{print $$2}')" in pypi:*|pipx:*) pypi_skip="$$pypi_skip $$t" ;; esac; \
+	 done; \
+	 if [ -n "$$pypi_skip" ] && ! curl -fsS -o /dev/null --max-time "$${PYPI_PROBE_TIMEOUT:-5}" https://pypi.org/simple/ 2>/dev/null; then \
+	   echo "PyPI is unreachable from this network, so skipping the lint-only tools it provides:$$pypi_skip"; \
+	   export MISE_DISABLE_TOOLS="$${MISE_DISABLE_TOOLS:+$$MISE_DISABLE_TOOLS,}$$(echo $$pypi_skip | tr ' ' ',')"; \
+	 else pypi_skip=""; fi; \
 	 if ! "$$MISE" install; then \
 	   if lint_only_missing; then \
 	     warn_lint_only; \
@@ -375,6 +384,7 @@ deps-mise: ## Install mise itself (if absent) + the mise-managed tools from .mis
 	     if ! "$$MISE" install; then lint_only_missing || exit 1; warn_lint_only; fi; \
 	   fi; \
 	 fi; \
+	 if [ -n "$$pypi_skip" ]; then missing="$${pypi_skip# } "; warn_lint_only; fi; \
 	 command -v mise >/dev/null 2>&1 || { \
 	   echo ""; \
 	   echo "NOTE: mise is installed at $$HOME/.local/bin/mise but is NOT on your PATH."; \

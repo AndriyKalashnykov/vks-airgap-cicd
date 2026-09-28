@@ -36,7 +36,7 @@ else bad "the refusal does not name gmake"; fi
 fake="$(mktemp -d)"; trap 'rm -rf "$fake"' EXIT
 printf '#!/bin/sh\necho "FAKE-GMAKE argv=[$*]"\n' > "$fake/gmake"; chmod +x "$fake/gmake"
 out="$(PATH="$fake:$PATH" make ci lint .FEATURES='target-specific order-only' 2>&1)"; rc=$?
-n="$(printf '%s\n' "$out" | grep -c 'FAKE-GMAKE argv=\[ci lint\]' || true)"
+n="$(printf '%s\n' "$out" | grep -c 'FAKE-GMAKE argv=\[.*ci lint\]' || true)"
 if [ "$rc" -eq 0 ] && [ "$n" = 1 ]; then ok "an old make delegates all goals ONCE to gmake (GNUmakefile)"
 else bad "an old make did not delegate once (rc=$rc, delegations=$n): ${out:0:200}"; fi
 if printf '%s' "$out" | grep -q 'GNU make >= 3.82 is required'; then bad "the delegating path still parsed the Makefile"

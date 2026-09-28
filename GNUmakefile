@@ -27,10 +27,10 @@ ifeq ($(BREW),)
 else
 	@echo "GNU make >= 3.82 is required and this is $(MAKE_VERSION): installing Homebrew's GNU make (gmake) first." >&2
 	@HOMEBREW_NO_AUTO_UPDATE=1 "$(BREW)" install make >&2
-	+@"$$("$(BREW)" --prefix)/bin/gmake" $(MAKECMDGOALS)
+	+@"$$("$(BREW)" --prefix)/bin/gmake" --no-print-directory $(MAKECMDGOALS)
 endif
 else
-	+@"$(GMAKE)" $(MAKECMDGOALS)
+	+@"$(GMAKE)" --no-print-directory $(MAKECMDGOALS)
 endif
 
 # Never try to (re)make the makefiles themselves through the catch-all below.
