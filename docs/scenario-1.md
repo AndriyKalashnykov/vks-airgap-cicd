@@ -152,8 +152,8 @@ make install-vcf-clis         # reads VCF_CLI_SRC_DIR, which you set above
 make check-tools              # what you have, what is missing
 ```
 
-**On macOS**, type `gmake` — until the next section puts GNU make on your PATH, `make` is Apple's
-3.81, which the Makefile refuses (`GNU make >= 3.82 is required`):
+**On macOS**, `make` works as-is (Apple's 3.81 hands off to Homebrew's `gmake`, installing it if
+needed); typing `gmake` directly is equivalent:
 
 ```bash
 gmake deps                    # also creates and starts the podman machine
