@@ -15,8 +15,9 @@
 #   * a DROP-IN file, never an edit of the operator's containers.conf: a second [machine] table
 #     breaks every podman command, and legal TOML (`[ machine ]`, quoted keys, comments) defeats any
 #     regex that tries to merge into it.
-#   * only when NO machine exists at all (`podman machine list` empty) -- `podman machine inspect`
-#     with no name checks only podman-machine-default, so it misses a machine with any other name.
+#   * a NEW machine gets the drop-in before `podman machine init`; an EXISTING one found on QEMU gets it
+#     too, and is restarted only when no container is running on it. Machines are found by
+#     `podman machine list` -- `podman machine inspect` with no name reads podman-machine-default only.
 #   * never when the operator already chose (an active `rosetta` key anywhere podman reads), and
 #     never when CONTAINERS_CONF is set (podman then ignores the user files, so the write is dead).
 #   * only on real Apple silicon: `sysctl hw.optional.arm64` = 1. The Rosetta probe alone succeeds
@@ -70,7 +71,8 @@ rosetta_host_capable() {
 # Write the drop-in when every condition holds; print one line saying what it did and why.
 # Returns 0 when it wrote (or the drop-in was already there), 1 when it deliberately stood aside, and
 # 2 when it TRIED and failed -- the caller logs 2 as a warning and the rest as info.
-# Call it ONLY when no podman machine exists yet.
+# Callers: 00-install-prereqs.sh before creating a machine, and for an existing machine found on QEMU
+# (it then restarts that machine only when no container is running on it).
 rosetta_ensure_dropin() {
   local d f already
   if [ -n "${CONTAINERS_CONF:-}" ]; then
@@ -87,6 +89,6 @@ rosetta_ensure_dropin() {
   if ! { mkdir -p "$d" 2>/dev/null && printf '[machine]\nrosetta = true\n' > "$f" 2>/dev/null; }; then
     printf 'rosetta: could not write %s\n' "$f"; return 2
   fi
-  printf 'rosetta: wrote %s so the new podman machine uses Rosetta, not QEMU (the .NET builder aborts under QEMU)\n' "$f"
+  printf 'rosetta: wrote %s so the podman machine uses Rosetta, not QEMU (the .NET builder aborts under QEMU)\n' "$f"
   return 0
 }
