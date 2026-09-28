@@ -364,7 +364,8 @@ deps-mise: ## Install mise itself (if absent) + the mise-managed tools from .mis
 	   case "$$ci_only" in *" $$t "*) ;; *) continue ;; esac; \
 	   case "$$("$$MISE" tool "$$t" 2>/dev/null | awk '/^Backend/{print $$2}')" in pypi:*|pipx:*) pypi_skip="$$pypi_skip $$t" ;; esac; \
 	 done; \
-	 if [ -n "$$pypi_skip" ] && ! curl -fsS -o /dev/null --max-time "$${PYPI_PROBE_TIMEOUT:-5}" https://pypi.org/simple/ 2>/dev/null; then \
+	 pypi_reach() { for u in https://pypi.org/simple/ https://files.pythonhosted.org/; do curl -sS -o /dev/null --max-time "$${PYPI_PROBE_TIMEOUT:-5}" "$$u" 2>/dev/null || return 1; done; }; \
+	 if [ -n "$$pypi_skip" ] && ! pypi_reach; then \
 	   echo "PyPI is unreachable from this network, so skipping the lint-only tools it provides:$$pypi_skip"; \
 	   export MISE_DISABLE_TOOLS="$${MISE_DISABLE_TOOLS:+$$MISE_DISABLE_TOOLS,}$$(echo $$pypi_skip | tr ' ' ',')"; \
 	 else pypi_skip=""; fi; \
