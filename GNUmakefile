@@ -7,8 +7,8 @@
 # Test the FEATURE, not the version string — `oneshell` arrived together with .SHELLFLAGS in 3.82.
 ifeq ($(filter oneshell,$(.FEATURES)),)
 
-GMAKE := $(firstword $(wildcard /opt/homebrew/bin/gmake /usr/local/bin/gmake) $(shell command -v gmake 2>/dev/null))
-BREW  := $(firstword $(wildcard /opt/homebrew/bin/brew /usr/local/bin/brew) $(shell command -v brew 2>/dev/null))
+GMAKE := $(firstword $(shell command -v gmake 2>/dev/null) $(wildcard /opt/homebrew/bin/gmake /usr/local/bin/gmake))
+BREW  := $(firstword $(shell command -v brew 2>/dev/null) $(wildcard /opt/homebrew/bin/brew /usr/local/bin/brew))
 
 # A `gmake` that is itself old (some distros symlink gmake -> make 3.81) would re-read this file and
 # delegate to itself forever. The marker below turns that into one clear error instead.
