@@ -94,7 +94,7 @@ else
 fi
 
 # 3. TEETH: same, but a generated secret is blank -> must still be RED
-sed -i 's/^HARBOR_PASSWORD=.*/HARBOR_PASSWORD=/' "$T/.env.state"
+sed 's/^HARBOR_PASSWORD=.*/HARBOR_PASSWORD=/' "$T/.env.state" > "$T/.env.state.new" && mv "$T/.env.state.new" "$T/.env.state"   # not sed -i: BSD sed on macOS
 run SKIP_DOTENV=1; rc=$?
 if [ "$rc" -ne 0 ] && grep -q 'HARBOR_PASSWORD' "$T/out"; then
   ok "a BLANK generated secret is still caught (the gate keeps its teeth)"

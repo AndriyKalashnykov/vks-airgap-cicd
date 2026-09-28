@@ -26,6 +26,10 @@
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+# The stamp cases parse a kubeconfig with kubectl (state_kubeconfig_server). Without it they report
+# 8 misleading assertion FAILs (measured on a Mac, where a bare `bash` had mise's kubectl off PATH).
+# `make test-scripts` puts mise's tools on PATH; say so instead of failing obscurely.
+command -v kubectl >/dev/null 2>&1 || { echo "test-creds-show: needs kubectl on PATH - run it via make (make test-scripts), or make deps first"; exit 1; }
 # Absolute repo root, captured AFTER the cd above — render_with_env needs a path that does not
 # depend on the caller's cwd (see its own note).
 _CREDS_REPO="$(pwd)"

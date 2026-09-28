@@ -86,11 +86,13 @@ GITEA_ADMIN_PASSWORD=Sup3rStr0ngPw
 VKS_AUTH_METHOD=vcf
 SUPERVISOR_HOST=10.1.8.132
 VKS_CONTEXT_NAME=sup
+VCF_CLI_VSPHERE_PASSWORD='Sup3r \$tr0ng'
 ${1:-}
 EOF
 }
 run_check_vcf() {
   env -u HARBOR_URL -u HARBOR_CA_FILE -u KUBECONFIG -u VKS_STATE_FILE -u VKS_USERNAME -u VKS_NAMESPACE \
+    -u VCF_CLI_VSPHERE_PASSWORD -u SUPERVISOR_HOST -u VKS_CONTEXT_NAME -u VKS_AUTH_METHOD -u VKS_STATE_KIND \
     REPO_ROOT="$TMP" KUBECONFIG="$TMP/real.kc" bash "$ENVSH" check >"$TMP/out" 2>&1
 }
 
@@ -105,7 +107,7 @@ else
 fi
 
 # RED — the vars this path really does need are still enforced.
-write_env_vcf "" ; sed -i '/^VKS_CONTEXT_NAME=/d' "$TMP/.env"
+write_env_vcf "" ; sed '/^VKS_CONTEXT_NAME=/d' "$TMP/.env" > "$TMP/.env.new" && mv "$TMP/.env.new" "$TMP/.env"   # not sed -i: BSD sed on macOS
 if run_check_vcf; then bad "vcf: env-check passed with VKS_CONTEXT_NAME missing"; else ok "vcf: env-check still fails on a genuinely required var"; fi
 grep -q VKS_CONTEXT_NAME "$TMP/out" || bad "vcf: failure did not name VKS_CONTEXT_NAME"
 
@@ -204,5 +206,65 @@ if run_check_vcf; then
     ok "ARGOCD_KUBECONFIG GREEN: UNSET is silent (ArgoCD shares \$KUBECONFIG)"
   fi
 else bad "ARGOCD_KUBECONFIG: UNSET was refused"; cat "$TMP/out" >&2; fi
+
+# ── the path the operator is on when VKS_AUTH_METHOD is UNSET and no kubeconfig exists yet ──────
+# "file missing" alone left a real-lab operator with no idea that `make vks-login` writes it, nor
+# which .env values that login needs (measured on a Mac, 2026-09-28). The failure must name them.
+write_env_unset() {  # $1 = extra lines
+  cat > "$TMP/.env" <<EOF
+HARBOR_URL=harbor.example.com
+HARBOR_USERNAME=admin
+HARBOR_PASSWORD=Sup3rStr0ngPw
+GITEA_ADMIN_PASSWORD=Sup3rStr0ngPw
+${1:-}
+EOF
+}
+run_check_unset() {  # $1 = VKS_STATE_KIND
+  env -u HARBOR_URL -u HARBOR_CA_FILE -u KUBECONFIG -u VKS_STATE_FILE -u VKS_AUTH_METHOD \
+    -u VCF_CLI_VSPHERE_PASSWORD -u SUPERVISOR_HOST -u VKS_CONTEXT_NAME \
+    REPO_ROOT="$TMP" KUBECONFIG="$TMP/nope.kc" VKS_STATE_KIND="${1:-0}" bash "$ENVSH" check >"$TMP/out" 2>&1
+}
+write_env_unset ""
+if run_check_unset; then bad "UNSET: env-check PASSED with no kubeconfig"; cat "$TMP/out" >&2
+else
+  _miss=0
+  for want in 'VKS_AUTH_METHOD=vcf' 'VCF_CLI_SRC_DIR  --' 'SUPERVISOR_HOST  --' 'VKS_CONTEXT_NAME  --' 'VKS_USERNAME  --' \
+              'VCF_CLI_VSPHERE_PASSWORD  --' 'make use-guest-kubeconfig' 'VKS_AUTH_METHOD=kubeconfig' 'make kind-up' 'scenario-2'; do
+    grep -qF -- "$want" "$TMP/out" || { bad "UNSET: failure does not name '$want'"; _miss=1; }
+  done
+  # The tenant path comes FIRST: scenario 2 is this repo's default audience (CLAUDE.md RULE ZERO-B).
+  t="$(grep -nF 'scenario-2' "$TMP/out" | head -1 | cut -d: -f1)"; l="$(grep -nF 'scenario-1' "$TMP/out" | head -1 | cut -d: -f1)"
+  [ -n "$t" ] && [ -n "$l" ] && [ "$t" -lt "$l" ] || { bad "UNSET: the tenant (scenario-2) path is not listed first"; _miss=1; }
+  # vks-login does NOT write the guest kubeconfig on the vcf path; saying so would be false.
+  grep -qF 'vks-login   (it writes this file)' "$TMP/out" && { bad "UNSET: claims vks-login writes the kubeconfig"; _miss=1; }
+  if [ "$_miss" -eq 0 ]; then ok "UNSET: no kubeconfig -> tenant path first, KinD, then every lab input still missing"
+  else cat "$TMP/out" >&2; fi
+fi
+# Only the inputs still MISSING are listed.
+write_env_unset "SUPERVISOR_HOST=10.1.8.132"
+run_check_unset
+if grep -qF 'SUPERVISOR_HOST  --' "$TMP/out"; then bad "UNSET: lists SUPERVISOR_HOST although it is set"
+elif grep -qF 'VKS_CONTEXT_NAME  --' "$TMP/out"; then ok "UNSET: lists only the login inputs still missing"
+else bad "UNSET: stopped listing a missing input"; cat "$TMP/out" >&2; fi
+# On the KinD flow the chooser would be noise: keep the short message.
+write_env_unset ""
+run_check_unset 1
+if grep -qF 'VKS_AUTH_METHOD=vcf' "$TMP/out"; then bad "UNSET+KinD: printed the real-lab login inputs on the KinD flow"
+else ok "UNSET+KinD: no real-lab login inputs printed"; fi
+
+# VKS_AUTH_METHOD=vcf WITHOUT the password: vcf context create runs with </dev/null, so the login
+# cannot prompt for it and fails. env-check must say so up front, with where to get it.
+cat > "$TMP/.env" <<EOF
+HARBOR_URL=harbor.example.com
+HARBOR_USERNAME=admin
+HARBOR_PASSWORD=Sup3rStr0ngPw
+GITEA_ADMIN_PASSWORD=Sup3rStr0ngPw
+VKS_AUTH_METHOD=vcf
+SUPERVISOR_HOST=10.1.8.132
+VKS_CONTEXT_NAME=sup
+EOF
+if run_check_vcf; then bad "vcf: env-check PASSED without VCF_CLI_VSPHERE_PASSWORD"
+elif grep -qF 'VCF_CLI_VSPHERE_PASSWORD  -- your vCenter SSO password' "$TMP/out"; then ok "vcf: a missing password is named, with where to get it"
+else bad "vcf: a missing password was not named"; cat "$TMP/out" >&2; fi
 
 if [ "$fail" -eq 0 ]; then echo "test-env-check: OK"; else echo "test-env-check: FAILED"; exit 1; fi

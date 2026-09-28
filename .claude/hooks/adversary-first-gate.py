@@ -69,7 +69,7 @@ GUARDED_PREFIXES = (
     # nothing is not harmless -- it reads as coverage this tuple does not have.
     "apps/",
 )
-GUARDED_FILES = ("Makefile",)
+GUARDED_FILES = ("Makefile", "GNUmakefile")   # GNUmakefile: what macOS make 3.81 runs INSTEAD of the Makefile
 
 EXEMPT_PREFIXES = (
     ".claude/",

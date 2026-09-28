@@ -101,7 +101,11 @@ tool_version() {
   case "$t" in
     kubectl) cmd=(kubectl version --client) ;;   # --client: NEVER dial the API server
     helm)    cmd=(helm version --short) ;;
-    crane|kind|tkn|argocd|vcf) cmd=("$t" version) ;;
+    # tkn/argocd: their bare `version` also asks the CLUSTER/server. MEASURED against a dead
+    # kubeconfig: `tkn version` blocked 20 s, `argocd version` 9 s; the client-only forms, 0 s.
+    tkn)     cmd=(tkn version --component client) ;;
+    argocd)  cmd=(argocd version --client --short) ;;
+    crane|kind|vcf) cmd=("$t" version) ;;
     *)       cmd=("$t" --version) ;;
   esac
   if have timeout; then

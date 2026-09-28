@@ -227,6 +227,22 @@ env_populate() {
 # ---------------------------------------------------------------------------
 # check — presence only (fast, no network)
 # ---------------------------------------------------------------------------
+# env_hint <KEY> — where an operator gets a value, for env-check's list. Wording follows
+# docs/scenario-1.md Step 1, which is where these keys are documented; keep the two in step.
+env_hint() {
+  case "$1" in
+    VCF_CLI_SRC_DIR)          printf 'the folder holding the Broadcom CLI downloads (scenario-1 Step 0); make install-vcf-clis reads it' ;;
+    VKS_USERNAME)             printf 'your vCenter SSO login; unset, it defaults to %s - set it if that is not you' "$(vks_username_default)" ;;
+    VKS_NAMESPACE)            printf 'you name it; scenario-1 Step 2 creates it' ;;
+    VKS_CLUSTER_NAME)         printf 'you name it; scenario-1 Step 6 creates it' ;;
+    SUPERVISOR_HOST)          printf 'vCenter -> Workload Management -> Supervisors -> Control Plane Node IP (bare host, no https://)' ;;
+    VKS_CONTEXT_NAME)         printf 'you invent it: a short label for the vcf login context, e.g. vks-cicd' ;;
+    VCF_CLI_VSPHERE_PASSWORD) printf "your vCenter SSO password, in SINGLE quotes: VCF_CLI_VSPHERE_PASSWORD='...' (make vks-login cannot prompt for it)" ;;
+    *) printf '' ;;
+  esac
+}
+env_with_hint() { local h; h="$(env_hint "$1")"; if [ -n "$h" ]; then printf '%s  -- %s' "$1" "$h"; else printf '%s' "$1"; fi; }
+
 env_check() {
   # WARN, not die, on an ABSENT .env. This gate's very next line is `load_env`, which under
   # SKIP_DOTENV=1 is CONTRACTUALLY OBLIGED TO IGNORE the file (lib/os.sh logs "IGNORING .env") --
@@ -266,13 +282,15 @@ env_check() {
     # Requiring them here would do worse than nag — the operator's obvious remedy (set VKS_NAMESPACE)
     # takes the `if [ -z … ]` branch and permanently disables discovery for anyone who follows the
     # runbook. They stay required on the `vsphere` path, which has neither mechanism.
-    vcf)     required+=(SUPERVISOR_HOST VKS_CONTEXT_NAME) ;;
+    # VCF_CLI_VSPHERE_PASSWORD too: `vcf context create` runs with </dev/null (30-vks-login.sh), so a
+    # missing password cannot be typed at a prompt -- the login simply fails. Ask for it HERE.
+    vcf)     required+=(SUPERVISOR_HOST VKS_CONTEXT_NAME VCF_CLI_VSPHERE_PASSWORD) ;;
     vsphere) required+=(SUPERVISOR_HOST VKS_USERNAME VKS_NAMESPACE VKS_CLUSTER_NAME VKS_PASSWORD) ;;
   esac
   local k v
   for k in "${required[@]}"; do
     v="$(eval "printf '%s' \"\${$k:-}\"")"
-    is_placeholder "$v" && missing+=("$k")
+    is_placeholder "$v" && missing+=("$(env_with_hint "$k")")
   done
   # HARBOR_URL: commented in .env.example (B13) so unset by default; and an operator may still type the
   # `harbor.vks.local` sentinel, which is_placeholder catches (env_validate uses the same helper).
@@ -292,7 +310,27 @@ env_check() {
       # kubectl accepts a colon-separated LIST of files; treat that as the operator's business
       # rather than reporting a legitimate multi-file config as "not found".
       *:*) : ;;
-      *) [ -s "${KUBECONFIG:-/nonexistent}" ] || missing+=("KUBECONFIG (file missing or EMPTY: '${KUBECONFIG:-}' — fetch the workload kubeconfig first; a cluster you just created writes ./secrets/\${VKS_CLUSTER_NAME}.kubeconfig)") ;;
+      *) if [ ! -s "${KUBECONFIG:-/nonexistent}" ]; then
+           if [ -z "${VKS_AUTH_METHOD:-}" ] && [ "${VKS_STATE_KIND:-0}" != 1 ]; then
+             # Method UNSET: "file missing" alone tells the reader nothing about how to get one, and
+             # on a real lab the answer is a login that needs values of its own. Name the paths.
+             _vcf_todo=""; for k in VCF_CLI_SRC_DIR SUPERVISOR_HOST VKS_CONTEXT_NAME VKS_USERNAME VCF_CLI_VSPHERE_PASSWORD VKS_NAMESPACE VKS_CLUSTER_NAME; do
+               v="$(eval "printf '%s' \"\${$k:-}\"")"
+               is_placeholder "$v" && _vcf_todo="${_vcf_todo}
+          ${k}  -- $(env_hint "$k")"
+             done
+             missing+=("KUBECONFIG (no file at '${KUBECONFIG:-}') -- get one of these ways:
+      * your platform team gave you a kubeconfig (docs/scenario-2.md): put it at '${KUBECONFIG:-}'
+        and set VKS_AUTH_METHOD=kubeconfig in .env
+      * local KinD stand-in: make kind-up   (writes its own; nothing else here is needed)
+      * you run the VKS lab (docs/scenario-1.md): set in .env
+          VKS_AUTH_METHOD=vcf${_vcf_todo}
+        then follow scenario-1 Steps 1-6: make vks-login logs in to the Supervisor only; the guest
+        cluster's kubeconfig (this file) is written by make use-guest-kubeconfig in Step 6")
+           else
+             missing+=("KUBECONFIG (file missing or EMPTY: '${KUBECONFIG:-}' — fetch the workload kubeconfig first; a cluster you just created writes ./secrets/\${VKS_CLUSTER_NAME}.kubeconfig)")
+           fi
+         fi ;;
     esac
 
 
