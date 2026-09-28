@@ -356,7 +356,19 @@ deps-mise: ## Install mise itself (if absent) + the mise-managed tools from .mis
 	   echo "  MISE_JOBS=2 make deps   # if the error mentions http2/refused stream, fewer parallel"; \
 	   echo "                          # downloads may avoid it (UNPROVEN — one observation)"; \
 	   echo ""; \
-	   "$$MISE" install; \
+	   if ! "$$MISE" install; then \
+	     ci_only="$$(awk -F'|' '$$2=="ci-only"{print $$1}' "$(SCRIPTS)/03-check-tools.sh" | paste -sd, -)"; \
+	     [ -n "$$ci_only" ] || exit 1; \
+	     echo ""; \
+	     echo "Attempt 3: installing everything EXCEPT the ci-only lint/scan tools ($$ci_only)."; \
+	     MISE_DISABLE_TOOLS="$$ci_only" "$$MISE" install || exit 1; \
+	     missing="$$(for t in $$(echo "$$ci_only" | tr , ' '); do "$$MISE" which "$$t" >/dev/null 2>&1 || printf '%s ' "$$t"; done)"; \
+	     echo ""; \
+	     echo "WARNING: deps succeeded WITHOUT: $${missing:-<none>}"; \
+	     echo "  These are only used by make lint / sec / validate / static-check. Locally those gates"; \
+	     echo "  SKIP a missing tool and still exit 0, so their green does NOT cover it (CI fails instead)."; \
+	     echo "  Usually a network block (e.g. PyPI for yamllint). Behind a proxy: export HTTPS_PROXY and re-run."; \
+	   fi; \
 	 fi; \
 	 command -v mise >/dev/null 2>&1 || { \
 	   echo ""; \

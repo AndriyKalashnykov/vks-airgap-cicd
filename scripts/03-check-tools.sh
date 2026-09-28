@@ -55,6 +55,8 @@ esac
 #
 # `carried` = REQUIRED, but the sneakernet bundle brings it (bundle-load installs it to ~/.local/bin).
 # Treated exactly like `required` — EXCEPT in CHECK_TOOLS_PHASE=pre-carry, where its absence is expected.
+# ci-only names MUST equal their .mise.toml keys: Makefile deps-mise reads them (MISE_DISABLE_TOOLS)
+# to finish a deps run when only a lint/scan tool cannot download. Never class a required tool ci-only.
 TOOLS="
 kubectl|carried|talk to the cluster (every step)
 helm|carried|install Harbor / Istio / Gitea charts
