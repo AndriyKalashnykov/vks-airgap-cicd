@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ci-tier: fast — offline; runs `make -n` on the repo's own Makefile, no network, no cluster.
-# test-make-version-guard.sh — the Makefile must REFUSE a GNU make without `.oneshell` (< 3.82).
+# test-make-version-guard.sh — a GNU make without `.oneshell` (< 3.82) must never RUN the Makefile:
+# the Makefile itself refuses it, and GNUmakefile (read first) hands every goal to a gmake instead.
 #
 # Apple's /usr/bin/make is 3.81, which has no .SHELLFLAGS: every recipe would silently lose
 # `-e -o pipefail`, so a green under it is not a green (B735). Makefile:89-91 refuses it at parse
@@ -19,7 +20,7 @@ bad() { fail=$((fail + 1)); printf '  FAIL  %s\n' "$1"; }
 if make -n help >/dev/null 2>&1; then ok "control: a make WITH oneshell parses the Makefile"
 else bad "control: make -n help failed on this host -- the refusal arm below would be vacuous"; fi
 
-out="$(make -n help .FEATURES='target-specific order-only' 2>&1)"; rc=$?
+out="$(make -f Makefile -n help .FEATURES='target-specific order-only' 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'GNU make >= 3.82 is required'; then
   ok "a make WITHOUT oneshell is refused with the 3.82 message (rc=$rc)"
 else
@@ -29,6 +30,17 @@ fi
 # the message must tell a Mac user what to do, not only what is wrong.
 if printf '%s' "$out" | grep -q 'gmake'; then ok "the refusal names gmake (the macOS fix)"
 else bad "the refusal does not name gmake"; fi
+
+# GNUmakefile: plain `make` under an old make delegates ONCE to gmake, with the goals, and never
+# parses the Makefile itself. A fake gmake first on PATH records what it was handed.
+fake="$(mktemp -d)"; trap 'rm -rf "$fake"' EXIT
+printf '#!/bin/sh\necho "FAKE-GMAKE argv=[$*]"\n' > "$fake/gmake"; chmod +x "$fake/gmake"
+out="$(PATH="$fake:$PATH" make ci lint .FEATURES='target-specific order-only' 2>&1)"; rc=$?
+n="$(printf '%s\n' "$out" | grep -c 'FAKE-GMAKE argv=\[ci lint\]' || true)"
+if [ "$rc" -eq 0 ] && [ "$n" = 1 ]; then ok "an old make delegates all goals ONCE to gmake (GNUmakefile)"
+else bad "an old make did not delegate once (rc=$rc, delegations=$n): ${out:0:200}"; fi
+if printf '%s' "$out" | grep -q 'GNU make >= 3.82 is required'; then bad "the delegating path still parsed the Makefile"
+else ok "the delegating path never parses the Makefile"; fi
 
 printf 'test-make-version-guard: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

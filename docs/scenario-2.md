@@ -44,8 +44,8 @@ and every step after it reports nothing found.
 make deps     # kubectl, crane, tkn, argocd, helm, openssl + the rest of the pinned toolchain
 ```
 
-**On macOS**, type `gmake` — until the next section puts GNU make on your PATH, `make` is Apple's
-3.81, which the Makefile refuses (`GNU make >= 3.82 is required`):
+**On macOS**, `make` works as-is (Apple's 3.81 hands off to Homebrew's `gmake`, installing it if
+needed); typing `gmake` directly is equivalent:
 
 ```bash
 gmake deps    # also creates and starts the podman machine

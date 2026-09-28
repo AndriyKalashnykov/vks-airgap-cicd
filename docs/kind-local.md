@@ -84,7 +84,7 @@ sudo -b DOCKER_HOST="unix://$HOME/.colima/default/docker.sock" \
   "$(brew --prefix)/opt/docker-mac-net-connect/bin/docker-mac-net-connect" > "$HOME/Library/Logs/docker-mac-net-connect.log" 2>&1
 ```
 
-Then run it with `gmake` (Apple's `make` 3.81 is refused), building for the node's architecture:
+Then run it (plain `make` hands off to Homebrew's `gmake`; `gmake` works too), building for the node's architecture:
 
 ```bash
 export MIRROR_ARCH=arm64 CONTAINER_ENGINE=docker   # this shell only — never in .env

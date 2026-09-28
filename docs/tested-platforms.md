@@ -43,7 +43,7 @@ the **Lab targets** table above.
 - Tools pinned in [`.mise.toml`](../.mise.toml) (kubectl, crane, helm, linters…) are not listed; the
   commit in each row pins them. On macOS, `crane` is built from source with Go ≥ 1.27 so it can trust
   Harbor's CA ([B735](../BACKLOG.md)).
-- **macOS:** use `gmake` (Homebrew GNU make). Apple's `/usr/bin/make` 3.81 is refused. Building the
+- **macOS:** plain `make` works: Apple's `/usr/bin/make` is 3.81, so `GNUmakefile` hands every target to Homebrew's `gmake`. Building the
   images on Apple silicon needs `BUILD_EMULATE=1` and Rosetta for the podman machine — see
   [Scenario 1](scenario-1.md). The `gmake` bootstrap is in
   [Common bootstrap](common-bootstrap.md).
