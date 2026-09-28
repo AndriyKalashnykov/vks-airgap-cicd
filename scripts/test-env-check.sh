@@ -107,7 +107,7 @@ else
 fi
 
 # RED — the vars this path really does need are still enforced.
-write_env_vcf "" ; sed -i '/^VKS_CONTEXT_NAME=/d' "$TMP/.env"
+write_env_vcf "" ; sed '/^VKS_CONTEXT_NAME=/d' "$TMP/.env" > "$TMP/.env.new" && mv "$TMP/.env.new" "$TMP/.env"   # not sed -i: BSD sed on macOS
 if run_check_vcf; then bad "vcf: env-check passed with VKS_CONTEXT_NAME missing"; else ok "vcf: env-check still fails on a genuinely required var"; fi
 grep -q VKS_CONTEXT_NAME "$TMP/out" || bad "vcf: failure did not name VKS_CONTEXT_NAME"
 
@@ -227,10 +227,18 @@ run_check_unset() {  # $1 = VKS_STATE_KIND
 write_env_unset ""
 if run_check_unset; then bad "UNSET: env-check PASSED with no kubeconfig"; cat "$TMP/out" >&2
 else
-  for want in 'VKS_AUTH_METHOD=vcf' 'SUPERVISOR_HOST  --' 'VKS_CONTEXT_NAME  --' 'VCF_CLI_VSPHERE_PASSWORD  --' 'make vks-login' 'make kind-up' 'scenario-2'; do
-    grep -qF -- "$want" "$TMP/out" || { bad "UNSET: failure does not name '$want'"; cat "$TMP/out" >&2; }
+  _miss=0
+  for want in 'VKS_AUTH_METHOD=vcf' 'VCF_CLI_SRC_DIR  --' 'SUPERVISOR_HOST  --' 'VKS_CONTEXT_NAME  --' 'VKS_USERNAME  --' \
+              'VCF_CLI_VSPHERE_PASSWORD  --' 'make use-guest-kubeconfig' 'VKS_AUTH_METHOD=kubeconfig' 'make kind-up' 'scenario-2'; do
+    grep -qF -- "$want" "$TMP/out" || { bad "UNSET: failure does not name '$want'"; _miss=1; }
   done
-  ok "UNSET: no kubeconfig -> names the vcf login inputs, the team-kubeconfig path and KinD"
+  # The tenant path comes FIRST: scenario 2 is this repo's default audience (CLAUDE.md RULE ZERO-B).
+  t="$(grep -nF 'scenario-2' "$TMP/out" | head -1 | cut -d: -f1)"; l="$(grep -nF 'scenario-1' "$TMP/out" | head -1 | cut -d: -f1)"
+  [ -n "$t" ] && [ -n "$l" ] && [ "$t" -lt "$l" ] || { bad "UNSET: the tenant (scenario-2) path is not listed first"; _miss=1; }
+  # vks-login does NOT write the guest kubeconfig on the vcf path; saying so would be false.
+  grep -qF 'vks-login   (it writes this file)' "$TMP/out" && { bad "UNSET: claims vks-login writes the kubeconfig"; _miss=1; }
+  if [ "$_miss" -eq 0 ]; then ok "UNSET: no kubeconfig -> tenant path first, KinD, then every lab input still missing"
+  else cat "$TMP/out" >&2; fi
 fi
 # Only the inputs still MISSING are listed.
 write_env_unset "SUPERVISOR_HOST=10.1.8.132"

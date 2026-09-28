@@ -231,6 +231,10 @@ env_populate() {
 # docs/scenario-1.md Step 1, which is where these keys are documented; keep the two in step.
 env_hint() {
   case "$1" in
+    VCF_CLI_SRC_DIR)          printf 'the folder holding the Broadcom CLI downloads (scenario-1 Step 0); make install-vcf-clis reads it' ;;
+    VKS_USERNAME)             printf 'your vCenter SSO login; unset, it defaults to %s - set it if that is not you' "$(vks_username_default)" ;;
+    VKS_NAMESPACE)            printf 'you name it; scenario-1 Step 2 creates it' ;;
+    VKS_CLUSTER_NAME)         printf 'you name it; scenario-1 Step 6 creates it' ;;
     SUPERVISOR_HOST)          printf 'vCenter -> Workload Management -> Supervisors -> Control Plane Node IP (bare host, no https://)' ;;
     VKS_CONTEXT_NAME)         printf 'you invent it: a short label for the vcf login context, e.g. vks-cicd' ;;
     VCF_CLI_VSPHERE_PASSWORD) printf "your vCenter SSO password, in SINGLE quotes: VCF_CLI_VSPHERE_PASSWORD='...' (make vks-login cannot prompt for it)" ;;
@@ -310,17 +314,19 @@ env_check() {
            if [ -z "${VKS_AUTH_METHOD:-}" ] && [ "${VKS_STATE_KIND:-0}" != 1 ]; then
              # Method UNSET: "file missing" alone tells the reader nothing about how to get one, and
              # on a real lab the answer is a login that needs values of its own. Name the paths.
-             _vcf_todo=""; for k in SUPERVISOR_HOST VKS_CONTEXT_NAME VCF_CLI_VSPHERE_PASSWORD; do
+             _vcf_todo=""; for k in VCF_CLI_SRC_DIR SUPERVISOR_HOST VKS_CONTEXT_NAME VKS_USERNAME VCF_CLI_VSPHERE_PASSWORD VKS_NAMESPACE VKS_CLUSTER_NAME; do
                v="$(eval "printf '%s' \"\${$k:-}\"")"
                is_placeholder "$v" && _vcf_todo="${_vcf_todo}
           ${k}  -- $(env_hint "$k")"
              done
              missing+=("KUBECONFIG (no file at '${KUBECONFIG:-}') -- get one of these ways:
-      * real VKS lab, you log in (docs/scenario-1.md): set in .env
+      * your platform team gave you a kubeconfig (docs/scenario-2.md): put it at '${KUBECONFIG:-}'
+        and set VKS_AUTH_METHOD=kubeconfig in .env
+      * local KinD stand-in: make kind-up   (writes its own; nothing else here is needed)
+      * you run the VKS lab (docs/scenario-1.md): set in .env
           VKS_AUTH_METHOD=vcf${_vcf_todo}
-        then run: make install-vcf-clis && make vks-login   (it writes this file)
-      * a kubeconfig your platform team gave you (docs/scenario-2.md): put it at '${KUBECONFIG:-}'
-      * local KinD stand-in: make kind-up   (writes its own; none of the above is needed)")
+        then follow scenario-1 Steps 1-6: make vks-login logs in to the Supervisor only; the guest
+        cluster's kubeconfig (this file) is written by make use-guest-kubeconfig in Step 6")
            else
              missing+=("KUBECONFIG (file missing or EMPTY: '${KUBECONFIG:-}' — fetch the workload kubeconfig first; a cluster you just created writes ./secrets/\${VKS_CLUSTER_NAME}.kubeconfig)")
            fi
