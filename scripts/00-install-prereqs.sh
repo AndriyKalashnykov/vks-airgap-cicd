@@ -424,7 +424,7 @@ esac
 prereq_dl_max_time() { printf '%s' "${PREREQ_DOWNLOAD_MAX_TIME_SECONDS:-900}"; }
 
 install_tkn() {
-  have tkn && { log_info "tkn present: $(tkn version --client 2>/dev/null | head -1)"; return 0; }
+  have tkn && { log_info "tkn present: $(tkn version --component client 2>/dev/null | head -1)"; return 0; }
   local v="${TKN_VERSION:?TKN_VERSION unset}" url tmp
   # tkn assets use uname -m arch names (x86_64/aarch64), NOT Go arch (amd64/arm64).
   url="https://github.com/tektoncd/cli/releases/download/v${v}/tkn_${v}_${tkn_asset}.tar.gz"
