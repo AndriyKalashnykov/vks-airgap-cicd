@@ -363,10 +363,12 @@ if have mise; then
   # and the box was left without envsubst — 17 blocks failed, and the guest cluster was never built.
   # deps-mise is AUTHORITATIVE for the toolchain and reports the real failure; this line is a
   # convenience for anyone running the script directly, and must never be able to end the run.
-  # Under `make deps` the very next step (deps-mise) runs this install and handles its failures, so
-  # doing it here too only doubles every download timeout (MEASURED on a PyPI-blocked Mac: +47 s).
+  # Under `make deps`, deps-mise runs next and handles lint-tool failures, so here skip the ci-only
+  # lint/scan tools: a blocked PyPI must not cost this step a timeout too (MEASURED on a Mac: +47 s).
+  # Everything the flow needs is still installed HERE, so the kubectl/summary checks below see it.
   if [ -n "${VKS_DEPS_MISE_FOLLOWS:-}" ]; then
-    log_info "mise toolchain: installed next by deps-mise"
+    ci_only="$(awk -F'|' '$2=="ci-only"{print $1}' "$REPO_ROOT/scripts/03-check-tools.sh" | paste -sd, - || true)"
+    ( cd "$REPO_ROOT" && MISE_DISABLE_TOOLS="$ci_only" mise install ) || log_warn "mise install failed here — continuing; deps-mise runs it again and that one is authoritative"
   else
     ( cd "$REPO_ROOT" && mise install ) || log_warn "mise install failed here — continuing; 'make deps' runs it again (deps-mise) and that one is authoritative"
   fi
