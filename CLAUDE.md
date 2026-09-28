@@ -1062,64 +1062,54 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-26 (late) — B486 name path, argocd-ca-from-cluster, macOS trust guards, B722 F8
+## ▶️ HANDOFF 2026-09-28 — macOS jump box: plain `make`, blocked PyPI, Rosetta, env-check guidance
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### What landed (#1319–#1324; #1318 was the previous handoff)
+### What landed (#1326–#1332), all driven by an operator's corporate Mac
 
-- **#1319:** `make state-stamp` REMOVED — harmful on a real lab (Supervisor↔guest alternation) and on
-  KinD. The owner's checkout was unstamped in place.
-- **#1320:** the Gitea mirror probe checks the Harbor project the image names. **#1321 (B722 F8):** an
-  unset `HARBOR_URL` reads `<not set>` in `make creds`, not an invented `harbor.vks.local`.
-- **#1322 (B486 step 1):** `make argocd-ca-from-cluster` — the ArgoCD cert from the Supervisor
-  (argocd-server-tls, else argocd-secret; `tls.crt` only), written only if byte-identical to the served
-  leaf; honours `ARGOCD_CA_SHA256`. SUPERVISOR ONLY; a tenant uses `fetch-argocd-ca`.
-- **#1323:** script 17 and `engine_trust_ca` refuse on macOS (the engine's trust store is in its VM);
-  `engine_trust_ca` fails closed when its install fails; dead `trust_ca` deleted.
-- **#1324 (B486 steps 2–3):** `make argocd-address` publishes `argocd-server` when it resolves here to
-  exactly the LB IP AND the served cert carries it; `--server-crt` only on a MEASURED
-  `ca_verifies_endpoint`. `make creds`, `show-dns-records` (single-label ArgoCD name → `/etc/hosts`
-  line), `uninstall-all` (`sed -i.bak`) and a collapsed scenario-1 *Verify TLS* block.
+- **#1327:** `GNUmakefile` — Apple's `/usr/bin/make` 3.81 hands every goal once to Homebrew `gmake`
+  (brew-installs it if missing); make >= 3.82 just includes the Makefile. `test-make-version-guard`
+  covers it by simulating 3.81 (`.FEATURES` override).
+- **#1326/#1328/#1330/#1331:** `make deps` succeeds when only ci-only lint tools cannot download.
+  `deps-mise` probes `pypi.org` AND `files.pythonhosted.org` (5s, `PYPI_PROBE_TIMEOUT`) before a
+  missing PyPI-backed ci-only tool (yamllint), skips it via `MISE_DISABLE_TOOLS`, and warns once.
+  The operator's network: `pypi.org` answers, `files.pythonhosted.org` times out.
+  `test-deps-mise.sh` simulates it with a fake curl (8 cases).
+  `pkg_install` on brew passes only missing formulas.
+- **#1329:** `make deps` switches an existing QEMU podman machine to Rosetta (drop-in, restart only
+  when no container runs, verify `.Rosetta`).
+- **#1332:** `env-check` with `VKS_AUTH_METHOD` unset and no kubeconfig names the three paths (tenant,
+  KinD, lab login inputs still missing). With `vcf` it requires `VCF_CLI_VSPHERE_PASSWORD`.
+  `tkn`/`argocd` version probes are client-only (bare forms dialled the cluster: 20s/9s).
 
-### State (MEASURED 2026-09-26 — re-measure, do not trust)
+### State (MEASURED 2026-09-28)
 
-- **Main checkout's `.env.state` is the LAB overlay, UNSTAMPED.** `make vks-login` rc=0 this session
-  (guest cicd-gc3, 3 nodes Ready). The stamped copy is `.env.state.pre-unstamp-*` (`make state-archives`).
-- **Lab:** read-only this session. The ArgoCD LB 192.168.101.131 serves a self-signed leaf with SANs
-  `localhost`, `argocd-server`, `argocd-server.lab`, `.lab.svc`, `.lab.svc.cluster.local`, no IP SAN;
-  it equals `lab/argocd-secret` `tls.crt` (SHA-256 `14:FA:5C:…:89:84`). `argocd-server` does NOT
-  resolve on this box (no hosts line), so `ARGOCD_SERVER` stays the IP until someone adds one.
-- **Evidence:** this session's lab facts are in `~/walk-evidence/session-20260926c/b486-lab-facts.txt`
-  (verdict lines only); `session-20260926b/` is the previous session's.
-- **Linux KinD:** none of ours (`golang-web` belongs to something else — leave it).
-- **Scaleway Mac** `m1@51.159.120.46`: unchanged — doc-installed tools, Colima stopped, no lab files.
+- **Scaleway Mac** `m1@51.159.120.46`: scratch removed; podman machine left ON Rosetta (our drop-in
+  `~/.config/containers/containers.conf.d/50-vks-rosetta.conf`); `/etc/hosts` clean.
+- Linux: no KinD cluster of ours, no worktrees, `main` clean.
 
 ### 🔴 DISTRUST FIRST
 
 | instrument | what it did |
 |---|---|
-| **a "verified" line keyed on a file existing** | both B486 step-2 rounds caught `[ -s ARGOCD_CA_FILE ]` printing "verified" for garbage, a stale CA, and a granted name. Only `ca_verifies_endpoint` counts. |
-| **a RED that fails on the wrong case** | a mutation that disables a feature outright "proves" nothing about its scoping. Read which case failed (#1324, commit 75114d6). |
-| **a backticked span wrapped across a line** | `check-expect-literals` pairs the wrong backticks and reports prose as a missing literal. |
-| **BSD `sed -i '<script>'`** | reads the script as the backup suffix. Print `sed -i.bak`; GNU and Photon toybox accept it (measured). |
-| **a hosts line copied from the terminal** | keeps the report's indent; a `^[0-9.]`-anchored removal silently misses it (#1324, caught by the end-of-session round). |
-| **a test that calls the SCRIPT** | proves nothing about its MAKE TARGET (#1311). |
-| **`producer \| grep -q` under pipefail** | `check-grep-q-pipe` rejects it; use a herestring. |
-| **`make static-check-fast`** | does NOT run `lint`, and it is the only CODE gate PR CI runs (plus docs-lint, diagrams-check, secrets). Run full `static-check` locally. |
-| **`kubectl wait … pod -l <sel>`** | returns "no matching resources found" AT ONCE when nothing matches yet. |
-| **`secrets/.env.make` / `.env.state.make`** | GENERATED from `.env` at every make parse. |
-| **Apple `/usr/bin/make` 3.81** | refused at parse time. Use `gmake`. |
+| **a simulated network you INVENTED** | blocking both PyPI hosts passed; the operator's network blocks only the wheel host. Reproduce the MEASURED condition. |
+| **forcing a failure with a bad version** | fails in ms, so it never measured the 47s timeout cost the operator paid |
+| **a test run with bare `bash` on the Mac** | BSD `sed`, no mise tools on PATH: `sed -i` tests and `test-creds-show` fail for reasons that are not the product. Run via `make`, or put gnubin + mise bin-paths first. |
+| **`gate \| tail` in an `&&` chain** | committed a RED test once this session. Read the rc on its own line. |
+| **editing guarded files through Bash** | the adversary-first hook sees only Edit/Write. |
 
 ### NOT done — next work, ranked
 
 1. **B486** — walk the *Verify TLS* block once on the lab (one sudo `/etc/hosts` edit): it is the only
    check that the argocd CLI accepts the CA:FALSE leaf via `--server-crt`. Then F6 (VIP stability).
-   B550 is now unblocked in part (`argocd-ca-from-cluster` is the first writer of `ARGOCD_CA_FILE`).
 2. **B745** — §5's `argocd-auth-check: OK` after `update-password` reads the OLD password.
-3. **Mac-only (B740):** a Mac without Rosetta, the `sudo -b` prompt.
+3. **Mac-only (B740):** a Mac without Rosetta 2 (`make deps` prints the `softwareupdate` line, not
+   run; untestable on the Scaleway Mac, which has Rosetta), the `sudo -b` prompt.
 4. **B743** (mutable version tag), **B744** (31 repoints 30's kubeconfig context), **B724**.
+5. macOS only: `make: *** [_delegate] Error 2` follows every failing target until `make shell-init`
+   puts GNU make first; 9 tests use GNU-only `sed -i` (fine under `make`).
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
