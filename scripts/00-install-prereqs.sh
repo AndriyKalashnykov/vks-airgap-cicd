@@ -167,14 +167,39 @@ if [ "$(pkg_mgr)" = brew ]; then
     if ! podman info >/dev/null 2>&1; then
       podman machine start || log_warn "podman machine start failed — run 'podman machine start'"
     fi
-    # VERIFY, do not trust the write: a renamed key or an ignored drop-in would otherwise end at QEMU
-    # under a green `make deps`, and surface as a .NET abort 20 minutes into install-all. An EXISTING
-    # machine is never restarted here -- it may be running your containers; engine-check says how.
+    # An EXISTING machine on QEMU is switched to Rosetta here too: same drop-in as a new one (it is
+    # re-read on every machine start), then a restart -- but ONLY when no container is running on it,
+    # so we never kill someone's workload. Then VERIFY, do not trust the write: a renamed key or an
+    # ignored drop-in would otherwise end at QEMU under a green `make deps`, and surface as a .NET
+    # abort 20 minutes into install-all.
     m="$(rosetta_default_machine)"
     # Only with a NAME: a no-name inspect reads podman-machine-default, which may not be the machine.
     if [ -n "$m" ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] \
        && [ "$(podman machine inspect "$m" --format '{{.Rosetta}}' 2>/dev/null || true)" != true ]; then
-      log_warn "the podman machine is NOT on Rosetta: amd64 builds use QEMU, which aborts the .NET builder. Run 'make engine-check' for the two lines that switch it."
+      if ! rosetta_host_capable; then
+        log_warn "Rosetta 2 is not installed on this Mac, so amd64 builds use QEMU, which aborts the .NET builder. Install it, then re-run make deps:"
+        log_warn "    softwareupdate --install-rosetta --agree-to-license"
+      else
+        r_rc=0; r_msg="$(rosetta_ensure_dropin "")" || r_rc=$?
+        if [ "$r_rc" -ne 0 ]; then
+          log_warn "$r_msg"
+          log_warn "the podman machine $m is NOT on Rosetta: amd64 builds use QEMU, which aborts the .NET builder. Run 'make engine-check'."
+        elif [ -n "$(podman ps -q 2>/dev/null)" ]; then
+          log_info "$r_msg"
+          log_warn "the podman machine $m has running containers, so it was NOT restarted. It switches to Rosetta at its next restart:"
+          log_warn "    podman machine stop $m && podman machine start $m"
+        else
+          log_info "$r_msg"
+          log_info "restarting podman machine $m so it picks up Rosetta (no containers were running)"
+          { podman machine stop "$m" && podman machine start "$m"; } >/dev/null 2>&1 \
+            || log_warn "restarting podman machine $m failed - run: podman machine stop $m && podman machine start $m"
+          if [ "$(podman machine inspect "$m" --format '{{.Rosetta}}' 2>/dev/null || true)" = true ]; then
+            log_info "podman machine $m: Rosetta on"
+          else
+            log_warn "podman machine $m is still NOT on Rosetta after the restart. Run 'make engine-check'."
+          fi
+        fi
+      fi
     fi
   elif [ "$ENGINE_CHOICE" = docker ] && have colima; then
     # Homebrew's buildx is a docker plugin docker cannot find on its own (measured, golang-web).
