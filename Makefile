@@ -315,7 +315,7 @@ deps: ## Install the full jump-box toolchain (OS floor first, then the mise tool
 # still cheap-floor-first, and the exit status is non-zero if EITHER failed. A half-installed box is
 # a fact to report, not a reason to skip the rest of the install.
 	@rc=0; \
-	 $(MAKE) --no-print-directory deps-prereqs || { rc=1; echo "!! deps-prereqs FAILED (see above) - continuing to deps-mise anyway"; }; \
+	 VKS_DEPS_MISE_FOLLOWS=1 $(MAKE) --no-print-directory deps-prereqs || { rc=1; echo "!! deps-prereqs FAILED (see above) - continuing to deps-mise anyway"; }; \
 	 $(MAKE) --no-print-directory deps-mise    || { rc=1; echo "!! deps-mise FAILED (see above)"; }; \
 	 if [ $$rc -ne 0 ]; then \
 	   : > "$(CURDIR)/.deps-failed"; \
@@ -346,28 +346,33 @@ deps-mise: ## Install mise itself (if absent) + the mise-managed tools from .mis
 	 MISE="$$(command -v mise 2>/dev/null || echo "$$HOME/.local/bin/mise")"; \
 	 [ -x "$$MISE" ] || { echo "mise still not found after install — install it manually: https://mise.jdx.dev/getting-started.html"; exit 1; }; \
 	 "$$MISE" trust "$(CURDIR)/.mise.toml"; \
+	 ci_only=" $$(awk -F'|' '$$2=="ci-only"{print $$1}' "$(SCRIPTS)/03-check-tools.sh" | tr '\n' ' ')"; \
+	 lint_only_missing() { \
+	   missing="$$("$$MISE" ls --local --missing 2>/dev/null | awk '{print $$1}' | tr '\n' ' ')"; \
+	   [ -n "$${missing// /}" ] || return 1; \
+	   for t in $$missing; do case "$$ci_only" in *" $$t "*) ;; *) return 1 ;; esac; done; \
+	 }; \
+	 warn_lint_only() { \
+	   echo ""; \
+	   echo "WARNING: deps succeeded WITHOUT: $$missing(lint/scan tools only; nothing the install flow uses)."; \
+	   echo "  make lint / sec / validate SKIP a missing tool locally and still exit 0, so that green does"; \
+	   echo "  NOT cover it (CI fails instead). Usually a network block (e.g. PyPI for yamllint): behind a"; \
+	   echo "  proxy, export HTTPS_PROXY and re-run make deps."; \
+	 }; \
 	 if ! "$$MISE" install; then \
-	   echo ""; \
-	   echo "mise install failed. Retrying ONCE on a fresh connection."; \
-	   echo "  NOTE: this is attempt 2 of 2 — mise ALREADY retried 3x internally (http_retries=3),"; \
-	   echo "  so a repeat is more likely permanent (a bad pin or arch: look for '404 Not Found')"; \
-	   echo "  than transient (look for 'refused stream' / a timeout). A re-run is cheap: mise is"; \
-	   echo "  idempotent and only fetches what is missing (measured: 0.03s when satisfied)."; \
-	   echo "  MISE_JOBS=2 make deps   # if the error mentions http2/refused stream, fewer parallel"; \
-	   echo "                          # downloads may avoid it (UNPROVEN — one observation)"; \
-	   echo ""; \
-	   if ! "$$MISE" install; then \
-	     ci_only="$$(awk -F'|' '$$2=="ci-only"{print $$1}' "$(SCRIPTS)/03-check-tools.sh" | paste -sd, -)"; \
-	     [ -n "$$ci_only" ] || exit 1; \
+	   if lint_only_missing; then \
+	     warn_lint_only; \
+	   else \
 	     echo ""; \
-	     echo "Attempt 3: installing everything EXCEPT the ci-only lint/scan tools ($$ci_only)."; \
-	     MISE_DISABLE_TOOLS="$$ci_only" "$$MISE" install || exit 1; \
-	     missing="$$(for t in $$(echo "$$ci_only" | tr , ' '); do "$$MISE" which "$$t" >/dev/null 2>&1 || printf '%s ' "$$t"; done)"; \
+	     echo "mise install failed. Retrying ONCE on a fresh connection."; \
+	     echo "  NOTE: this is attempt 2 of 2 — mise ALREADY retried 3x internally (http_retries=3),"; \
+	     echo "  so a repeat is more likely permanent (a bad pin or arch: look for '404 Not Found')"; \
+	     echo "  than transient (look for 'refused stream' / a timeout). A re-run is cheap: mise is"; \
+	     echo "  idempotent and only fetches what is missing (measured: 0.03s when satisfied)."; \
+	     echo "  MISE_JOBS=2 make deps   # if the error mentions http2/refused stream, fewer parallel"; \
+	     echo "                          # downloads may avoid it (UNPROVEN — one observation)"; \
 	     echo ""; \
-	     echo "WARNING: deps succeeded WITHOUT: $${missing:-<none>}"; \
-	     echo "  These are only used by make lint / sec / validate / static-check. Locally those gates"; \
-	     echo "  SKIP a missing tool and still exit 0, so their green does NOT cover it (CI fails instead)."; \
-	     echo "  Usually a network block (e.g. PyPI for yamllint). Behind a proxy: export HTTPS_PROXY and re-run."; \
+	     if ! "$$MISE" install; then lint_only_missing || exit 1; warn_lint_only; fi; \
 	   fi; \
 	 fi; \
 	 command -v mise >/dev/null 2>&1 || { \

@@ -586,6 +586,14 @@ pkg_install() {
   [ "$#" -gt 0 ] || return 0
   local mgr; mgr="$(pkg_mgr)"
   [ -n "$mgr" ] || die "unsupported OS '$(os_id)': cannot install $*"
+  if [ "$mgr" = brew ]; then
+    # `brew install` of an installed formula prints a warning per formula (and a red "Error:" for
+    # some, e.g. openssl@3) while succeeding. Hand it only what is missing.
+    local p missing=()
+    for p in "$@"; do brew list --versions "$p" >/dev/null 2>&1 || missing+=("$p"); done
+    [ "${#missing[@]}" -gt 0 ] || { log_info "brew: already installed: $*"; return 0; }
+    set -- "${missing[@]}"
+  fi
   log_info "installing via $mgr: $*"
   case "$mgr" in
     apt-get) DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y --no-install-recommends "$@" ;;

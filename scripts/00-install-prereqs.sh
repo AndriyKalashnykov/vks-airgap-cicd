@@ -174,7 +174,7 @@ if [ "$(pkg_mgr)" = brew ]; then
     # Only with a NAME: a no-name inspect reads podman-machine-default, which may not be the machine.
     if [ -n "$m" ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] \
        && [ "$(podman machine inspect "$m" --format '{{.Rosetta}}' 2>/dev/null || true)" != true ]; then
-      log_warn "the podman machine is NOT on Rosetta: amd64 builds use QEMU, which aborts the .NET builder. Run 'gmake engine-check' for the two lines that switch it."
+      log_warn "the podman machine is NOT on Rosetta: amd64 builds use QEMU, which aborts the .NET builder. Run 'make engine-check' for the two lines that switch it."
     fi
   elif [ "$ENGINE_CHOICE" = docker ] && have colima; then
     # Homebrew's buildx is a docker plugin docker cannot find on its own (measured, golang-web).
@@ -363,7 +363,13 @@ if have mise; then
   # and the box was left without envsubst — 17 blocks failed, and the guest cluster was never built.
   # deps-mise is AUTHORITATIVE for the toolchain and reports the real failure; this line is a
   # convenience for anyone running the script directly, and must never be able to end the run.
-  ( cd "$REPO_ROOT" && mise install ) || log_warn "mise install failed here — continuing; 'make deps' runs it again (deps-mise) and that one is authoritative"
+  # Under `make deps` the very next step (deps-mise) runs this install and handles its failures, so
+  # doing it here too only doubles every download timeout (MEASURED on a PyPI-blocked Mac: +47 s).
+  if [ -n "${VKS_DEPS_MISE_FOLLOWS:-}" ]; then
+    log_info "mise toolchain: installed next by deps-mise"
+  else
+    ( cd "$REPO_ROOT" && mise install ) || log_warn "mise install failed here — continuing; 'make deps' runs it again (deps-mise) and that one is authoritative"
+  fi
 else
   # NOT "install them manually": since the deps order was fixed (deps-prereqs BEFORE deps-mise, so a
   # transient mise failure cannot orphan the OS floor), this branch fires on EVERY fresh box — mise
