@@ -62,7 +62,12 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         try:    code = int(STATUS.read_text().strip())
         except Exception: code = 500
-        self.send_response(code); self.end_headers(); self.wfile.write(b'{}')
+        # Content-Length is load-bearing: without it curl reads to EOF, and this server closes
+        # without a TLS close_notify, which OpenSSL >= 3.x reports as curl rc 56 ("unexpected
+        # eof") -- so every probe read as http 000. Measured OpenSSL 3.5.5 + Python 3.14.
+        body = b'{}'
+        self.send_response(code); self.send_header('Content-Length', str(len(body)))
+        self.end_headers(); self.wfile.write(body)
     def log_message(self, *a): pass
 srv = http.server.HTTPServer(('127.0.0.1', 0), H)
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(CERT)
