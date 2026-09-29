@@ -16,6 +16,20 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B746 — `make creds` prints the Gitea and headlamp credentials, and NOTHING can authenticate them
+
+Found 2026-09-29 while verifying `make creds` after a lab start (standing rule C.5: verify the
+credentials by AUTHENTICATING). Harbor has `make harbor-auth-check` (robot accepted, HTTP 412) and
+ArgoCD has `make argocd-auth-check` (a session token was issued) — both measured green that day.
+Gitea (`gitea_admin`) and headlamp (a service-account token) have no such target, so the only way to
+confirm those two rows is a hand-rolled `curl` or a browser, which RULE ZERO-A0 forbids for an agent
+and which a tenant should not need.
+
+Done when: a `gitea-auth-check` (and a headlamp equivalent, or one `creds-auth-check` over every
+row that has a credential) proves each credential with a real authenticated request — secrets off
+argv (`curl -K` under `umask 077`), a wrong-credential control that must fail, tenant-safe from
+`.env` alone — and `make creds`' "re-check:" line names it.
+
 ## ⚪ B522 — REFUTED-IN-PART: the mechanism is real and LATENT, and BOTH prescriptions break scenario-1
 
 An idea round reproduced the mechanism exactly — with a discriminating control — and then refuted
