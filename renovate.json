@@ -1,6 +1,5 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "enabled": false,
   "extends": [
     "config:best-practices",
     ":semanticCommitType(chore)"
@@ -27,7 +26,7 @@
   "prConcurrentLimit": 50,
   "prHourlyLimit": 0,
   "description": [
-    "TEMPORARY \u2014 Renovate is PAUSED for a six-row walkthrough-matrix certification run. It has automerge:true, and matrix-standing-rules.md section H.2 requires the tree be FROZEN while the matrix is armed or running: walk-matrix.sh ships `git archive HEAD` at ROW time, so a mid-run automerge SPLITS the run across two commits and voids the certification. This is not hypothetical -- the previous run records a Renovate CLI pin auto-merging TWELVE SECONDS before row 1 started. Re-enable by deleting this key and the `enabled` line below, once the run has produced its verdict. Paused 2026-08-23.",
+    "PAUSING THIS REPO, when a walkthrough-matrix certification run is armed: set top-level `enabled: false` and say so here. matrix-standing-rules.md H.2 requires the tree be FROZEN while the matrix runs -- walk-matrix.sh ships `git archive HEAD` at ROW time, so a mid-run automerge SPLITS the run across two commits and voids the certification (a previous run records a Renovate CLI pin auto-merging TWELVE SECONDS before row 1). RESUMED 2026-09-30: paused 2026-08-23 for a run whose verdicts landed 2026-08-27, then left off for 34 further days -- 375 commits on main with ZERO bot PRs (last was #956, 2026-08-23). Top-level `enabled: false` disables the WHOLE repo run, so `vulnerabilityAlerts` below was inert for all 38 days and there is no .github/dependabot.yml behind it; detection survived via `make sec` (gitleaks + trivy) but automated remediation did not. If you pause again, put an explicit re-enable date here -- an exit condition phrased as an event ('once the run has produced its verdict') is one nobody checks.",
     "platformAutomerge is deliberately false: main requires the ci-pass status check, and true triggers the registration race (native auto-merge completes in the ~1s window before ci-pass registers, landing a red bump). false makes Renovate merge via its own run after re-confirming green."
   ],
   "platformAutomerge": false,
@@ -241,6 +240,13 @@
         "kubernetes-sigs/gateway-api"
       ],
       "allowedVersions": "<v1.6.0"
+    },
+    {
+      "description": "The mise BINARY pin on jdx/mise-action (.github/workflows/*.yml `version:`, via the customManager above) gets the same 3-day buffer every other toolchain pin here has. Until 2026-09-30 NOTHING bound this dep: it arrives via custom.regex with depName jdx/mise, so `matchManagers:[mise]` (the .mise.toml TOOLS manager) misses it, `matchManagers:[github-actions]` misses it, 2026.9.2->2026.9.x is a semver PATCH so the major rule misses it, and config:best-practices' minimumReleaseAge preset is npm-only. All 11 rules were executed against {depName:jdx/mise, datasource:github-releases, manager:custom.regex, updateType:patch}: zero bound. BE HONEST ABOUT WHAT THIS BUYS: it does NOT prevent the 2026-09-08 draft-window outage (see ci.yml) -- Renovate discards drafts and keys on published_at, and across all 19 2026.9.x releases the last asset preceded published_at every time, so the bot cannot propose an unfetchable release. This is the generic let-someone-else-hit-the-bad-release property, nothing more. matchDepNames ALONE is deliberate: adding matchManagers forces a custom.regex-vs-regex token choice whose failure mode is a silent no-match.",
+      "matchDepNames": [
+        "jdx/mise"
+      ],
+      "minimumReleaseAge": "3 days"
     }
   ]
 }
