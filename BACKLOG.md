@@ -16,6 +16,48 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B748 — `trivy-config` is the one gate that lost its PR path as a SIDE EFFECT, and a skipped job keeps `ci-pass` green
+
+⚠️ **This row does NOT re-litigate the schedule-only decision.** `ci.yml:186-200` records it as the
+owner's call (2026-08-23) with a measured rationale: `static-check` was the only PR job installing six
+app toolchains and restoring the maven/go caches, and after `app-test`, `check-ui-contract` and
+`trivy-fs` left the CI gates it built no app at all, so that setup was pure cost per PR. That stands.
+
+The narrow question is what went with it. Mapping jobs to conditions (2026-09-30):
+
+| gate | PR-path coverage |
+|---|---|
+| `gitleaks` / `prose-secrets` | ✅ the separate `secrets` job (measured `pass` on #1337 and #1338) |
+| `trivy-fs` | n/a — deliberately moved to `app-verify`, not a CI gate |
+| the wall-clock script tests | ✅ intentionally omitted; `test-scripts-fast` covers the rest |
+| **`trivy-config`** | ❌ **none.** It appears ONLY inside the `static-check` job |
+
+So k8s/Tekton **manifest misconfiguration scanning** runs weekly-or-on-dispatch and nowhere else —
+`ci.yml:198` says as much in its own words (*"the ONLY place `sec` (gitleaks, trivy-config) … run in
+CI at all"*). gitleaks got a dedicated job when it left; `trivy-config` did not, and nothing records
+that as a decision.
+
+**Why it is not merely untidy.** `ci-pass` tests only
+`contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')`, and a SKIPPED job is
+NEITHER — the comment at `:158-163` documents this hole and `:173-175` records it firing for real
+(#605's half-applied Go toolchain bump merged green and sat red on `main` until someone found it by
+hand). A manifest misconfig therefore merges green and sits until the weekly cron. MEASURED on both
+PRs this session: `static-check: skipping` with `ci-pass: success`.
+
+The compensating control is real but is DISCIPLINE, not a gate: local `make static-check` before
+merging, per `docs/matrix-standing-rules.md` G.4/G.5. Nothing enforces it, and it was only run this
+session because I happened to.
+
+Done when: either (a) `trivy-config` gets a small PR-path job of its own — the same treatment
+`gitleaks` got — or (b) its absence is recorded as a deliberate decision in `ci.yml` beside the
+others, so the next reader does not have to derive it from a job map.
+
+⚠️ **Measure before choosing (a).** The cost objection at `:178-180` is about the **vuln DB** — dropped
+on purpose, so per-PR `trivy-fs` means a cold DB download. `trivy config` is a MISCONFIG scan driven by
+policy checks, so it may not need that DB at all, which would make (a) nearly free. That is an
+UNVERIFIED inference, not a fact: time `make trivy-config` on a cold cache and read what it downloads
+before arguing either way.
+
 ## 🔴 B747 — `make deps` installs mise when ABSENT but never raises one below `min_version`, and the fallback is SILENT
 
 Found 2026-09-30 on the maintainer's own box, which is the point: this is not a fresh-box theory.
