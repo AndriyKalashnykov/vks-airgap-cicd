@@ -1930,12 +1930,14 @@ for _f in "${_CREDS_REPO}"/scripts/*.sh "${_CREDS_REPO}"/scripts/lib/*.sh; do
 done
 # os.sh is the DEFINER and stays in the expectation deliberately: excluding it would need a third
 # filter, and this list just lost two for being silently dead.
-if [ "$_sso_consumers" != "argocd-password.sh creds.sh os.sh " ]; then
+# 30-vks-login.sh (2026-09-30) only REPORTS the expiry before/after a login; it renders no row and
+# never prescribes an SSO login, so it needs no grid row -- it is listed here, not in the grid.
+if [ "$_sso_consumers" != "30-vks-login.sh argocd-password.sh creds.sh os.sh " ]; then
   bad "SSO gate: the kube_token_expiry consumer set changed to [${_sso_consumers}]. The grid's rows
       are hand-typed, so a consumer it does not render is UNMEASURED -- add a row for the new file
       (or remove one), then update this expectation."
 else
-  ok "SSO gate: the kube_token_expiry consumer set is unchanged (${_sso_consumers}-- 2 rendered + the definer)"
+  ok "SSO gate: the kube_token_expiry consumer set is unchanged (${_sso_consumers}-- 2 rendered, 1 login reporter, the definer)"
 fi
 
 # base64 fallback matches the repo's existing pattern (vcenter.sh:375, 60-configure-tekton.sh:92):
@@ -2263,7 +2265,10 @@ _ac_creds() {  # _ac_creds <label> <render> <yes|no: ArgoCD named in the banner>
     if grep -qxF 'sup-unread: argocd' <<< "$out"; then miss="$miss named"; fi
     if grep -qF 'make vks-login' <<< "$out"; then miss="$miss prescribes-vks-login"; fi
   fi
-  if ! grep -qF -- "$cell" <<< "$row"; then miss="$miss cell[$row]"; fi
+  # A long marker is moved out of the cell into "note — ArgoCD (too long for the table):" + the
+  # text on the next line; the cause must be found in ONE of the two, never dropped.
+  local note; note="$(grep -A1 -E '^  note — ArgoCD ' <<< "$out" | tail -n +2 || true)"
+  if ! grep -qF -- "$cell" <<< "$row" && ! grep -qF -- "$cell" <<< "$note"; then miss="$miss cell[$row]"; fi
   if grep -qF 'those passwords do not exist yet' <<< "$out"; then miss="$miss do-not-exist-note"; fi
   if [ -z "$miss" ]; then ok "cause codes: creds $lbl"; else bad "cause codes: creds $lbl:$miss"; fi
 }
@@ -2275,6 +2280,26 @@ _ac_creds "E refused/refused -> not named, could not be reached" "$(_ac_render c
 _ac_creds "G x509/ns-NotFound -> not named, see why" "$(_ac_render creds "$_ac_exp" "$_AC_X509" "$_AC_NSNF")" no 'run: make argocd-password to see why'
 _ac_creds "K 503/401 -> not named, see why" "$(_ac_render creds "$_ac_exp" "$_AC_503" "$_AC_401")" no 'run: make argocd-password to see why'
 _ac_creds "exit 126 -> not named, says the exit code" "$(_AC_T126=1 _ac_render creds "$_ac_exp" "$_AC_401" "$_AC_NSNF")" no 'argocd-password.sh exited 126'
+# LONG MARKERS ARE CAPPED (2026-09-30). MEASURED mid-start on a live lab: a ~88-char ArgoCD cause
+# marker was exempt from CREDS_MAX_CELL and widened EVERY row's Password column off-screen. Case E
+# carries a long marker: its cell must be the short pointer, the text must be in the note, and the
+# table must stay narrow (the uncapped table measured ~180 columns; 160 sits between).
+_ac_w="$(_ac_render creds "$_ac_exp" "$_AC_REF" "$_AC_REF")"
+_ac_wrow="$(grep -E '^  ArgoCD ' <<< "$_ac_w" || true)"
+_ac_wmax="$(awk '/^  Service /{t=1} t && /^$/{t=0} t{ if (length($0) > m) m = length($0) } END{print m+0}' <<< "$_ac_w")"
+if grep -qF '<see note below>' <<< "$_ac_wrow" && grep -qE '^  note — ArgoCD \(too long for the table\):' <<< "$_ac_w" \
+   && [ "$_ac_wmax" -gt 0 ] && [ "$_ac_wmax" -le 160 ]; then
+  ok "long marker: capped to a pointer, text in a note, table ${_ac_wmax} cols wide"
+else
+  bad "long marker: row [${_ac_wrow}], widest table line ${_ac_wmax} cols (want <= 160, pointer + note)"
+fi
+# ...and the STEADY tenant row (an ArgoCD token, not a password) is NOT capped: it stays in its cell.
+_ac_t="$(ARGOCD_AUTH_TOKEN=abc CREDS_NO_PROBE=1 render '')"
+if grep -E '^  ArgoCD ' <<< "$_ac_t" | grep -qF '<ARGOCD_AUTH_TOKEN, not a password>'; then
+  ok "tenant token row: its marker stays in the cell (never moved to a note)"
+else
+  bad "tenant token row: [$(grep -E '^  ArgoCD ' <<< "$_ac_t" || echo '<no ArgoCD row>')]"
+fi
 # POSITIVE CONTROL for the note-absence checks above: with the SAME fixture, an ABSENT secret (NotFound
 # everywhere, exit 3, no overlay) must still arm "do not exist yet" — else those checks prove nothing.
 _ac_n="$(_ac_render creds "$(_jwt 9999999999)" "$_AC_SNF" "$_AC_NSNF")"
