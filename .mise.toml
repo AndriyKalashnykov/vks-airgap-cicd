@@ -9,8 +9,16 @@
 #
 # Run `mise install` on the jump box before running the Makefile.
 
-# Per-tool `os = [...]` (used for crane/go below) needs a mise that knows the key. 2026.9.2 is the
-# version CI pins and was MEASURED to honour it on a cold data dir.
+# Per-tool `os = [...]` (used for crane/go below) needs a mise that knows the key. 2026.9.2 was
+# MEASURED to honour it on a cold data dir.
+#
+# This is a FLOOR, not a mirror of the CI pin. It happens to equal ci.yml's `version:` today, but
+# Renovate tracks that pin (depName jdx/mise) and NOTHING tracks this line, so the two WILL
+# diverge on the first bump — and that is fine in one direction only. `make check-mise-pins`
+# asserts floor <= pin: raising the floor past the pin makes every mise call refuse with rc=1 and
+# EMPTY stdout, which surfaces as the pinned toolchain silently falling off PATH (the operator
+# sees un-pinned system binaries and a `bin-paths FAILED` warning), not as a readable error.
+# Do NOT raise this to "match CI" — it costs every operator a `mise self-update` and buys nothing.
 min_version = "2026.9.2"
 
 [tools]

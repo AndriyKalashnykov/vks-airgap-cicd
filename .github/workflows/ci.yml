@@ -231,12 +231,24 @@ jobs:
       # All three ARE in mise's registry (kubeconform + hadolint via aqua, yamllint via
       # pipx/uv); they are pinned in .mise.toml and installed by the step above.
       # ⚠️ PIN THE MISE VERSION. Without `version:` the action resolves whatever
-      # https://mise.jdx.dev/VERSION says AT RUN TIME — which is a "latest" resolution in a repo
-      # that pins everything else, and it broke CI outright on 2026-09-08: jdx tagged v2026.9.3
-      # and bumped that endpoint, but never published the release ASSETS. The action resolved
-      # 2026.9.3, curl 404'd five times, the job died in SETUP, and `make secrets-scan` was
-      # SKIPPED — a security scan that did not run, on every PR in the repo. Still 404 2h23m
-      # after the tag. Renovate bumps this line (see renovate.json's mise-action manager).
+      # https://mise.jdx.dev/VERSION says AT RUN TIME — a "latest" resolution in a repo that pins
+      # everything else — and it broke CI outright on 2026-09-08.
+      #
+      # THE MECHANISM IS A DRAFT/PUBLICATION WINDOW, not a missing-assets bug (this comment said
+      # the latter until 2026-09-30; corrected from the releases API). For v2026.9.3:
+      #   created_at 06:50:57Z · first asset 08:26:08Z · last asset 13:54:57Z · published_at 13:55:29Z
+      # so the release was unpublished for UP TO 7h04m while mise.jdx.dev/VERSION already advertised
+      # it. Treat that as an UPPER BOUND, not a measurement: GitHub's `created_at` is the underlying
+      # COMMIT date, not the moment the tag or draft appeared. The direction is what matters —
+      # publication trails the endpoint by hours — and an unpinned resolve inside that window
+      # downloads a release that does not yet exist to anyone but the endpoint: curl 404'd five
+      # times, the job died in SETUP, and `make secrets-scan` was SKIPPED — a security scan that
+      # did not run, on every PR in the repo.
+      #
+      # Renovate CANNOT reproduce this (it discards drafts and measures published_at, and across
+      # all 19 2026.9.x releases the last asset preceded published_at every time), so the pin is
+      # the whole defence and every mise-action call site needs one. Renovate bumps this line
+      # (see renovate.json's mise-action manager).
       # renovate: datasource=github-releases depName=jdx/mise
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
         with:

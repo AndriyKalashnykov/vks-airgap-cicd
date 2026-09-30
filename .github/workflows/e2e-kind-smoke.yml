@@ -58,7 +58,21 @@ jobs:
       # Provides the jump-box toolchain from .mise.toml (kubectl/helm/crane/jq/yq/
       # kustomize/java/…) — the SAME setup ci.yml's static-check job uses, so local
       # `make` targets run against the pinned versions.
+      #
+      # ⚠️ `version:` IS LOAD-BEARING — keep it, and keep it in this exact spelling.
+      # Unpinned, the action resolves https://mise.jdx.dev/VERSION at RUN TIME, and that endpoint
+      # leads release PUBLICATION by hours (v2026.9.3 spent 7h04m as a draft — see the long note in
+      # ci.yml). This call site was the last unpinned one in the repo and carried that live hazard
+      # from 2026-09-08 until 2026-09-30, even though renovate.json's manager description already
+      # claimed "CI resolves no 'latest' at run time".
+      # The VALUE must stay bare, unquoted and digit-leading, within 4 lines of the comment below:
+      # `"2026.9.2"`, `v2026.9.2`, or a 5th line all yield ZERO customManager matches (MEASURED) —
+      # the action still works, so you get a pin the bot silently never bumps again.
+      # `make check-mise-pins` enforces exactly that; it is RED if this drifts.
+      # renovate: datasource=github-releases depName=jdx/mise
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        with:
+          version: 2026.9.2
 
       # `kind` comes from .mise.toml (the mise-action above), like crane/kubectl/helm/jq —
       # so CI and a real jump box get the SAME pinned version from ONE source of truth.
