@@ -10,7 +10,7 @@ VKS cluster:
 
 > **Passwords print only to a terminal.** If you **pipe or redirect** `creds-show` — into a file, a
 > pager, `grep`, a CI capture — the password column reads
-> `<hidden: not a terminal — re-run with SHOW_SECRETS=1>`. That is deliberate: the walkthrough
+> `<hidden: not a terminal; SHOW_SECRETS=1>`. That is deliberate: the walkthrough
 > harness runs every documented command with stdout redirected to a log, and live Gitea, Harbor and
 > ArgoCD passwords were reaching those logs in cleartext. Everything else — URLs, usernames, the
 > DISCOVERED/STORED provenance — is unchanged, so a redirect still gives you the whole table.
@@ -54,7 +54,8 @@ make creds-show
 not ask*, because the token had already expired, and the banner names which cells it affects. A
 cell reading `<not read — nothing answered>` was asked and got no reply. Other placeholders in that
 column (`<forbidden>`, `<no key>`, `<no harbor ns>`) mean different things and each carries its own
-footnote.
+footnote. A cell reading `<see note below>` means the reason is too long for the table: it is printed
+under the table as `note — <Service> (too long for the table):`.
 >
 > ⚠️ **A pty-based capture counts as a terminal and WILL show the passwords.** The test is "is stdout
 > a tty", not "is a human reading this" — so `script`, `ssh -t`, `unbuffer` and some CI runners get

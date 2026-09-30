@@ -183,7 +183,7 @@ fi
 # _mask <secret> — apply ONLY to values that are REAL secrets.
 # ⚠️ MASK THE VALUES, NOT THE COLUMN (B182 F4). Four things that appear in the Password column are
 # NOT secrets and MUST stay legible: the `<no login; …>` notes, the `_unset_pw` placeholders, the
-# `<ARGOCD_AUTH_TOKEN from .env — not a password>` row, and the `<- INITIAL secret; superseded …`
+# `<ARGOCD_AUTH_TOKEN, not a password>` row, and the `<- INITIAL secret; superseded …`
 # annotation. A column-level mask deletes the tenant/KinD/lab distinction that ~60 lines of comments
 # in this file exist to preserve — so the mask is applied at the three assignment sites only, and
 # the annotation is appended OUTSIDE it.
@@ -755,7 +755,9 @@ fi
 # So: report the credential THEY will actually use.
 if [ -n "${ARGOCD_AUTH_TOKEN:-}" ]; then
   argo_user="(token)"
-  argo_pw="<ARGOCD_AUTH_TOKEN from .env — not a password>"
+  # <= CREDS_MAX_CELL (44) on purpose: this is the STEADY tenant state, so it must never be moved
+  # out of the table by the long-marker cap below (it was 46 chars; adversary round 2026-09-30).
+  argo_pw="<ARGOCD_AUTH_TOKEN, not a password>"
   # This OVERWRITES whatever the expiry dispatch above decided, so the banner must not go on
   # advertising `make argocd-password` for a row that already holds a working credential -- and a
   # tenant cannot run that command at all (it reads a Supervisor secret; RULE ZERO-A0).
@@ -2449,6 +2451,7 @@ fi
 # value; the table stays a table.
 CREDS_MAX_CELL="${CREDS_MAX_CELL:-44}"
 _long_notes=""
+_long_markers=""
 _rows_capped=""
 # ⚠️ THE DNS FLAGS ARE ARMED HERE, FROM COLUMN 5 ONLY, and this loop is the right home for two
 # measured reasons. (a) It runs BEFORE the advice block, over the same rows. (b) It is fed by a
@@ -2551,6 +2554,14 @@ while IFS=$'\t' read -r c1 c2 c3 c4 c5 c6 c7 _rest; do
   if [ "$_is_marker" = 0 ] && [ "${#c4}" -gt "$CREDS_MAX_CELL" ]; then
     _long_notes="${_long_notes}${c1}"$'\t'"${c4}"$'\n'
     c4="<full value below>"
+  # A long MARKER blows the table out exactly like a long value: the width is a max over ALL rows.
+  # MEASURED 2026-09-30 mid-start: ArgoCD's "<not read — no answer within this report's 3s limit;
+  # make argocd-password waits longer>" padded EVERY row's Password column far past 120 columns.
+  # The exemption above exists so a short marker is never replaced; a long one keeps its words
+  # below the table, where width is free.
+  elif [ "$_is_marker" = 1 ] && [ "${#c4}" -gt "$CREDS_MAX_CELL" ]; then
+    _long_markers="${_long_markers}${c1}"$'\t'"${c4}"$'\n'
+    c4="<see note below>"
   fi
   _rows_capped="${_rows_capped}${c1}"$'\t'"${c2}"$'\t'"${c3}"$'\t'"${c4}"$'\t'"${c5}"$'\n'
 done <<EOF
@@ -2719,6 +2730,18 @@ if [ "${_dns_stale:-0}" = 1 ] || [ "${_dns_absent:-0}" = 1 ]; then
   fi
   printf '      Or create those names as A records pointing at %s in your DNS: make show-dns-records\n' \
     "${INGRESS_LB_IP:-<ingress-lb-ip>}"
+fi
+
+# The long MARKERS (a reason, not a value). The heading starts with "note —", never a service name:
+# every table-row matcher in test-creds-show.sh is '^  <Service> ', and a heading of the form
+# "  <Service> — ..." was measured to satisfy them (it turned the all-serving check red).
+if [ -n "${_long_markers:-}" ]; then
+  while IFS=$'\t' read -r _lm_svc _lm_val; do
+    [ -n "$_lm_svc" ] || continue
+    printf '\n  note — %s (too long for the table):\n    %s\n' "$_lm_svc" "$_lm_val"
+  done <<EOF
+$(printf '%s' "$_long_markers")
+EOF
 fi
 
 # The values too long to sit in a cell, printed where width does not matter. One per line, the

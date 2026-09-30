@@ -67,6 +67,7 @@ cat > "$T/bin/vcf" <<'STUB'
 case "$1 $2" in
   "context delete") exit 0 ;;
   "context create")
+    [ -n "${STUB_NEWTOK:-}" ] && printf '%s' "$STUB_NEWTOK" > "$STUB_TOKFILE"
     case "${STUB_CREATE:-ok}" in
       ok)      echo "Logged in successfully." >&2; exit 0 ;;
       generic) echo "[x] : Invalid vSphere Supervisor endpoint" >&2; exit 7 ;;
@@ -84,6 +85,7 @@ cat > "$T/bin/kubectl" <<'STUB'
 #!/usr/bin/env bash
 case "$*" in
   *"config current-context"*) printf '%s\n' "${STUB_CUR:-}"; exit 0 ;;
+  *"config view"*) cat "${STUB_TOKFILE:-/nonexistent}" 2>/dev/null; exit 0 ;;
   *"get ns"*) exit 0 ;;
 esac
 exit 0
@@ -147,5 +149,38 @@ else ok "script: the BROKEN-registry variant gets no note"; fi
 out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="other:ctx")"
 if grep -qF 'stop the login' <<< "$out"; then bad "script: note printed although the context is wrong"
 else ok "script: wrong current-context -> no note"; fi
+
+# ── 4. the token line (2026-09-30): vcf's "Skipped the token refresh" was read as "nothing was
+# renewed" while the expiry had moved. The script now MEASURES before/after and says which.
+_jwt() { printf 'h.%s.s' "$(printf '{"exp":%s}' "$1" | base64 -w0 | tr '+/' '-_' | tr -d '=')"; }
+TF="$T/tok"; _now=$(date +%s)
+printf 'apiVersion: v1\n' > "$T/sup.kc"   # kube_token_expiry needs a non-empty file; the stub serves the token
+printf '%s' "$(_jwt $((_now - 3600)))" > "$TF"
+out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT" STUB_TOKFILE="$TF" STUB_NEWTOK="$(_jwt $((_now + 36000)))")"
+if grep -qF 'this login RENEWED it (before: EXPIRED' <<< "$out"; then ok "token: expired -> new token is reported as RENEWED, with the before value"
+else bad "token: an expired->valid login must say RENEWED [$(grep -F 'Supervisor token' <<< "$out" || echo none)]"; fi
+printf '%s' "$(_jwt $((_now + 7200)))" > "$TF"
+out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT" STUB_TOKFILE="$TF")"
+if grep -qF 'UNCHANGED by this login' <<< "$out" && ! grep -qF 'RENEWED' <<< "$out"; then ok "token: a still-valid token that did not move is reported UNCHANGED, never RENEWED"
+else bad "token: an unchanged token must say UNCHANGED [$(grep -F 'Supervisor token' <<< "$out" || echo none)]"; fi
+rm -f "$TF"
+out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT" STUB_TOKFILE="$TF" STUB_NEWTOK="$(_jwt $((_now + 36000)))")"
+if grep -qF 'obtained by this login' <<< "$out" && ! grep -qE 'RENEWED|UNCHANGED' <<< "$out"; then ok "token: no token before, one after -> 'obtained', never 'renewed'"
+else bad "token: a first login must not claim a renewal [$(grep -F 'Supervisor token' <<< "$out" || echo none)]"; fi
+# Same expiry MINUTE, different token: renewal is decided by the token, not the displayed expiry.
+printf '%s' "$(_jwt $((_now + 7200)))" > "$TF"
+out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT" STUB_TOKFILE="$TF" STUB_NEWTOK="$(_jwt $((_now + 7201)))x")"
+if grep -qF 'RENEWED' <<< "$out"; then ok "token: a re-minted token with the same displayed expiry is still RENEWED"
+else bad "token: same-minute re-mint must read RENEWED [$(grep -F 'Supervisor token' <<< "$out" || echo none)]"; fi
+if grep -qF "Skipped the token refresh' above" <<< "$out"; then bad "token: the vcf 'Skipped' note printed although vcf never said it"
+else ok "token: the vcf 'Skipped' note prints only when vcf said it"; fi
+printf '%s' "$(_jwt $((_now + 7200)))" > "$TF"
+out="$(run insecure STUB_USE_ERR="[ok] Token is still active. Skipped the token refresh for context \"$WANT\"" STUB_CUR="$WANT" STUB_TOKFILE="$TF")"
+if grep -qF "Skipped the token refresh' above refers to this token" <<< "$out"; then ok "token: when vcf DID say 'Skipped the token refresh', the note explains it"
+else bad "token: the note must print when vcf said 'Skipped the token refresh'"; fi
+rm -f "$TF"
+out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT" STUB_TOKFILE="$TF")"
+if grep -qF 'its expiry could not be read' <<< "$out" && ! grep -qE 'RENEWED|UNCHANGED|valid until' <<< "$out"; then ok "token: no readable token -> says so, claims nothing"
+else bad "token: an unreadable token must claim nothing [$(grep -F 'Supervisor token' <<< "$out" || echo none)]"; fi
 
 if [ "$fail" = 0 ]; then echo "test-vks-login-output: ALL PASS ($n)"; else echo "test-vks-login-output: FAILED" >&2; exit 1; fi

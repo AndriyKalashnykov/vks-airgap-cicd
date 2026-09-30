@@ -362,6 +362,19 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # An unconditional delete needs no existence check, so it cannot get one wrong: a
     # substring `case` matches `vks-cicd` inside `vks-cicd-old`, and a `$(…)` capture of
     # `vcf context list` trips `set -e` when no context exists.
+    # The token BEFORE the login, so the result can say whether it MOVED. MEASURED 2026-09-30: vcf's
+    # "[ok] Token is still active. Skipped the token refresh" was read as "nothing was renewed"
+    # while the expiry had in fact moved from EXPIRED 07:43Z to +10 h. vcf never says which, so we
+    # measure it (offline, from the kubeconfig) instead of claiming a refresh either way.
+    _tok_kc="${VKS_SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
+    _tok_before="$(kube_token_expiry "$_tok_kc" 2>/dev/null || printf 'UNKNOWN')"
+    _tok_ctx_before="$(kubectl --kubeconfig "$_tok_kc" config current-context 2>/dev/null || printf '?')"
+    # Renewal is decided by the TOKEN itself (a digest, never printed), not by the displayed expiry,
+    # which has minute granularity: a token re-minted within the same minute would read "unchanged".
+    _tok_sum() { kubectl --kubeconfig "$1" config view --raw --minify -o jsonpath='{.users[0].user.token}' 2>/dev/null \
+                   | sha256sum | cut -c1-16; }
+    _tok_sum_before="$(_tok_sum "$_tok_kc" || true)"
+    _vcf_skipped=0
     log_info "removing any pre-existing vcf context named '${VKS_CONTEXT_NAME}' (create refuses duplicates)"
     vcf context delete "$VKS_CONTEXT_NAME" -y --skip-delete-kubeconfig-context >/dev/null 2>&1 || true
 
@@ -410,6 +423,7 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     KUBECONFIG="$SUP_KUBECONFIG" VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
       vcf context create "${create_args[@]}" </dev/null 2>"$_vcf_err" && _vcf_rc=0 || _vcf_rc=$?
     cat "$_vcf_err" >&2
+    grep -qF 'Skipped the token refresh' "$_vcf_err" 2>/dev/null && _vcf_skipped=1
     # The exit is UNCONDITIONAL on failure. `&& || ` switches set -e off for the call above, so
     # without this every create failure would fall through into namespace discovery and die later
     # with an unrelated message.
@@ -461,6 +475,7 @@ back to skipping TLS verification: that would silently downgrade a connection yo
       vcf context use "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}" </dev/null 2>"$_vcf_err" \
       && _vcf_rc=0 || _vcf_rc=$?
     cat "$_vcf_err" >&2
+    grep -qF 'Skipped the token refresh' "$_vcf_err" 2>/dev/null && _vcf_skipped=1
     [ "$_vcf_rc" -eq 0 ] \
       || log_warn "'vcf context use' exited non-zero — verifying the end result before judging it"
 
@@ -472,6 +487,26 @@ back to skipping TLS verification: that would silently downgrade a connection yo
       || die "the Supervisor context did not come up: ${SUP_KUBECONFIG} cannot list namespaces in
 '${VKS_NAMESPACE}'. Inspect: KUBECONFIG='${SUP_KUBECONFIG}' vcf context list"
     log_info "Supervisor context verified via ${SUP_KUBECONFIG}"
+    _tok_after="$(kube_token_expiry "$SUP_KUBECONFIG" 2>/dev/null || printf 'UNKNOWN')"
+    _tok_ctx="$(kubectl --kubeconfig "$SUP_KUBECONFIG" config current-context 2>/dev/null || printf '?')"
+    case "$_tok_after" in
+      VALID*)
+        _tok_sum_after="$(_tok_sum "$SUP_KUBECONFIG" || true)"
+        if [ "$_tok_before" = UNKNOWN ]; then
+          log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — obtained by this login (there was no readable token before it)."
+        elif [ -n "$_tok_sum_before" ] && [ "$_tok_sum_after" = "$_tok_sum_before" ]; then
+          log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — UNCHANGED by this login (the same token, still valid)."
+        else
+          log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — this login RENEWED it (before: ${_tok_before})."
+        fi
+        [ "$_tok_ctx" = "$_tok_ctx_before" ] || log_info "  the current context changed: '${_tok_ctx_before}' -> '${_tok_ctx}'."
+        [ "$_vcf_skipped" = 0 ] || log_info "  vcf's 'Token is still active. Skipped the token refresh' above refers to this token, as it stood after the login."
+        ;;
+      EXPIRED*)
+        log_warn "Supervisor token (context '${_tok_ctx}') reads EXPIRED at ${_tok_after#EXPIRED } right after a SUCCESSFUL login — check this machine's clock (the expiry is compared with local time)." ;;
+      *)
+        log_info "Supervisor token (context '${_tok_ctx}'): its expiry could not be read from ${SUP_KUBECONFIG}." ;;
+    esac
     # The vcf CLI tells the operator to "Contact your administrator" about the plugin-registry [x]
     # above. Say what it means -- but ONLY when that is the sole error AND the context really is
     # selected (vcf_use_plugin_note_ok), and phrase it so it is true on every lab: we cannot know
