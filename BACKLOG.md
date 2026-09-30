@@ -16,6 +16,44 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B747 — `make deps` installs mise when ABSENT but never raises one below `min_version`, and the fallback is SILENT
+
+Found 2026-09-30 on the maintainer's own box, which is the point: this is not a fresh-box theory.
+
+`.mise.toml:14` declares `min_version = "2026.9.2"`. A mise OLDER than that refuses **every**
+invocation with rc=1 and EMPTY stdout (the Makefile comment at :78 already records this as measured).
+`deps-mise` handles mise being **absent** — it curls `https://mise.run` — but has **no path at all** for
+present-and-too-old, which is the case that degrades quietly instead of failing honestly.
+
+MEASURED, with mise 2026.8.2 installed against that floor:
+
+- `make deps` exits 2, and the only thing naming the real cause is a `$(warning …)` at `Makefile:81`
+  that scrolls past hundreds of lines of apt output.
+- `deps-prereqs` "succeeds" while resolving `kubectl`/`jq`/`helm`/`kustomize`/`yq` to whatever SYSTEM
+  copies exist, and reports `crane MISSING`. So the operator gets an un-pinned toolchain — e.g. a
+  `/usr/local/bin/kubectl` instead of the pinned 1.36.4 — and any `make` target run in that state is
+  silently measuring the wrong binaries.
+- `deps-mise`'s failure text frames it as NETWORK: *"Retrying ONCE on a fresh connection … more likely
+  permanent (a bad pin or arch: look for '404 Not Found') than transient"*. It is neither; it is a
+  version floor, and the message sends the reader to the wrong hypothesis.
+
+The fix on the day was one `mise self-update`. Nothing in the repo suggests it at the point of failure,
+and nothing installs it.
+
+⚠️ Do NOT "fix" this by raising or removing `min_version`. The floor is load-bearing (per-tool
+`os = [...]` needs a mise that knows the key) and `check-mise-pins` (shipped in cd8c703) asserts
+floor <= CI pin, so lowering it to dodge the problem re-opens a real one. The defect is the missing
+UPGRADE path and the misleading diagnostic, not the floor.
+
+Done when: `deps-mise` detects an installed mise below `.mise.toml`'s declared floor and either
+self-updates it (the same consent model as the existing `curl https://mise.run` install) or fails
+FAST and FIRST — before any apt work — naming the floor, the installed version, and `mise self-update`
+in one line. Either way the misleading retry-on-a-fresh-connection text must not fire for a version
+floor. RED-prove it with a deliberately old mise on PATH; the control is that a mise AT or ABOVE the
+floor is untouched. Consider also making the un-pinned fallback loud rather than a `$(warning)`
+nobody scrolls back to — an operator running with system binaries instead of the pinned set should
+not have to notice a line that went by two screens earlier.
+
 ## 🔴 B746 — `make creds` prints the Gitea and headlamp credentials, and NOTHING can authenticate them
 
 Found 2026-09-29 while verifying `make creds` after a lab start (standing rule C.5: verify the
