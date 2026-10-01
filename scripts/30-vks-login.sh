@@ -337,17 +337,9 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # /etc/docker/certs.d incident. Export it for the session, or inject it from a secret manager
     # (`op run -- …`, `vault exec -- …`); do not persist it to disk.
     #
-    # NOT WIRED HERE, DELIBERATELY. The correct wiring is a COMMAND-SCOPED prefix reusing the
-    # VKS_PASSWORD that already exists (.env.example:1998), mirroring the KUBECTL_VSPHERE_PASSWORD prefix at :488:
-    #     [ -n "${VKS_PASSWORD:-}" ] && pw=(VCF_CLI_VSPHERE_PASSWORD="$VKS_PASSWORD")
-    #     env "${pw[@]}" vcf context create "$VKS_CONTEXT_NAME" …
-    # Command-scoped, not exported: a bare `export` would put a vCenter SSO admin password in the
-    # environment of every kubectl/helm/crane/git this script later spawns, readable in each
-    # /proc/<pid>/environ. The non-empty guard is NOT optional — an unguarded empty assignment
-    # CLOBBERS an operator who exported the var themselves, turning a working non-interactive
-    # login into an auth failure. It lands together with the positional-name fix above, after lab
-    # step 3, because wiring a password into a call that is missing a required argument would only
-    # make a broken path LOOK automated.
+    # WIRED (2026-09-30) as a COMMAND-SCOPED prefix: see `_vcf_run` at the top of this arm. Not a
+    # bare `export` (that put a vCenter SSO password in every child's /proc/<pid>/environ), not
+    # `env NAME=VALUE` (that is argv), and never an EMPTY value (a failed bind counts to lockout).
     # Note also: the prompt recurs at token refresh [community], so a long `make install-all` can
     # block mid-run; that is the case for exporting it for the session, deliberately.
     # --- IDEMPOTENCE: `vcf context create` REFUSES a duplicate name -------------------
@@ -376,23 +368,32 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # while the expiry had in fact moved from EXPIRED 07:43Z to +10 h. vcf never says which, so we
     # measure it (offline, from the kubeconfig) instead of claiming a refresh either way.
     _tok_kc="${VKS_SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
-    _tok_before="$(kube_token_expiry "$_tok_kc" 2>/dev/null || printf 'UNKNOWN')"
     _tok_ctx_before="$(kubectl --kubeconfig "$_tok_kc" config current-context 2>/dev/null || printf '?')"
-    # Renewal is decided by the TOKEN itself (a digest, never printed), not by the displayed expiry,
-    # which has minute granularity: a token re-minted within the same minute would read "unchanged".
-    # ⚠️ EMPTY IN, EMPTY OUT. `printf '' | sha256sum` is a real digest (e3b0c442…), so hashing a
-    # missing token made "no token" look like a token and the `-n` guard below could never fail.
-    _tok_sum() { local _t
-                 _t="$(kubectl --kubeconfig "$1" config view --raw --minify -o jsonpath='{.users[0].user.token}' 2>/dev/null || true)"
-                 [ -n "$_t" ] || return 0
-                 printf '%s' "$_t" | sha256sum | cut -c1-16; }
-    # WHICH user entry the current context uses. MEASURED 2026-09-30: this lab's
-    # secrets/supervisor.kubeconfig holds TWO user entries (`argocd-supervisor:…` and `vks-cicd:…`,
-    # written by 31-fetch-argocd-kubeconfig.sh and by this login), so a before/after compare across a
-    # context change can be two DIFFERENT credentials. Compare only like with like.
-    _tok_user() { kubectl --kubeconfig "$1" config view --minify -o jsonpath='{.contexts[0].context.user}' 2>/dev/null || true; }
-    _tok_sum_before="$(_tok_sum "$_tok_kc")"
-    _tok_user_before="$(_tok_user "$_tok_kc")"
+    # PER USER ENTRY, not "the current context's token". MEASURED 2026-09-30: this lab's
+    # secrets/supervisor.kubeconfig holds TWO user entries (`argocd-supervisor:…`, written when
+    # 31-fetch-argocd-kubeconfig.sh runs `vcf context use argocd-supervisor:<ns>`, and `vks-cicd:…`,
+    # written by this login), and after Step 14 the CURRENT context is the ArgoCD one. Comparing
+    # "current before" with "current after" then compared two different credentials. So snapshot
+    # EVERY user entry now, and afterwards look up the one the new context uses.
+    # One line per user: <name> TAB <digest> TAB <expiry>. The token itself never leaves this
+    # function — not printed, not on argv. Renewal is decided by the DIGEST (a token re-minted in
+    # the same minute has the same displayed expiry). A user with no token gets NO line: hashing ''
+    # yields a real digest (e3b0c442…), which made "no token" look like a token.
+    _tok_snapshot() {
+      kubectl --kubeconfig "$1" config view --raw \
+        -o jsonpath='{range .users[*]}{.name}{"\t"}{.user.token}{"\n"}{end}' 2>/dev/null \
+      | while IFS=$'\t' read -r _u _t; do
+          [ -n "$_u" ] && [ -n "$_t" ] || continue
+          _e="$(jwt_exp_seconds "$_t")"
+          # Third field in kube_token_expiry's own form ("EXPIRED <t>" / "VALID <t>"), so the RENEWED
+          # line still says whether the old token had already run out.
+          if [ -z "$_e" ]; then _x='UNKNOWN'
+          elif [ "$_e" -lt "$(date -u +%s)" ]; then _x="EXPIRED $(date -u -d "@$_e" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
+          else _x="VALID $(date -u -d "@$_e" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"; fi
+          printf '%s\t%s\t%s\n' "$_u" "$(printf '%s' "$_t" | sha256sum | cut -c1-16)" "$_x"
+        done || true
+    }
+    _tok_snap_before="$(_tok_snapshot "$_tok_kc")"
     _vcf_skipped=0
     log_info "removing any pre-existing vcf context named '${VKS_CONTEXT_NAME}' (create refuses duplicates)"
     vcf context delete "$VKS_CONTEXT_NAME" -y --skip-delete-kubeconfig-context >/dev/null 2>&1 || true
@@ -400,7 +401,8 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # --- PASSWORD: presence only, never the value (security.md) ------------------------
     # VCF_CLI_VSPHERE_PASSWORD is the ONLY supported mechanism (no --password flag, no stdin form)
     # and it reaches the CLI through execve's envp, never argv. It is a documented .env key
-    # (scenario-1 §1), and load_env exports it, so no wiring is needed here either way.
+    # (scenario-1 §1). load_env exports it; the top of this arm takes it back out of the
+    # environment and _vcf_run hands it only to `vcf context create` / `use`.
     if [ -z "$_vcf_pw" ]; then
       # B207/F6 (measured 2026-08-21): this said "will PROMPT". It cannot - `vcf context create`
       # below runs with `</dev/null` UNCONDITIONALLY, so there is no tty to answer. The two lines
@@ -521,16 +523,15 @@ access (KUBECONFIG='${SUP_KUBECONFIG}' vcf context list), then re-run."
     _tok_ctx="$(kubectl --kubeconfig "$SUP_KUBECONFIG" config current-context 2>/dev/null || printf '?')"
     case "$_tok_after" in
       VALID*)
-        _tok_sum_after="$(_tok_sum "$SUP_KUBECONFIG")"
-        _tok_user_after="$(_tok_user "$SUP_KUBECONFIG")"
-        if [ "$_tok_before" = UNKNOWN ] || [ -z "$_tok_sum_before" ]; then
-          log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — obtained by this login (there was no readable token before it)."
-        elif [ -n "$_tok_sum_before" ] && [ "$_tok_sum_after" = "$_tok_sum_before" ]; then
+        _tok_user_after="$(kubectl --kubeconfig "$SUP_KUBECONFIG" config view --minify -o jsonpath='{.contexts[0].context.user}' 2>/dev/null || true)"
+        _tok_line_after="$(_tok_snapshot "$SUP_KUBECONFIG" | awk -F'\t' -v u="$_tok_user_after" '$1==u' | head -1)"
+        _tok_line_before="$(printf '%s\n' "$_tok_snap_before" | awk -F'\t' -v u="$_tok_user_after" '$1==u' | head -1)"
+        if [ -z "$_tok_line_before" ]; then
+          log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — obtained by this login (there was no token for user entry '${_tok_user_after:-?}' before it)."
+        elif [ "$(printf '%s' "$_tok_line_after" | cut -f2)" = "$(printf '%s' "$_tok_line_before" | cut -f2)" ]; then
           log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — UNCHANGED by this login (the same token, still valid)."
-        elif [ "$_tok_user_before" != "$_tok_user_after" ]; then
-          log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — obtained by this login. Not compared with the token before it: that one belonged to a different user entry ('${_tok_user_before:-?}')."
         else
-          log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — this login RENEWED it (before: ${_tok_before})."
+          log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — this login RENEWED it (before: $(printf '%s' "$_tok_line_before" | cut -f3))."
         fi
         [ "$_tok_ctx" = "$_tok_ctx_before" ] || log_info "  the current context changed: '${_tok_ctx_before}' -> '${_tok_ctx}'."
         [ "$_vcf_skipped" = 0 ] || log_info "  vcf's 'Token is still active. Skipped the token refresh' above refers to this token, as it stood after the login."
@@ -728,9 +729,12 @@ fi
 # left — and nothing said so. This reads the Supervisor kubeconfig OFFLINE (no dial, no login, no
 # SSO attempt) and prints one line. Silent for a tenant with no Supervisor kubeconfig (RULE ZERO-B),
 # and silent when that path IS $KUBECONFIG (then the check above already exercised that token).
-# The path is the vcf arm's own (not supervisor_kubeconfig(), which B210 records can resolve to a
-# guest kubeconfig), and the line names it, so a wrong file is visible rather than trusted.
-if [ "$METHOD" = kubeconfig ]; then
+# The path is the vcf arm's own — the file this login WRITES — and the line names it and its
+# context, so a reader can see which token was read (after Step 14 that is the ArgoCD user's).
+# NOT in the KinD flow (the state overlay carries VKS_STATE_KIND=1): KinD has no Supervisor, and on a
+# box that also drives a real lab the leftover file would print that lab's token into a KinD run.
+if [ "$METHOD" = kubeconfig ] && [ "${VKS_STATE_KIND:-}" != 1 ] \
+   && { [ -z "${KIND_KUBECONFIG:-}" ] || [ "$KIND_KUBECONFIG" != "$KUBECONFIG" ]; }; then
   _sup_kc="${VKS_SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
   if [ "$(readlink -f "$_sup_kc" 2>/dev/null || printf '%s' "$_sup_kc")" != "$(readlink -f "$KUBECONFIG" 2>/dev/null || printf '%s' "$KUBECONFIG")" ]; then
     _sup_note="$(supervisor_token_notice "$_sup_kc" login)" && _sup_nrc=0 || _sup_nrc=$?

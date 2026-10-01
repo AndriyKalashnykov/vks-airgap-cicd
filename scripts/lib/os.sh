@@ -2789,14 +2789,16 @@ kube_token_expiry() {
 # Threshold: SUPERVISOR_TOKEN_WARN_HOURS (whole hours, default 2; a non-integer falls back to 2).
 # shellcheck disable=SC2119  # supervisor_renew_how is called in its DEFAULT mode on purpose: every arm that names it is a FACT (expired / inside the threshold)
 supervisor_token_notice() {
-  local kc="${1:-}" mode="${2:-}" exp now left h at in
+  local kc="${1:-}" mode="${2:-}" exp now left h at in ctx
   case "$mode" in login|creds) ;; *) printf 'BUG: supervisor_token_notice mode %s\n' "$mode" >&2; return 2 ;; esac
   exp="$(kube_token_exp_epoch "$kc")"
   [ -n "$exp" ] || return 0
   h="${SUPERVISOR_TOKEN_WARN_HOURS:-2}"
   case "$h" in ''|*[!0-9]*) h=2 ;; esac
+  h=$((10#$h))   # "08" would otherwise be read as OCTAL and the arithmetic below would fail
   now="$(date -u +%s)"; left=$((exp - now))
-  at="$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
+  # GNU `date -d @N`, else BSD `date -r N` (a macOS jump box without coreutils first on PATH).
+  at="$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || date -u -r "$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
   if [ "$left" -le 0 ]; then
     [ "$mode" = login ] || return 0
     printf 'Supervisor token (%s): EXPIRED at %s — this run did NOT renew it (it checks only the guest cluster). %s\n' \
@@ -2804,18 +2806,19 @@ supervisor_token_notice() {
     return 10
   fi
   in="$((left / 3600))h$(( (left % 3600) / 60 ))m"
+  ctx="$(kubectl --kubeconfig "$kc" config current-context 2>/dev/null || printf '?')"
   if [ "$left" -lt $((h * 3600)) ]; then
     if [ "$mode" = login ]; then
-      printf 'Supervisor token (%s): expires %s (in %s) — this run did NOT renew it (it checks only the guest cluster). %s\n' \
-        "$kc" "$at" "$in" "$(supervisor_renew_how)"
+      printf 'Supervisor token (%s, context %s): expires %s (in %s) — this run did NOT renew it (it checks only the guest cluster). %s\n' \
+        "$kc" "$ctx" "$at" "$in" "$(supervisor_renew_how)"
     else
-      printf 'Supervisor token expires %s (in %s). Values this report reads from the Supervisor cannot be read after that. %s\n' \
+      printf 'Supervisor token expires %s (in %s). %s\n' \
         "$at" "$in" "$(supervisor_renew_how)"
     fi
     return 10
   elif [ "$mode" = login ]; then
-    printf 'Supervisor token (%s): valid until %s (in %s) — NOT renewed by this run, which checks only the guest cluster.\n' \
-      "$kc" "$at" "$in"
+    printf 'Supervisor token (%s, context %s): valid until %s (in %s) — NOT renewed by this run, which checks only the guest cluster.\n' \
+      "$kc" "$ctx" "$at" "$in"
   fi
 }
 

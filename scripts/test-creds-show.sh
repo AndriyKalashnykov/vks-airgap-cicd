@@ -4718,6 +4718,31 @@ else
   ok "dns-advice: no \`sudo sed\` over /etc/hosts is prescribed (no line-level rewrite is correct)"
 fi
 
+# ── the near-expiry warning reaches the REPORT (2026-09-30) ─────────────────────────────────────
+# supervisor_token_notice is unit-tested in test-vks-login-output.sh; this pins the creds.sh CALL
+# SITE, which a deleted or mis-gated line would otherwise leave every suite green over. (Reviewer
+# finding on 644d8fa.) Far from expiry it must be silent — the VALID cells above already assert the
+# command is never named there.
+_ne_now="$(date -u +%s)"
+_ne_out="$(_sso_render creds "$(_jwt $((_ne_now + 3600)))" "" || true)"
+if grep -qF 'Supervisor token expires' <<< "$_ne_out" && grep -qF 'make creds-renew' <<< "$_ne_out"; then
+  ok "near-expiry: 1h left -> the report warns and names make creds-renew"
+else
+  bad "near-expiry: a token 1h from expiry must produce the warning in creds.sh's output"
+fi
+_ne_out="$(_sso_render creds "$(_jwt $((_ne_now + 36000)))" "" || true)"
+if grep -qF 'Supervisor token expires' <<< "$_ne_out"; then
+  bad "near-expiry: a token 10h from expiry must NOT warn (default threshold 2h)"
+else
+  ok "near-expiry: 10h left -> no warning"
+fi
+_ne_out="$(_sso_render creds "$(_jwt $((_ne_now + 36000)))" "" 'SUPERVISOR_TOKEN_WARN_HOURS=12' || true)"
+if grep -qF 'Supervisor token expires' <<< "$_ne_out"; then
+  ok "near-expiry: SUPERVISOR_TOKEN_WARN_HOURS from .env is honoured"
+else
+  bad "near-expiry: SUPERVISOR_TOKEN_WARN_HOURS=12 in .env must make a 10h token warn"
+fi
+
 if [ "$fail" != 0 ]; then
   printf '\n  %s assertion(s) ran. The fail-fast block stops later STATES once one fails, so cases\n' "$_ran" >&2
   printf '  after the first failure did NOT run -- fix the failure above and re-run for full coverage.\n' >&2
