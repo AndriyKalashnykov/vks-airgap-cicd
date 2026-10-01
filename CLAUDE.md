@@ -1062,54 +1062,50 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-28 — macOS jump box: plain `make`, blocked PyPI, Rosetta, env-check guidance
+## ▶️ HANDOFF 2026-10-01 — Supervisor-token awareness in `vks-login` / `creds` (#1340)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### What landed (#1326–#1332), all driven by an operator's corporate Mac
+### What landed (#1340)
 
-- **#1327:** `GNUmakefile` — Apple's `/usr/bin/make` 3.81 hands every goal once to Homebrew `gmake`
-  (brew-installs it if missing); make >= 3.82 just includes the Makefile. `test-make-version-guard`
-  covers it by simulating 3.81 (`.FEATURES` override).
-- **#1326/#1328/#1330/#1331:** `make deps` succeeds when only ci-only lint tools cannot download.
-  `deps-mise` probes `pypi.org` AND `files.pythonhosted.org` (5s, `PYPI_PROBE_TIMEOUT`) before a
-  missing PyPI-backed ci-only tool (yamllint), skips it via `MISE_DISABLE_TOOLS`, and warns once.
-  The operator's network: `pypi.org` answers, `files.pythonhosted.org` times out.
-  `test-deps-mise.sh` simulates it with a fake curl (8 cases).
-  `pkg_install` on brew passes only missing formulas.
-- **#1329:** `make deps` switches an existing QEMU podman machine to Rosetta (drop-in, restart only
-  when no container runs, verify `.Rosetta`).
-- **#1332:** `env-check` with `VKS_AUTH_METHOD` unset and no kubeconfig names the three paths (tenant,
-  KinD, lab login inputs still missing). With `vcf` it requires `VCF_CLI_VSPHERE_PASSWORD`.
-  `tkn`/`argocd` version probes are client-only (bare forms dialled the cluster: 20s/9s).
+- **Plain `make vks-login` renews NOTHING** on `VKS_AUTH_METHOD=kubeconfig` (what scenario-1 Step 6
+  leaves in `.env`). It now ends with one offline line: the Supervisor token's file, context and
+  expiry, "NOT renewed by this run", plus `make creds-renew` when expired or inside
+  `SUPERVISOR_TOKEN_WARN_HOURS` (new, default 2). `make creds` warns only inside that window.
+  Silent for a tenant (no Supervisor kubeconfig) and in the KinD flow.
+- **`vcf` login path:**
+  - dies when `vcf context use` leaves another context current;
+  - RENEWED/UNCHANGED compare the token of the user entry the NEW context uses. The lab's
+    `secrets/supervisor.kubeconfig` holds TWO users (`argocd-supervisor:…`, `vks-cicd:…`);
+  - `VCF_CLI_VSPHERE_PASSWORD` is unset after `load_env` and reaches only `vcf context create/use`,
+    never empty.
+- Live-verified on the lab, including the after-Step-14 state (the ArgoCD context current).
 
-### State (MEASURED 2026-09-28)
+### State (MEASURED 2026-10-01 ~01:45Z)
 
-- **Scaleway Mac** `m1@51.159.120.46`: scratch removed; podman machine left ON Rosetta (our drop-in
-  `~/.config/containers/containers.conf.d/50-vks-rosetta.conf`); `/etc/hosts` clean.
-- Linux: no KinD cluster of ours, no worktrees, `main` clean.
+- **Lab:** up, `make creds` 12/12 serving. Supervisor token valid to **2026-10-01T11:27Z**.
+- **Restart at 23:26Z:** owner-approved `make lab-restart` by the nested-vsphere-lab session, not a
+  fault. The guest nodes rebooted at 23:44Z; that is where the restart counts and the transient
+  Headlamp "Unhealthy" warnings come from.
+- The orphaned `vks-walkbox-ubuntu` VM was removed (`walkbox-vm-down` in nested-vsphere-lab).
+  Only `esxi01` runs.
 
 ### 🔴 DISTRUST FIRST
 
 | instrument | what it did |
 |---|---|
-| **a simulated network you INVENTED** | blocking both PyPI hosts passed; the operator's network blocks only the wheel host. Reproduce the MEASURED condition. |
-| **forcing a failure with a bad version** | fails in ms, so it never measured the 47s timeout cost the operator paid |
-| **a test run with bare `bash` on the Mac** | BSD `sed`, no mise tools on PATH: `sed -i` tests and `test-creds-show` fail for reasons that are not the product. Run via `make`, or put gnubin + mise bin-paths first. |
-| **`gate \| tail` in an `&&` chain** | committed a RED test once this session. Read the rc on its own line. |
-| **editing guarded files through Bash** | the adversary-first hook sees only Edit/Write. |
+| **Headlamp "Unhealthy"/"BackOff" events** | show the last hour, so they outlive a lab restart that has already healed. Check restart time and readiness before diagnosing. |
+| **a probe that pipes a JSON body through `--jq` inside `bash -c "..."`** | the escaped quotes broke, and the poll printed CI counts with an empty merge state. Read `mergeStateStatus` on its own. |
+| **`make static-check` duration** | ~13 min locally now (183 tests), not the ~77 s quoted elsewhere. Do not foreground it under a 10-min tool timeout. |
 
 ### NOT done — next work, ranked
 
-1. **B486** — walk the *Verify TLS* block once on the lab (one sudo `/etc/hosts` edit): it is the only
-   check that the argocd CLI accepts the CA:FALSE leaf via `--server-crt`. Then F6 (VIP stability).
-2. **B745** — §5's `argocd-auth-check: OK` after `update-password` reads the OLD password.
-3. **Mac-only (B740):** a Mac without Rosetta 2 (`make deps` prints the `softwareupdate` line, not
-   run; untestable on the Scaleway Mac, which has Rosetta), the `sudo -b` prompt.
-4. **B743** (mutable version tag), **B744** (31 repoints 30's kubeconfig context), **B724**.
-5. macOS only: `make: *** [_delegate] Error 2` follows every failing target until `make shell-init`
-   puts GNU make first; 9 tests use GNU-only `sed -i` (fine under `make`).
+1. **B746 / B747 / B748** (filed 2026-09-30, open): unauthenticated Gitea/headlamp creds rows;
+   `make deps` never raises a too-old mise; `trivy-config` lost its PR path.
+2. **B486** — walk the *Verify TLS* block on the lab; then F6 (VIP stability).
+3. **B745** — §5's `argocd-auth-check: OK` after `update-password` reads the OLD password.
+4. **B740** (Mac-only), **B743**, **B744**, **B724** — unchanged from the previous handoff.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
