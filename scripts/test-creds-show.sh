@@ -1819,7 +1819,7 @@ fi
 # THAT control red. This one keeps only the exact defective literal B548 adjudicated.
 if printf '%s' "$_ua" | grep -qE 'Re-run: make vks-login'; then
   bad "the arm prescribes a bare 'make vks-login' again. MEASURED 2026-09-07: under
-      VKS_AUTH_METHOD=kubeconfig that renews the GUEST kubeconfig and does NOTHING for the
+      VKS_AUTH_METHOD=kubeconfig that only checks the GUEST cluster and does NOTHING for the
       Supervisor — it is a no-op for the very failure it is printed for."
 else
   ok "B548: ...and has not regressed to the no-op remedy"
@@ -4716,6 +4716,31 @@ if grep -qE "printf.*sudo sed.*etc/hosts" <<< "$(grep -vE '^[[:space:]]*#' "${_C
       "measured: it repoints the localhost line, takes unrelated names with it, and is a silent no-op on TAB and IPv6 lines"
 else
   ok "dns-advice: no \`sudo sed\` over /etc/hosts is prescribed (no line-level rewrite is correct)"
+fi
+
+# ── the near-expiry warning reaches the REPORT (2026-09-30) ─────────────────────────────────────
+# supervisor_token_notice is unit-tested in test-vks-login-output.sh; this pins the creds.sh CALL
+# SITE, which a deleted or mis-gated line would otherwise leave every suite green over. (Reviewer
+# finding on 644d8fa.) Far from expiry it must be silent — the VALID cells above already assert the
+# command is never named there.
+_ne_now="$(date -u +%s)"
+_ne_out="$(_sso_render creds "$(_jwt $((_ne_now + 3600)))" "" || true)"
+if grep -qF 'Supervisor token expires' <<< "$_ne_out" && grep -qF 'make creds-renew' <<< "$_ne_out"; then
+  ok "near-expiry: 1h left -> the report warns and names make creds-renew"
+else
+  bad "near-expiry: a token 1h from expiry must produce the warning in creds.sh's output"
+fi
+_ne_out="$(_sso_render creds "$(_jwt $((_ne_now + 36000)))" "" || true)"
+if grep -qF 'Supervisor token expires' <<< "$_ne_out"; then
+  bad "near-expiry: a token 10h from expiry must NOT warn (default threshold 2h)"
+else
+  ok "near-expiry: 10h left -> no warning"
+fi
+_ne_out="$(_sso_render creds "$(_jwt $((_ne_now + 36000)))" "" 'SUPERVISOR_TOKEN_WARN_HOURS=12' || true)"
+if grep -qF 'Supervisor token expires' <<< "$_ne_out"; then
+  ok "near-expiry: SUPERVISOR_TOKEN_WARN_HOURS from .env is honoured"
+else
+  bad "near-expiry: SUPERVISOR_TOKEN_WARN_HOURS=12 in .env must make a 10h token warn"
 fi
 
 if [ "$fail" != 0 ]; then

@@ -64,10 +64,12 @@ else ok "flag-rejected: an endpoint error is not a flag rejection"; fi
 mkdir -p "$T/bin"
 cat > "$T/bin/vcf" <<'STUB'
 #!/usr/bin/env bash
+[ -n "${STUB_PWLOG:-}" ] && printf 'vcf %s %s pw=%s\n' "$1" "$2" "${VCF_CLI_VSPHERE_PASSWORD+set:${VCF_CLI_VSPHERE_PASSWORD}}" >> "$STUB_PWLOG"
 case "$1 $2" in
   "context delete") exit 0 ;;
   "context create")
     [ -n "${STUB_NEWTOK:-}" ] && printf '%s' "$STUB_NEWTOK" > "$STUB_TOKFILE"
+    [ -n "${STUB_NEWUSER:-}" ] && printf '%s' "$STUB_NEWUSER" > "$STUB_USERFILE"
     case "${STUB_CREATE:-ok}" in
       ok)      echo "Logged in successfully." >&2; exit 0 ;;
       generic) echo "[x] : Invalid vSphere Supervisor endpoint" >&2; exit 7 ;;
@@ -83,10 +85,15 @@ echo "STUB vcf: unexpected argv: $*" >&2; exit 64
 STUB
 cat > "$T/bin/kubectl" <<'STUB'
 #!/usr/bin/env bash
+[ -n "${STUB_PWLOG:-}" ] && [ -n "${VCF_CLI_VSPHERE_PASSWORD+x}" ] && printf 'kubectl SAW the password: %s\n' "$*" >> "$STUB_PWLOG"
 case "$*" in
   *"config current-context"*) printf '%s\n' "${STUB_CUR:-}"; exit 0 ;;
+  *"context.user"*) cat "${STUB_USERFILE:-/nonexistent}" 2>/dev/null || printf 'stub-user'; exit 0 ;;
+  *"range .users"*) [ -f "${STUB_TOKFILE:-/nonexistent}" ] && printf '%s\t%s\n' "$(cat "${STUB_USERFILE:-/nonexistent}" 2>/dev/null || printf 'stub-user')" "$(cat "$STUB_TOKFILE")"
+                    [ -n "${STUB_OTHERUSER:-}" ] && printf '%s\t%s\n' "${STUB_OTHERUSER%%=*}" "${STUB_OTHERUSER#*=}"; exit 0 ;;
   *"config view"*) cat "${STUB_TOKFILE:-/nonexistent}" 2>/dev/null; exit 0 ;;
   *"get ns"*) exit 0 ;;
+  *"cluster-info"*) exit "${STUB_CLUSTERINFO_RC:-0}" ;;
 esac
 exit 0
 STUB
@@ -146,9 +153,14 @@ else bad "script: use's captured stderr was NOT replayed"; fi
 out="$(run insecure STUB_USE_ERR="$BROKEN" STUB_CUR="$WANT")"
 if grep -qF 'stop the login' <<< "$out"; then bad "script: the BROKEN-registry variant got the reassuring note"
 else ok "script: the BROKEN-registry variant gets no note"; fi
-out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="other:ctx")"
+# ⚠️ A WRONG CONTEXT IS NOW FATAL (2026-09-30). `get ns` is cluster-scoped and ignores -n, so it
+# could not see that `use` left a DIFFERENT context current; this run used to exit 0 here.
+out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="other:ctx")"; rc=$?
 if grep -qF 'stop the login' <<< "$out"; then bad "script: note printed although the context is wrong"
 else ok "script: wrong current-context -> no note"; fi
+if [ "$rc" != 0 ] && grep -qF "did not select that context" <<< "$out" && grep -qF "'other:ctx'" <<< "$out" \
+   && ! grep -qF 'Supervisor context verified' <<< "$out"; then ok "script: 'use' left another context current -> FATAL, names it (rc=$rc)"
+else bad "script: a wrong current-context after 'use' must die and name it (rc=$rc)"; fi
 
 # ── 4. the token line (2026-09-30): vcf's "Skipped the token refresh" was read as "nothing was
 # renewed" while the expiry had moved. The script now MEASURES before/after and says which.
@@ -182,5 +194,105 @@ rm -f "$TF"
 out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT" STUB_TOKFILE="$TF")"
 if grep -qF 'its expiry could not be read' <<< "$out" && ! grep -qE 'RENEWED|UNCHANGED|valid until' <<< "$out"; then ok "token: no readable token -> says so, claims nothing"
 else bad "token: an unreadable token must claim nothing [$(grep -F 'Supervisor token' <<< "$out" || echo none)]"; fi
+
+# ── 5. the password reaches ONLY vcf (2026-09-30) ────────────────────────────────────────────────
+# load_env exports every .env key, so it used to sit in every kubectl's /proc/<pid>/environ.
+PW="$T/pwlog"
+: > "$PW"; out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT" STUB_PWLOG="$PW")"
+if grep -qF 'kubectl SAW the password' "$PW"; then bad "password: kubectl saw VCF_CLI_VSPHERE_PASSWORD [$(grep -m1 kubectl "$PW")]"
+else ok "password: no kubectl call sees it"; fi
+if grep -qx 'vcf context create pw=set:x' "$PW" && grep -qx 'vcf context use pw=set:x' "$PW"; then ok "password: vcf create AND use receive it"
+else bad "password: vcf create/use must receive it [$(tr '\n' ' ' < "$PW")]"; fi
+if grep -qx 'vcf context delete pw=' "$PW"; then ok "password: the context delete does not receive it"
+else bad "password: the delete should run without it [$(tr '\n' ' ' < "$PW")]"; fi
+# EMPTY must stay UNSET for vcf: an empty password is a failed SSO bind, which counts toward lockout.
+: > "$PW"; out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT" STUB_PWLOG="$PW" VCF_CLI_VSPHERE_PASSWORD=)"
+if grep -qx 'vcf context create pw=' "$PW"; then ok "password: an empty value is NOT passed to vcf (unset, not empty)"
+else bad "password: an empty value reached vcf [$(tr '\n' ' ' < "$PW")]"; fi
+if grep -qF 'VCF_CLI_VSPHERE_PASSWORD is not set' <<< "$out"; then ok "password: empty -> the not-set warning still prints"
+else bad "password: the not-set warning is gone"; fi
+
+# ── 6. RENEWED compares the SAME user entry's token, before and after (2026-09-30) ───────────────
+# The lab's supervisor.kubeconfig holds TWO user entries, and after Step 14 the CURRENT context is
+# the ArgoCD one. The before value must be the token of the user the NEW context uses.
+UF="$T/user"
+# (a) current user before = argocd; the vks user's token did not exist -> "obtained", never RENEWED
+printf '%s' "$(_jwt $((_now + 7200)))" > "$TF"; printf 'argocd-supervisor:admin@x' > "$UF"
+out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT" STUB_TOKFILE="$TF" STUB_USERFILE="$UF" \
+        STUB_NEWTOK="$(_jwt $((_now + 36000)))" STUB_NEWUSER='vks-test:admin@x')"
+if grep -qF "no token for user entry 'vks-test:admin@x' before it" <<< "$out" && ! grep -qE 'RENEWED|UNCHANGED' <<< "$out"; then ok "token: no earlier token for the new context's user -> 'obtained', never RENEWED"
+else bad "token: a first token for this user entry must not claim RENEWED [$(grep -F 'Supervisor token' <<< "$out" || echo none)]"; fi
+# (b) the vks user HAD a still-valid token (a non-current entry), vcf kept it -> UNCHANGED, not "obtained"
+_keep="$(_jwt $((_now + 7200)))"
+printf '%s' "$(_jwt $((_now + 9000)))" > "$TF"; printf 'argocd-supervisor:admin@x' > "$UF"
+out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT" STUB_TOKFILE="$TF" STUB_USERFILE="$UF" \
+        STUB_OTHERUSER="vks-test:admin@x=$_keep" STUB_NEWTOK="$_keep" STUB_NEWUSER='vks-test:admin@x')"
+if grep -qF 'UNCHANGED by this login' <<< "$out" && ! grep -qE 'RENEWED|obtained' <<< "$out"; then ok "token: the new context's user kept its token -> UNCHANGED, even though the current context changed"
+else bad "token: a kept token on a non-current user entry must read UNCHANGED [$(grep -F 'Supervisor token' <<< "$out" || echo none)]"; fi
+# (c) same user, new token -> RENEWED with THAT user's old expiry
+printf '%s' "$(_jwt $((_now + 7200)))" > "$TF"; printf 'vks-test:admin@x' > "$UF"
+out="$(run insecure STUB_USE_ERR="$BENIGN" STUB_CUR="$WANT" STUB_TOKFILE="$TF" STUB_USERFILE="$UF" \
+        STUB_NEWTOK="$(_jwt $((_now + 36000)))" STUB_NEWUSER='vks-test:admin@x')"
+if grep -qF 'this login RENEWED it (before: VALID 20' <<< "$out"; then ok "token: same user entry, new token -> RENEWED, with that user's old expiry"
+else bad "token: same user entry + new token must say RENEWED [$(grep -F 'Supervisor token' <<< "$out" || echo none)]"; fi
+rm -f "$UF"
+
+# ── 7. supervisor_token_notice, pure (lib/os.sh) ─────────────────────────────────────────────────
+note() { ( PATH="$T/bin:$PATH" STUB_TOKFILE="$TF" SUPERVISOR_TOKEN_WARN_HOURS="${WH:-2}" supervisor_token_notice "$@" ); }
+K="$T/sup.kc"
+printf '%s' "$(_jwt $((_now + 36000)))" > "$TF"
+o="$(note "$K" creds)"; r=$?
+if [ -z "$o" ] && [ "$r" = 0 ]; then ok "notice: creds, 10h left -> silent"; else bad "notice: creds far from expiry must be silent [$o] rc=$r"; fi
+o="$(note "$K" login)"; r=$?
+if [ "$r" = 0 ] && grep -qF 'NOT renewed by this run' <<< "$o" && ! grep -qF 'creds-renew' <<< "$o"; then ok "notice: login, 10h left -> says NOT renewed, no command"
+else bad "notice: login far from expiry [$o] rc=$r"; fi
+printf '%s' "$(_jwt $((_now + 3600)))" > "$TF"
+o="$(note "$K" creds)"; r=$?
+if [ "$r" = 10 ] && grep -qF 'make creds-renew' <<< "$o"; then ok "notice: creds, 1h left -> warns + names make creds-renew (rc 10)"
+else bad "notice: creds near expiry must warn [$o] rc=$r"; fi
+o="$(note "$K" login)"; r=$?
+if [ "$r" = 10 ] && grep -qF 'did NOT renew it' <<< "$o" && grep -qF 'make creds-renew' <<< "$o"; then ok "notice: login, 1h left -> warns + command (rc 10)"
+else bad "notice: login near expiry [$o] rc=$r"; fi
+o="$(WH=abc note "$K" creds)"; r=$?
+if [ "$r" = 10 ]; then ok "notice: a non-integer threshold falls back to 2h"; else bad "notice: WARN_HOURS=abc must fall back to 2 [$o] rc=$r"; fi
+o="$(WH=08 note "$K" creds)"; r=$?
+if [ "$r" = 10 ] && grep -qF 'make creds-renew' <<< "$o"; then ok "notice: a leading-zero threshold (08) is decimal, not an octal error"
+else bad "notice: WARN_HOURS=08 must mean 8 hours [$o] rc=$r"; fi
+o="$(WH=0 note "$K" creds)"; r=$?
+if [ -z "$o" ]; then ok "notice: threshold 0 -> never warns early"; else bad "notice: WARN_HOURS=0 must stay silent [$o]"; fi
+printf '%s' "$(_jwt $((_now - 60)))" > "$TF"
+o="$(note "$K" creds)"; r=$?
+if [ -z "$o" ]; then ok "notice: creds, EXPIRED -> silent (the report has its own expired banner)"; else bad "notice: creds must not double the expired banner [$o]"; fi
+o="$(note "$K" login)"; r=$?
+if [ "$r" = 10 ] && grep -qF 'EXPIRED at' <<< "$o"; then ok "notice: login, EXPIRED -> warns"; else bad "notice: login expired [$o] rc=$r"; fi
+o="$(note "$T/absent.kc" login)"; r=$?
+if [ -z "$o" ] && [ "$r" = 0 ]; then ok "notice: no Supervisor kubeconfig (a tenant) -> silent"; else bad "notice: absent file must be silent [$o]"; fi
+rm -f "$TF"
+o="$(note "$K" login)"
+if [ -z "$o" ]; then ok "notice: no readable token -> silent"; else bad "notice: unreadable token must be silent [$o]"; fi
+if note "$K" bogus >/dev/null 2>&1; then bad "notice: an unknown mode must be refused"
+else ok "notice: an unknown mode is refused"; fi
+
+# ── 8. the kubeconfig arm now says what it did NOT do ────────────────────────────────────────────
+printf 'apiVersion: v1\n' > "$T/guest.kc"
+printf '%s' "$(_jwt $((_now + 3600)))" > "$TF"
+out="$(run insecure VKS_AUTH_METHOD=kubeconfig STUB_CUR=guest-ctx STUB_TOKFILE="$TF")"; rc=$?
+if [ "$rc" = 0 ] && grep -qF 'did NOT renew it' <<< "$out" && grep -qF "$T/sup.kc" <<< "$out" && grep -qF 'make creds-renew' <<< "$out"; then
+  ok "kubeconfig arm: 1h left -> names the file, says NOT renewed, gives the command"
+else bad "kubeconfig arm: must warn about the Supervisor token (rc=$rc) [$(grep -F 'Supervisor token' <<< "$out" || echo none)]"; fi
+if grep -qE 'vcf context (create|use)' <<< "$out"; then bad "kubeconfig arm: must not run vcf"; else ok "kubeconfig arm: runs no vcf login"; fi
+out="$(run insecure VKS_AUTH_METHOD=kubeconfig STUB_CUR=guest-ctx STUB_TOKFILE="$TF" VKS_SUPERVISOR_KUBECONFIG="$T/absent.kc")"; rc=$?
+if [ "$rc" = 0 ] && ! grep -qF 'Supervisor token' <<< "$out"; then ok "kubeconfig arm: no Supervisor kubeconfig (a tenant) -> nothing extra"
+else bad "kubeconfig arm: a tenant must see no Supervisor line (rc=$rc)"; fi
+out="$(run insecure VKS_AUTH_METHOD=kubeconfig STUB_CUR=guest-ctx STUB_TOKFILE="$TF" VKS_SUPERVISOR_KUBECONFIG="$T/guest.kc")"
+if ! grep -qF 'Supervisor token' <<< "$out"; then ok "kubeconfig arm: Supervisor path == KUBECONFIG -> no line (already exercised)"
+else bad "kubeconfig arm: must stay silent when the Supervisor file IS \$KUBECONFIG"; fi
+out="$(run insecure VKS_AUTH_METHOD=kubeconfig STUB_CUR=guest-ctx STUB_TOKFILE="$TF" VKS_STATE_KIND=1)"
+if ! grep -qF 'Supervisor token' <<< "$out"; then ok "kubeconfig arm: KinD flow (VKS_STATE_KIND=1) -> no line about some lab's token"
+else bad "kubeconfig arm: the KinD flow must not report a Supervisor token"; fi
+out="$(run insecure VKS_AUTH_METHOD=kubeconfig STUB_CUR=guest-ctx STUB_TOKFILE="$TF" KIND_KUBECONFIG="$T/guest.kc")"
+if ! grep -qF 'Supervisor token' <<< "$out"; then ok "kubeconfig arm: KUBECONFIG is the KinD one -> no line"
+else bad "kubeconfig arm: KUBECONFIG == KIND_KUBECONFIG must stay silent"; fi
+rm -f "$TF"
 
 if [ "$fail" = 0 ]; then echo "test-vks-login-output: ALL PASS ($n)"; else echo "test-vks-login-output: FAILED" >&2; exit 1; fi

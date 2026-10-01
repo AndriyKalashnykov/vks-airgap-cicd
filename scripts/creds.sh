@@ -1532,6 +1532,14 @@ printf '    flow         : %s\n' "$_flow"
 # To revisit: give it a real discriminator (does the server match VKS_STATE_SERVER? does the context
 # resolve a Cluster CRD?) and label it only when the answer is known.
 printf '    cluster      : %s\n' "$_cluster"
+# ── the Supervisor token, BEFORE it expires (2026-09-30) ─────────────────────────────────────────
+# MEASURED: with 1h40m left this report said nothing; it spoke only after expiry, when rows had
+# already stopped reading. supervisor_token_notice (lib/os.sh) is OFFLINE (reads the file, never
+# dials, never logs in), speaks only for a VALID token inside SUPERVISOR_TOKEN_WARN_HOURS, and is
+# silent for a tenant with no Supervisor kubeconfig. EXPIRED keeps its own banner below — no double.
+# Same file as the expiry probe above (supervisor_kubeconfig), so the two cannot disagree.
+_sup_near="$(supervisor_token_notice "$(supervisor_kubeconfig 2>/dev/null || true)" creds)" || true
+[ -z "$_sup_near" ] || printf '    ⚠️  %s\n' "$_sup_near"
 # The Supervisor's token gates FIVE values below. Say so once, here, with the one remedy -- rather
 # than repeating cause + recipe on each row that lost a value (measured: 264 chars, printed twice).
 # `_renew_how` is the single source of the recipe; do not hand-write it.
