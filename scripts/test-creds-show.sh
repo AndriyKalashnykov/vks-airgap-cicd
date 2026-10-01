@@ -1819,7 +1819,7 @@ fi
 # THAT control red. This one keeps only the exact defective literal B548 adjudicated.
 if printf '%s' "$_ua" | grep -qE 'Re-run: make vks-login'; then
   bad "the arm prescribes a bare 'make vks-login' again. MEASURED 2026-09-07: under
-      VKS_AUTH_METHOD=kubeconfig that renews the GUEST kubeconfig and does NOTHING for the
+      VKS_AUTH_METHOD=kubeconfig that only checks the GUEST cluster and does NOTHING for the
       Supervisor — it is a no-op for the very failure it is printed for."
 else
   ok "B548: ...and has not regressed to the no-op remedy"

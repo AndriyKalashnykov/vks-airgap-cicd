@@ -676,9 +676,10 @@ set -a; . ./.env; set +a
 
 **Expect:** `wrote to` — then `KUBECONFIG`, `VKS_CONTEXT` and `VKS_AUTH_METHOD=kubeconfig`.
 
-⚠️ **`make vks-login` renews the GUEST kubeconfig.** The Supervisor one expires too, and Steps
-10 and 14 need it — `kubectl` then says *"the server has asked for the client to provide
-credentials"*. Renew it with:
+⚠️ **From here on, a plain `make vks-login` renews NOTHING.** `.env` is now on
+`VKS_AUTH_METHOD=kubeconfig`, so it only checks that the guest cluster answers, then prints when the
+Supervisor token expires. That token runs out (Steps 10 and 14 need it — `kubectl` then says *"the
+server has asked for the client to provide credentials"*). Renew it with:
 
 ```bash
 set -a; . ./.env; set +a

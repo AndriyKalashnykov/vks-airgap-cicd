@@ -56,6 +56,15 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # NOT end-to-end validated against a real VKS lab in this repo — the shape is from
     # primary sources; confirm on a lab before relying on it (see the TODO below).
     require_cmd vcf "install the VCF CLI (make install-vcf-clis) on this jump box"
+    # SCOPED TO THE vcf CALLS. load_env exports every .env key (`set -a`), so the SSO password sat in
+    # the environment of every kubectl/mktemp this script spawns, readable in /proc/<pid>/environ.
+    # Take the value, drop the export, and hand it back ONLY to `vcf context create` / `use` through
+    # a prefix assignment (execve envp, never argv). `env NAME=VALUE vcf` is NOT used: that puts the
+    # value in env's own argv. An EMPTY value is never passed on — an empty password would be a
+    # failed SSO bind, and those count toward the lockout.
+    _vcf_pw="${VCF_CLI_VSPHERE_PASSWORD:-}"
+    unset VCF_CLI_VSPHERE_PASSWORD
+    _vcf_run() { if [ -n "$_vcf_pw" ]; then VCF_CLI_VSPHERE_PASSWORD="$_vcf_pw" "$@"; else "$@"; fi; }
     : "${SUPERVISOR_HOST:?set SUPERVISOR_HOST in .env (Supervisor endpoint, host/IP, no scheme)}"
     : "${VKS_CONTEXT_NAME:?set VKS_CONTEXT_NAME in .env (the vcf context NAME, passed positionally)}"
     # NOTE: VKS_NAMESPACE is deliberately NOT required here — it is discovered after the context
@@ -371,9 +380,19 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     _tok_ctx_before="$(kubectl --kubeconfig "$_tok_kc" config current-context 2>/dev/null || printf '?')"
     # Renewal is decided by the TOKEN itself (a digest, never printed), not by the displayed expiry,
     # which has minute granularity: a token re-minted within the same minute would read "unchanged".
-    _tok_sum() { kubectl --kubeconfig "$1" config view --raw --minify -o jsonpath='{.users[0].user.token}' 2>/dev/null \
-                   | sha256sum | cut -c1-16; }
-    _tok_sum_before="$(_tok_sum "$_tok_kc" || true)"
+    # ⚠️ EMPTY IN, EMPTY OUT. `printf '' | sha256sum` is a real digest (e3b0c442…), so hashing a
+    # missing token made "no token" look like a token and the `-n` guard below could never fail.
+    _tok_sum() { local _t
+                 _t="$(kubectl --kubeconfig "$1" config view --raw --minify -o jsonpath='{.users[0].user.token}' 2>/dev/null || true)"
+                 [ -n "$_t" ] || return 0
+                 printf '%s' "$_t" | sha256sum | cut -c1-16; }
+    # WHICH user entry the current context uses. MEASURED 2026-09-30: this lab's
+    # secrets/supervisor.kubeconfig holds TWO user entries (`argocd-supervisor:…` and `vks-cicd:…`,
+    # written by 31-fetch-argocd-kubeconfig.sh and by this login), so a before/after compare across a
+    # context change can be two DIFFERENT credentials. Compare only like with like.
+    _tok_user() { kubectl --kubeconfig "$1" config view --minify -o jsonpath='{.contexts[0].context.user}' 2>/dev/null || true; }
+    _tok_sum_before="$(_tok_sum "$_tok_kc")"
+    _tok_user_before="$(_tok_user "$_tok_kc")"
     _vcf_skipped=0
     log_info "removing any pre-existing vcf context named '${VKS_CONTEXT_NAME}' (create refuses duplicates)"
     vcf context delete "$VKS_CONTEXT_NAME" -y --skip-delete-kubeconfig-context >/dev/null 2>&1 || true
@@ -382,7 +401,7 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # VCF_CLI_VSPHERE_PASSWORD is the ONLY supported mechanism (no --password flag, no stdin form)
     # and it reaches the CLI through execve's envp, never argv. It is a documented .env key
     # (scenario-1 §1), and load_env exports it, so no wiring is needed here either way.
-    if [ -z "${VCF_CLI_VSPHERE_PASSWORD:-}" ]; then
+    if [ -z "$_vcf_pw" ]; then
       # B207/F6 (measured 2026-08-21): this said "will PROMPT". It cannot - `vcf context create`
       # below runs with `</dev/null` UNCONDITIONALLY, so there is no tty to answer. The two lines
       # contradicted each other; whichever you touch, fix the other.
@@ -421,7 +440,7 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # order of `</dev/null` and `2>` does not matter to it (B734 fixed its character class).
     _vcf_err="$(mktemp)"; trap 'rm -f "$_vcf_err"' EXIT
     KUBECONFIG="$SUP_KUBECONFIG" VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
-      vcf context create "${create_args[@]}" </dev/null 2>"$_vcf_err" && _vcf_rc=0 || _vcf_rc=$?
+      _vcf_run vcf context create "${create_args[@]}" </dev/null 2>"$_vcf_err" && _vcf_rc=0 || _vcf_rc=$?
     cat "$_vcf_err" >&2
     grep -qF 'Skipped the token refresh' "$_vcf_err" 2>/dev/null && _vcf_skipped=1
     # The exit is UNCONDITIONAL on failure. `&& || ` switches set -e off for the call above, so
@@ -472,7 +491,7 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # same record names. Only the artifact settles it.
     : > "$_vcf_err"
     KUBECONFIG="$SUP_KUBECONFIG" VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
-      vcf context use "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}" </dev/null 2>"$_vcf_err" \
+      _vcf_run vcf context use "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}" </dev/null 2>"$_vcf_err" \
       && _vcf_rc=0 || _vcf_rc=$?
     cat "$_vcf_err" >&2
     grep -qF 'Skipped the token refresh' "$_vcf_err" 2>/dev/null && _vcf_skipped=1
@@ -483,19 +502,33 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # `vcf context list`'s `.iscurrent`: that lives in ~/.config/vcf/config.yaml, a DIFFERENT
     # store from the kubeconfig, and the two were MEASURED disagreeing — `iscurrent=true` for a
     # kubecontext absent from the very file the same record names. Only a read settles it.
+    # ⚠️ TWO checks, because one of them cannot see the failure it is here for. `get ns` is
+    # cluster-scoped, so `-n` is IGNORED: it proves that SOME context in the file can talk to the
+    # Supervisor, not that '${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}' was activated. A `use` that failed
+    # for a wrong or unauthorised namespace left a previous context current and still passed it.
+    # The context NAME is the discriminator; vcf_use_plugin_note_ok already relies on the same form.
     kubectl --kubeconfig "$SUP_KUBECONFIG" -n "$VKS_NAMESPACE" get ns >/dev/null 2>&1 \
       || die "the Supervisor context did not come up: ${SUP_KUBECONFIG} cannot list namespaces in
 '${VKS_NAMESPACE}'. Inspect: KUBECONFIG='${SUP_KUBECONFIG}' vcf context list"
-    log_info "Supervisor context verified via ${SUP_KUBECONFIG}"
+    _vcf_want="${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}"
+    _vcf_now="$(kubectl --kubeconfig "$SUP_KUBECONFIG" config current-context 2>/dev/null || true)"
+    [ "$_vcf_now" = "$_vcf_want" ] \
+      || die "'vcf context use ${_vcf_want}' did not select that context: ${SUP_KUBECONFIG} is on
+'${_vcf_now:-<none>}'. Check VKS_NAMESPACE='${VKS_NAMESPACE}' is a vSphere Namespace this user can
+access (KUBECONFIG='${SUP_KUBECONFIG}' vcf context list), then re-run."
+    log_info "Supervisor context verified via ${SUP_KUBECONFIG} (current context '${_vcf_now}')"
     _tok_after="$(kube_token_expiry "$SUP_KUBECONFIG" 2>/dev/null || printf 'UNKNOWN')"
     _tok_ctx="$(kubectl --kubeconfig "$SUP_KUBECONFIG" config current-context 2>/dev/null || printf '?')"
     case "$_tok_after" in
       VALID*)
-        _tok_sum_after="$(_tok_sum "$SUP_KUBECONFIG" || true)"
-        if [ "$_tok_before" = UNKNOWN ]; then
+        _tok_sum_after="$(_tok_sum "$SUP_KUBECONFIG")"
+        _tok_user_after="$(_tok_user "$SUP_KUBECONFIG")"
+        if [ "$_tok_before" = UNKNOWN ] || [ -z "$_tok_sum_before" ]; then
           log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — obtained by this login (there was no readable token before it)."
         elif [ -n "$_tok_sum_before" ] && [ "$_tok_sum_after" = "$_tok_sum_before" ]; then
           log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — UNCHANGED by this login (the same token, still valid)."
+        elif [ "$_tok_user_before" != "$_tok_user_after" ]; then
+          log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — obtained by this login. Not compared with the token before it: that one belonged to a different user entry ('${_tok_user_before:-?}')."
         else
           log_info "Supervisor token (context '${_tok_ctx}'): valid until ${_tok_after#VALID } — this login RENEWED it (before: ${_tok_before})."
         fi
@@ -687,4 +720,22 @@ $(sed 's/^/    /' "$_vks_err" | head -4)" ;;
   this script recognises, so it is printed verbatim rather than guessed at:
 $(sed 's/^/    /' "$_vks_err" 2>/dev/null | head -6)" ;;
   esac
+fi
+
+# ---- The Supervisor token: say what THIS method did NOT do (2026-09-30) ---------------------------
+# MEASURED on the lab: .env is left on `kubeconfig` by scenario-1 Step 6, so the natural
+# `make vks-login` checked only the guest cluster and exited 0 while the Supervisor token had 1h40m
+# left — and nothing said so. This reads the Supervisor kubeconfig OFFLINE (no dial, no login, no
+# SSO attempt) and prints one line. Silent for a tenant with no Supervisor kubeconfig (RULE ZERO-B),
+# and silent when that path IS $KUBECONFIG (then the check above already exercised that token).
+# The path is the vcf arm's own (not supervisor_kubeconfig(), which B210 records can resolve to a
+# guest kubeconfig), and the line names it, so a wrong file is visible rather than trusted.
+if [ "$METHOD" = kubeconfig ]; then
+  _sup_kc="${VKS_SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
+  if [ "$(readlink -f "$_sup_kc" 2>/dev/null || printf '%s' "$_sup_kc")" != "$(readlink -f "$KUBECONFIG" 2>/dev/null || printf '%s' "$KUBECONFIG")" ]; then
+    _sup_note="$(supervisor_token_notice "$_sup_kc" login)" && _sup_nrc=0 || _sup_nrc=$?
+    if [ -n "$_sup_note" ]; then
+      if [ "$_sup_nrc" = 10 ]; then log_warn "$_sup_note"; else log_info "$_sup_note"; fi
+    fi
+  fi
 fi

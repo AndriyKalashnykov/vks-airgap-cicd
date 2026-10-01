@@ -9065,7 +9065,9 @@ lockout. `kube_token_expiry` (lib/os.sh) reads it.
 **The remedy was worse than the diagnosis.** All four sites cited
 `docs/scenario-1.md, Supervisor token` — **a section that does not exist** (grep: 0 hits). And the
 command is *not* a bare `make vks-login`: scenario-1 Step 6 leaves `.env` on
-`VKS_AUTH_METHOD=kubeconfig`, so a bare run renews the **guest** kubeconfig.
+`VKS_AUTH_METHOD=kubeconfig`, so a bare run renews ~~the **guest** kubeconfig~~ **nothing** — it only
+checks that the guest cluster answers (corrected 2026-09-30: the guest credential on the live lab is a
+client certificate valid to 2027-09-17; `docs/scenario-1.md` carried the same wrong wording).
 
 **Verified END-TO-END on the live lab**, not on a fixture: a real kubeconfig re-signed with `exp` in
 the past drew a real `Unauthorized` from the real Supervisor; all four sites named the same

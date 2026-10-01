@@ -2652,6 +2652,7 @@ kube_is_notfound() {
 # check-expect-literals (see its header). See docs/vks-services/vcenter-sso.md, B733.
 sso_lockout_note() { printf 'vCenter SSO can lock an account after repeated failed logins (default: 5 in 3 minutes)'; }
 
+# shellcheck disable=SC2120  # the modes are passed by creds.sh and argocd-password.sh, not from inside this file
 supervisor_renew_how() {
   # 🔴 REJECT AN UNKNOWN ARGUMENT, LOUDLY. Falling through to the command-naming branch made a
   # ONE-CHARACTER TYPO (`--nocommand`) silently prescribe a vCenter bind for an undecidable cause,
@@ -2745,19 +2746,76 @@ jwt_exp_seconds() {
 # contradicted verbatim by the file it cited; the function was INERT on the air-gap box.
 # Degrades to UNKNOWN — never a guess — for a non-JWT token, a client-cert kubeconfig, an absent
 # file, or a payload with no exp claim.
-kube_token_expiry() {
-  local kc="${1:-}" tok exp now
-  [ -n "$kc" ] && [ -s "$kc" ] || { printf 'UNKNOWN'; return 0; }
+# kube_token_exp_epoch <kubeconfig> — the current context's bearer-token `exp`, in epoch SECONDS,
+# or EMPTY. Offline (`config view` never dials). The ONE reader: kube_token_expiry and
+# supervisor_token_notice both go through it, so they cannot disagree about which token they read.
+kube_token_exp_epoch() {
+  local kc="${1:-}" tok
+  [ -n "$kc" ] && [ -s "$kc" ] || return 0
   tok="$(kubectl --kubeconfig "$kc" config view --raw --minify -o jsonpath='{.users[0].user.token}' 2>/dev/null || true)"
-  case "$tok" in *.*.*) ;; *) printf 'UNKNOWN'; return 0 ;; esac
-  # NOTE: no decoding here. `jwt_exp_seconds` derives everything from $tok. An earlier version
-  # recomputed the payload, the base64url substitutions and the padding right here and then never
-  # read the result — dead code, in the function whose header is about not duplicating work.
-  exp="$(jwt_exp_seconds "$tok")"
+  case "$tok" in *.*.*) ;; *) return 0 ;; esac
+  # NOTE: no decoding here. `jwt_exp_seconds` derives everything from $tok.
+  jwt_exp_seconds "$tok"
+}
+
+kube_token_expiry() {
+  local kc="${1:-}" exp now
+  exp="$(kube_token_exp_epoch "$kc")"
   [ -n "$exp" ] || { printf 'UNKNOWN'; return 0; }
   now="$(date -u +%s)"
   if [ "$exp" -lt "$now" ]; then printf 'EXPIRED %s' "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
   else                           printf 'VALID %s'   "$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
+  fi
+}
+
+# supervisor_token_notice <kubeconfig> <mode> — ONE line about the Supervisor token, or NOTHING.
+# Offline (reads the file, never dials, never logs in), so a read-only report can call it.
+#
+# WHY (2026-09-30, measured on the lab): with .env on VKS_AUTH_METHOD=kubeconfig, `make vks-login`
+# exited 0 having checked only the GUEST cluster, and `make creds` said nothing, while the Supervisor
+# token had 1h40m left. The operator had no signal until ArgoCD and SSH rows stopped reading.
+# The token's lifetime is set by the Supervisor (10 h on that lab); nothing here can extend it,
+# and silently re-logging-in would spend vCenter SSO attempts (lockout). So: say it, name the command.
+#
+#   mode login : called by the kubeconfig arm of 30-vks-login.sh. Always says the token was NOT
+#                renewed (that is the misreading this exists for); adds the remedy when it matters.
+#   mode creds : called by creds.sh. Speaks ONLY when the token is VALID and expires within the
+#                threshold; the EXPIRED state already has its own banner there.
+# Returns 10 when what it printed calls for ACTION (expired, or inside the threshold), else 0, so a
+# caller can pick warn vs info without matching on the sentence. 2 = caller bug (unknown mode).
+#
+# SILENT when the file is absent or its token has no readable expiry — a TENANT (RULE ZERO-B) has no
+# Supervisor kubeconfig, and "we cannot tell" is not a finding worth a line.
+# Threshold: SUPERVISOR_TOKEN_WARN_HOURS (whole hours, default 2; a non-integer falls back to 2).
+# shellcheck disable=SC2119  # supervisor_renew_how is called in its DEFAULT mode on purpose: every arm that names it is a FACT (expired / inside the threshold)
+supervisor_token_notice() {
+  local kc="${1:-}" mode="${2:-}" exp now left h at in
+  case "$mode" in login|creds) ;; *) printf 'BUG: supervisor_token_notice mode %s\n' "$mode" >&2; return 2 ;; esac
+  exp="$(kube_token_exp_epoch "$kc")"
+  [ -n "$exp" ] || return 0
+  h="${SUPERVISOR_TOKEN_WARN_HOURS:-2}"
+  case "$h" in ''|*[!0-9]*) h=2 ;; esac
+  now="$(date -u +%s)"; left=$((exp - now))
+  at="$(date -u -d "@$exp" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '?')"
+  if [ "$left" -le 0 ]; then
+    [ "$mode" = login ] || return 0
+    printf 'Supervisor token (%s): EXPIRED at %s — this run did NOT renew it (it checks only the guest cluster). %s\n' \
+      "$kc" "$at" "$(supervisor_renew_how)"
+    return 10
+  fi
+  in="$((left / 3600))h$(( (left % 3600) / 60 ))m"
+  if [ "$left" -lt $((h * 3600)) ]; then
+    if [ "$mode" = login ]; then
+      printf 'Supervisor token (%s): expires %s (in %s) — this run did NOT renew it (it checks only the guest cluster). %s\n' \
+        "$kc" "$at" "$in" "$(supervisor_renew_how)"
+    else
+      printf 'Supervisor token expires %s (in %s). Values this report reads from the Supervisor cannot be read after that. %s\n' \
+        "$at" "$in" "$(supervisor_renew_how)"
+    fi
+    return 10
+  elif [ "$mode" = login ]; then
+    printf 'Supervisor token (%s): valid until %s (in %s) — NOT renewed by this run, which checks only the guest cluster.\n' \
+      "$kc" "$at" "$in"
   fi
 }
 
