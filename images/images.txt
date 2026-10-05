@@ -30,7 +30,7 @@ maven:3.9-eclipse-temurin-25
 # module cache. It therefore ships apps/go/gowebapp/Dockerfile.builder like every other app --
 # one uniform pole. See lib/apps.sh app_builder_base().
 # renovate: datasource=docker depName=golang
-golang:1.27.0-bookworm
+golang:1.27.1-bookworm
 
 # ---- Go runtime base (gowebapp Dockerfile runtime stage) ----
 # distroless static + nonroot: no shell, no package manager, uid 65532 — the app is a static
