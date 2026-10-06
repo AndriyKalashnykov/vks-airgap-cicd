@@ -488,7 +488,7 @@ sb="$(_stateful_sandbox)"; OWN="$(_own_name "$sb")"
 printf '%s\n' "$OWN" > "$sb/st/clusters"; : > "$sb/st/rm_fails"
 printf 'a1 kindccm-aaaa %s=%s\nc0 cloud-provider-kind -\n' "$_LBL" "$OWN" > "$sb/st/containers"
 _run_kd "$sb"
-if [ ! -f "$sb/.env.state" ] && grep -q "label=${_LBL}=${OWN}" "$sb/st/calls" && printf '%s' "$KD_OUT" | grep -q 'kind teardown complete'; then
+if [ ! -f "$sb/.env.state" ] && grep -q "label=${_LBL}=${OWN}" "$sb/st/calls" && grep -q 'kind teardown complete' <<< "$KD_OUT"; then
   ok "a failing docker rm of the controller does not stop kind-down before the prune and the overlay decision"
 else
   bad "a failing docker rm of the controller aborted kind-down — output tail: $(printf '%s' "$KD_OUT" | tail -2 | tr '\n' ' ')"
@@ -537,7 +537,7 @@ if _has "$sb" a1 && _has "$sb" c0 && grep -qx "$OWN" "$sb/st/clusters" && [ -f "
 else
   bad "DRY_RUN=1 changed something — containers: $(tr '\n' ';' < "$sb/st/containers") docker rm argv: $(_rm_argv "$sb" | tr '\n' ';')"
 fi
-if printf '%s' "$KD_OUT" | grep -q 'DRY_RUN docker rm -f cloud-provider-kind' && printf '%s' "$KD_OUT" | grep -q 'DRY_RUN docker rm -f a1'; then
+if grep -q 'DRY_RUN docker rm -f cloud-provider-kind' <<< "$KD_OUT" && grep -q 'DRY_RUN docker rm -f a1' <<< "$KD_OUT"; then
   ok "DRY_RUN=1 previews what the real run does: the controller and this cluster's sidecar would be removed"
 else
   bad "DRY_RUN=1 does not preview the real decision — output: $(printf '%s' "$KD_OUT" | grep -i 'DRY_RUN\|leaving\|NOT pruning' | tr '\n' ';' | cut -c1-240)"
