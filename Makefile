@@ -1036,7 +1036,7 @@ install-traefik: check-env ## Install Traefik ingress (one LB) — the lighter o
 	@$(SCRIPTS)/45-install-traefik.sh
 
 .PHONY: kind-down
-kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-* orphans)
+kind-down: ## Tear down the KinD cluster (prunes ITS kindccm-* sidecars; removes cloud-provider-kind only when no kind cluster is left)
 	@$(SCRIPTS)/kind-down.sh
 
 # Target-specific export: every recipe line below (sub-makes AND direct script calls) runs

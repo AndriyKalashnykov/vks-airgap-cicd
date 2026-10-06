@@ -11075,3 +11075,35 @@ Found by the B734 review, measured in both 2026-09-25/26 walk logs: `ARGOCD_KUBE
 `secrets/supervisor.kubeconfig`, so 31's `vcf context use argocd-supervisor:<ns>` changes that file's
 current-context. Anything that later reads the file's current context gets the ArgoCD one. Not blocking;
 decide whether 31 should use its own file or 30 should pin its context explicitly.
+
+## B741 — `05-kind-up.sh` still replaces another project's cloud-provider-kind controller (OPEN, 2026-10-06)
+
+`kind-down.sh` is fixed (same change as this entry): it prunes only this cluster's `kindccm-*`
+sidecars, by label, and removes the shared controller only when kind lists no cluster. Proven by
+`scripts/test-kind-down-safety.sh` arms 10 to 19 (7 of them RED against 6d81f16) and by one run
+against the real docker and kind with a foreign cluster present.
+
+Still open, the other half: `05-kind-up.sh` (~line 226) removes ANY existing `cloud-provider-kind`
+container and starts its own (`--network host`, `--gateway-channel=disabled`). One controller serves
+every kind cluster on a host, so on a box that also runs another project's cluster (golang-web starts
+it on `--network kind`, with `--enable-lb-port-mapping` on macOS) kind-up silently swaps that
+project's controller. The idea-round adversaries (k8s, bash-git-cli, vks) agreed on the shape and
+refused to clear it without a measurement:
+
+- decide BEFORE `kind create`; if a cluster other than ours exists and the running controller's image
+  or args differ from ours, stop and name the clusters, the image and args found, and the command;
+- never leave a running controller untouched across a recreate of our cluster: its per-cluster client
+  is stale, so remove-and-start with the same arguments even when they already match;
+- never `docker stop`/`restart` it (a graceful stop deletes every cluster's sidecars);
+- on macOS the two projects cannot share a controller (host-port publishing vs several
+  LoadBalancers on 80/443): say so and stop.
+
+What would settle it (about 15 minutes, two real clusters on Linux): kind-down then kind-up with the
+other project's cluster still present, and show Harbor gets an address and the other project's
+Service keeps its own.
+
+Deliberate differences from golang-web, owner decisions of 2026-10-06 (do not "align" them): Docker
+on Linux from the distro package, never a third-party apt repo; macOS LoadBalancers through
+docker-mac-net-connect, not host-port mapping; `make deps` installs podman even on a Docker-only box;
+GNU Make 3.82+ through Homebrew's `gmake` (a patch that would run on Apple's 3.81 was researched and
+dropped: it does not help a Mac without Homebrew, which the other 13 formulae still need).

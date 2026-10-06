@@ -123,7 +123,7 @@ PSA OK — our namespaces are labelled at a level the cluster admits            
 Then: **[open the UIs](access-uis.md)** · **[walk a code change from Gitea to the live page](demo-walkthrough.md)**
 
 ```bash
-make kind-down   # tear it all down (also prunes cloud-provider-kind orphans)
+make kind-down   # tear it all down (also prunes this cluster's cloud-provider-kind sidecars)
 ```
 
 **You do not need a `.env`.** The KinD steps **discover** what they can (`KUBECONFIG`, Harbor's LB IP and
