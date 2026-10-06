@@ -11,7 +11,7 @@
 #
 # Rebuild whenever go.mod/go.sum change. See scripts/14-builder-build.sh, which resolves the base
 # and the ARG NAME below PER APP via lib/apps.sh (app_builder_base / app_builder_arg).
-ARG GO_IMAGE=golang:1.27.0-bookworm
+ARG GO_IMAGE=golang:1.27.1-bookworm
 # GO_IMAGE default is explicitly tagged; DL3006 can't see through the ARG.
 # hadolint ignore=DL3006
 FROM ${GO_IMAGE}

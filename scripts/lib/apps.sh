@@ -726,7 +726,7 @@ app_builder_base() {
     # renovate: datasource=docker depName=maven
     java) printf 'maven:3.9-eclipse-temurin-25' ;;
     # renovate: datasource=docker depName=golang
-    go)   printf 'golang:1.27.0-bookworm' ;;
+    go)   printf 'golang:1.27.1-bookworm' ;;
     # renovate: datasource=docker depName=node
     nodejs) printf 'node:24-alpine' ;;
     # renovate: datasource=docker depName=rust
