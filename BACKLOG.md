@@ -11080,8 +11080,9 @@ decide whether 31 should use its own file or 30 should pin its context explicitl
 
 `kind-down.sh` is fixed (same change as this entry): it prunes only this cluster's `kindccm-*`
 sidecars, by label, and removes the shared controller only when kind lists no cluster. Proven by
-`scripts/test-kind-down-safety.sh` arms 10 to 19 (7 of them RED against 6d81f16) and by one run
-against the real docker and kind with a foreign cluster present.
+`scripts/test-kind-down-safety.sh` arms 10 to 21 (7 of them RED against 6d81f16, the rest controls
+or guards from the implementation review) and by one run against the real docker and kind with a
+foreign cluster present. The prune is skipped unless kind confirmed this cluster is gone.
 
 Still open, the other half: `05-kind-up.sh` (~line 226) removes ANY existing `cloud-provider-kind`
 container and starts its own (`--network host`, `--gateway-channel=disabled`). One controller serves

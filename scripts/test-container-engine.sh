@@ -113,7 +113,7 @@ KIND_ONLY='05-kind-up\.sh|06-install-harbor\.sh|07-install-argocd\.sh'
 # so rather than pretending an exemption.
 offenders=""; scanned=0
 for f in scripts/[0-9][0-9]-*.sh scripts/lib/*.sh scripts/creds.sh scripts/argocd-password.sh \
-         scripts/app-run.sh scripts/app-test.sh; do
+         scripts/app-run.sh scripts/app-test.sh scripts/kind-down.sh; do
   [ -f "$f" ] || continue
   b="$(basename "$f")"
   printf '%s' "$b" | grep -qE "^(${KIND_ONLY})$" && continue
