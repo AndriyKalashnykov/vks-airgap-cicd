@@ -117,8 +117,8 @@ jobs:
           make mirror
           make mirror-verify
 
-      # Always tear down: prune the cluster + cloud-provider-kind + kindccm-* orphans
-      # (kind-down.sh) even if an earlier step failed, so a red run leaves no residue.
+      # Always tear down: the cluster, its kindccm-* sidecars and (no other kind cluster being
+      # left on the runner) cloud-provider-kind, even if an earlier step failed.
       - name: make kind-down (cleanup)
         if: always()
         run: make kind-down

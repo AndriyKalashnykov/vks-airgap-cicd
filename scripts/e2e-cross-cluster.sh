@@ -142,7 +142,7 @@ guest apply --server-side --force-conflicts -f \
 
 # --- a REAL Gitea in the GUEST, reachable FROM THE HUB ---------------------------------------
 # NodePort on the guest's container IP: the same shared-kind-network mechanism this script already
-# uses for the guest API server. cloud-provider-kind is NOT running here, so a LoadBalancer would
+# uses for the guest API server. This script does not start cloud-provider-kind, so a LoadBalancer would
 # never get an address.
 log_info "installing Gitea into GUEST (NodePort — the HUB's repo-server must be able to clone it)"
 export KUBECONFIG="$GUEST_KC"

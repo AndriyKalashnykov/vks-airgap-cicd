@@ -172,7 +172,7 @@ rm -rf "$sb"
 
 # 8. POSITIVE CONTROL: a WORKING docker with genuinely nothing to clean must still proceed and
 #    delete the stamped overlay. Without this, "always refuse" would pass check 6 and be useless.
-sb="$(_sandbox empty)"; _run_kd "$sb"
+sb8="$(_sandbox empty)"; _run_kd "$sb8"
 
 # ── SELF-CANARY: this test must not be able to damage the REAL repo. ───────────────────────────
 #
@@ -251,12 +251,12 @@ else
        child inherits the developer's repo. Grep EVERY 'kind-down.sh' invocation in this file."
 fi
 
-if [ ! -f "$sb/.env.state" ]; then
+if [ ! -f "$sb8/.env.state" ]; then
   ok "genuinely-empty: the stamped overlay IS removed (the fix did not degenerate into always-refuse)"
 else
   bad "genuinely-empty: the stamped overlay survived — the fix over-refuses and kind-down no longer works"
 fi
-rm -rf "$sb"
+rm -rf "$sb8"
 
 # 9. docker ABSENT must still reach the FILE half — the old `require_cmd docker` made every pure-file
 #    operation unreachable on a docker-free box, while scenario-2 Step 0c tells EVERY operator to run
@@ -289,12 +289,268 @@ KD_OUT="$(cd "$sb" && PATH="$sb/purebin" KIND_CLUSTER_NAME=probe-cluster REPO_RO
 # script dies for an unrelated reason — measured: with dirname missing it died at line 11 and the
 # "no FATAL string" test reported ok in BOTH arms. The file half is REACHED iff it says something
 # about the overlay.
-if printf '%s' "$KD_OUT" | grep -qE 'leaving .* in place|removing the KinD state overlay'; then
+if printf '%s' "$KD_OUT" | grep -qE 'leaving \.env\.state in place|archiving the KinD state overlay'; then
   ok "docker absent: the FILE half is REACHED (the overlay decision was made)"
 else
   bad "docker absent: the file half was never reached — output was: $(printf '%s' "$KD_OUT" | head -2 | tr '\n' ' ')"
 fi
 rm -rf "$sb"
+
+# ---------------------------------------------------------------------------------------------
+# 10-19. ANOTHER PROJECT'S KIND CLUSTER ON THE SAME HOST.
+#
+# kind-down used to remove the cloud-provider-kind controller and EVERY kindccm-* container. One
+# controller serves every kind cluster on a host, so on a box that also runs another project's
+# cluster (golang-web's, say) `make kind-down` destroyed that project's LoadBalancers. Arms 10, 12, 13, 14, 16, the
+# first half of 17 and 18 were RED against the script as it stood at 6d81f16. Arms 11 and 15 are
+# controls, so a kind-down that removes nothing cannot pass; the second half of 17 guards the fix
+# itself (RED when the second listing feeds the overlay decision); 18b, 20 and 21 came from the
+# implementation review of the first version of the fix.
+#
+# The fakes are STATEFUL, because the properties are about which containers are LEFT: `kind get
+# clusters` forgets a deleted cluster, `docker ps` answers by the filter it was given (and returns
+# nothing for a filter it does not know), `docker rm` removes rows, and every call is logged.
+_stateful_sandbox() {             # _stateful_sandbox -> echoes the sandbox dir (state in $sb/st)
+  local sb; sb="$(_sandbox empty)"
+  mkdir -p "$sb/st"; : > "$sb/st/clusters"; : > "$sb/st/containers"; : > "$sb/st/calls"
+  cat > "$sb/fakebin/kind" <<'STUB'
+#!/usr/bin/env bash
+st="$(cd "$(dirname "$0")/.." && pwd)/st"
+printf 'kind %s\n' "$*" >> "$st/calls"
+case "$1 ${2:-}" in
+  "get clusters")
+    n=$(( $(cat "$st/kind_get_count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$st/kind_get_count"
+    if [ -f "$st/kind_get_fail_from" ] && [ "$n" -ge "$(cat "$st/kind_get_fail_from")" ]; then
+      echo "ERROR: failed to list clusters" >&2; exit 1
+    fi
+    if [ -f "$st/kind_get_fail_only" ] && [ "$n" -eq "$(cat "$st/kind_get_fail_only")" ]; then
+      echo "ERROR: failed to list clusters" >&2; exit 1
+    fi
+    cat "$st/clusters" ;;
+  "delete cluster")
+    name=""; while [ $# -gt 0 ]; do [ "$1" = --name ] && name="$2"; shift; done
+    grep -vxF "$name" "$st/clusters" > "$st/clusters.new" || true; mv "$st/clusters.new" "$st/clusters" ;;
+esac
+exit 0
+STUB
+  cat > "$sb/fakebin/docker" <<'STUB'
+#!/usr/bin/env bash
+# containers table: "<id> <name> <label-or-->" per line
+st="$(cd "$(dirname "$0")/.." && pwd)/st"
+printf 'docker %s\n' "$*" >> "$st/calls"
+case "$1" in
+  ps)
+    f=""; while [ $# -gt 0 ]; do [ "$1" = --filter ] && f="$2"; shift; done
+    case "$f" in
+      name=*)  re="${f#name=}"; re="${re#^/?}"; re="${re%\$}"
+               while read -r id name _; do
+                 case "$f" in *'$') [ "$name" = "$re" ] && echo "$id" ;; *) case "$name" in *"$re"*) echo "$id" ;; esac ;; esac
+               done < "$st/containers" ;;
+      label=*) want="${f#label=}"
+               while read -r id _ label; do [ "$label" = "$want" ] && echo "$id"; done < "$st/containers" ;;
+    esac ;;
+  rm)
+    shift; : > "$st/containers.new"
+    while read -r id name label; do
+      keep=1; for a in "$@"; do { [ "$a" = "$id" ] || [ "$a" = "$name" ]; } && keep=0; done
+      [ "$keep" = 1 ] && printf '%s %s %s\n' "$id" "$name" "$label" >> "$st/containers.new"
+    done < "$st/containers"
+    mv "$st/containers.new" "$st/containers"
+    [ -f "$st/rm_fails" ] && { echo "Error response from daemon: No such container" >&2; exit 1; } ;;
+esac
+exit 0
+STUB
+  chmod +x "$sb/fakebin/kind" "$sb/fakebin/docker"
+  printf '%s' "$sb"
+}
+_LBL="io.x-k8s.cloud-provider-kind.cluster"
+# The cluster name kind-down resolves comes from .env.example, not from the environment (see the
+# note in _sandbox), so the fixtures derive it the same way.
+_own_name() { sed -n 's/^KIND_CLUSTER_NAME=//p' "$1/.env.example" | head -1; }
+_has()  { grep -q "^$2 " "$1/st/containers"; }          # _has <sb> <id>
+_rm_argv() { grep '^docker rm ' "$1/st/calls" || true; }
+
+# The fixture itself must be what the arms assume, or every arm below is about the harness.
+sb="$(_stateful_sandbox)"; OWN="$(_own_name "$sb")"
+if [ -n "$OWN" ] && [ "$OWN" != other-project ]; then
+  ok "fixture: the sandbox .env.example names the cluster '$OWN' (arms 11 and 13 prove kind-down resolves the same name)"
+else
+  bad "fixture: could not derive the cluster name from the sandbox .env.example — arms 10-19 would be vacuous"
+fi
+rm -rf "$sb"
+
+# 10-13. Own cluster AND a foreign cluster, each with a sidecar, one shared controller.
+sb="$(_stateful_sandbox)"; OWN="$(_own_name "$sb")"
+printf '%s\nother-project\n' "$OWN" > "$sb/st/clusters"
+printf 'a1 kindccm-aaaa %s=%s\nb1 kindccm-bbbb %s=other-project\nc0 cloud-provider-kind -\n' "$_LBL" "$OWN" "$_LBL" > "$sb/st/containers"
+_run_kd "$sb"
+if _has "$sb" b1 && ! _rm_argv "$sb" | grep -qw b1; then
+  ok "another cluster's sidecar SURVIVES kind-down (it was never passed to docker rm)"
+else
+  bad "kind-down removed another cluster's kindccm sidecar — docker rm argv: $(_rm_argv "$sb" | tr '\n' ';')"
+fi
+if ! _has "$sb" a1; then
+  ok "CONTROL: this cluster's own sidecar IS removed"
+else
+  bad "CONTROL: this cluster's own sidecar survived — kind-down no longer prunes anything"
+fi
+if _has "$sb" c0 && printf '%s' "$KD_OUT" | grep -q 'kind still lists: .*other-project'; then
+  ok "the shared controller is KEPT while another cluster is listed, and the log names that cluster"
+else
+  bad "kind-down removed the shared cloud-provider-kind controller while 'other-project' still exists (or did not say why it kept it)"
+fi
+if grep -q "label=${_LBL}=${OWN}" "$sb/st/calls"; then
+  ok "the prune selects by the literal cluster label ${_LBL}=<this cluster>"
+else
+  bad "no docker ps call filtered on ${_LBL}=${OWN} — the prune is not scoped to this cluster"
+fi
+# 14. ORDER: the prune must come after the cluster delete (a live controller recreates a sidecar
+#     that is removed while its Service still exists).
+_del_line="$(grep -n '^kind delete cluster' "$sb/st/calls" | head -1 | cut -d: -f1)"
+_prune_line="$(grep -n "label=${_LBL}=${OWN}" "$sb/st/calls" | head -1 | cut -d: -f1)"
+if [ -n "$_del_line" ] && [ -n "$_prune_line" ] && [ "$_prune_line" -gt "$_del_line" ]; then
+  ok "order: the sidecar prune runs AFTER kind delete cluster"
+else
+  bad "order: the sidecar prune (call ${_prune_line:-none}) does not follow kind delete cluster (call ${_del_line:-none})"
+fi
+rm -rf "$sb"
+
+# 15. CONTROL: only this cluster exists -> the controller IS removed. Without it "never remove the
+#     controller" would pass arm 12.
+sb="$(_stateful_sandbox)"; OWN="$(_own_name "$sb")"
+printf '%s\n' "$OWN" > "$sb/st/clusters"
+printf 'a1 kindccm-aaaa %s=%s\nc0 cloud-provider-kind -\n' "$_LBL" "$OWN" > "$sb/st/containers"
+_run_kd "$sb"
+if ! _has "$sb" c0 && ! _has "$sb" a1; then
+  ok "CONTROL: with no other cluster left, the controller and this cluster's sidecar are both removed"
+else
+  bad "CONTROL: nothing else is on the host, yet the controller or the sidecar survived: $(tr '\n' ';' < "$sb/st/containers")"
+fi
+_ctl_line="$(grep -n '^docker rm -f cloud-provider-kind' "$sb/st/calls" | head -1 | cut -d: -f1)"
+_lbl_line="$(grep -n "label=${_LBL}=${OWN}" "$sb/st/calls" | head -1 | cut -d: -f1)"
+if [ -n "$_ctl_line" ] && [ -n "$_lbl_line" ] && [ "$_lbl_line" -gt "$_ctl_line" ]; then
+  ok "order: the prune runs AFTER the controller is removed (nothing is left to recreate a sidecar)"
+else
+  bad "order: the prune (call ${_lbl_line:-none}) does not follow the controller removal (call ${_ctl_line:-none})"
+fi
+if grep '^docker ps ' "$sb/st/calls" | grep -v -- ' -aq ' >/dev/null; then
+  bad "a docker ps call omits -a — stopped sidecars would be missed"
+else
+  ok "every docker ps call lists stopped containers too (-aq)"
+fi
+rm -rf "$sb"
+
+# 16. This project has NO cluster on the box, another project does: nothing of theirs is touched.
+sb="$(_stateful_sandbox)"
+printf 'other-project\n' > "$sb/st/clusters"
+printf 'b1 kindccm-bbbb %s=other-project\nc0 cloud-provider-kind -\n' "$_LBL" > "$sb/st/containers"
+_run_kd "$sb"
+if _has "$sb" b1 && _has "$sb" c0 && [ -z "$(_rm_argv "$sb")" ] && grep -qx other-project "$sb/st/clusters"; then
+  ok "no cluster of ours on the box: the other project's cluster, sidecar and controller are untouched"
+else
+  bad "kind-down with no cluster of ours still removed something of another project — docker rm argv: $(_rm_argv "$sb" | tr '\n' ';')"
+fi
+rm -rf "$sb"
+
+# 17. The listing AFTER the delete cannot be answered: keep the controller (no positive "nothing is
+#     left"), and still reach the file half — the stamped overlay is archived as in case 8.
+sb="$(_stateful_sandbox)"; OWN="$(_own_name "$sb")"
+printf '%s\n' "$OWN" > "$sb/st/clusters"; echo 2 > "$sb/st/kind_get_fail_from"
+printf 'c0 cloud-provider-kind -\n' > "$sb/st/containers"
+_run_kd "$sb"
+if _has "$sb" c0 && printf '%s' "$KD_OUT" | grep -q 'CANNOT ASK kind which clusters remain'; then
+  ok "post-delete listing unanswerable: the controller is LEFT and the log says CANNOT ASK"
+else
+  bad "post-delete listing failed, yet the controller was removed or nothing said so"
+fi
+if [ ! -f "$sb/.env.state" ]; then
+  ok "post-delete listing unanswerable: the file half still ran (the stamped overlay was archived)"
+else
+  bad "post-delete listing failed and the stamped overlay was left — the second listing leaked into the overlay decision"
+fi
+rm -rf "$sb"
+
+# 18. `docker rm` fails (a sidecar vanished under a live controller): the file half is still reached.
+sb="$(_stateful_sandbox)"; OWN="$(_own_name "$sb")"
+printf '%s\nother-project\n' "$OWN" > "$sb/st/clusters"; : > "$sb/st/rm_fails"
+printf 'a1 kindccm-aaaa %s=%s\nc0 cloud-provider-kind -\n' "$_LBL" "$OWN" > "$sb/st/containers"
+_run_kd "$sb"
+if [ ! -f "$sb/.env.state" ] && printf '%s' "$KD_OUT" | grep -q 'kind teardown complete'; then
+  ok "a failing docker rm does not stop kind-down before the overlay decision"
+else
+  bad "a failing docker rm aborted kind-down before the file half — output tail: $(printf '%s' "$KD_OUT" | tail -2 | tr '\n' ' ')"
+fi
+rm -rf "$sb"
+
+# 18b. The CONTROLLER's docker rm fails (only our cluster on the host): the prune and the file half
+#      still run. Arm 18 cannot see this: its fixture lists another cluster, so that rm is never reached.
+sb="$(_stateful_sandbox)"; OWN="$(_own_name "$sb")"
+printf '%s\n' "$OWN" > "$sb/st/clusters"; : > "$sb/st/rm_fails"
+printf 'a1 kindccm-aaaa %s=%s\nc0 cloud-provider-kind -\n' "$_LBL" "$OWN" > "$sb/st/containers"
+_run_kd "$sb"
+if [ ! -f "$sb/.env.state" ] && grep -q "label=${_LBL}=${OWN}" "$sb/st/calls" && grep -q 'kind teardown complete' <<< "$KD_OUT"; then
+  ok "a failing docker rm of the controller does not stop kind-down before the prune and the overlay decision"
+else
+  bad "a failing docker rm of the controller aborted kind-down — output tail: $(printf '%s' "$KD_OUT" | tail -2 | tr '\n' ' ')"
+fi
+rm -rf "$sb"
+
+# 20. The first listing cannot be answered, so the cluster is NOT deleted and may be running: its
+#     sidecars must not be pruned (a live controller would recreate them, or its LoadBalancers break).
+sb="$(_stateful_sandbox)"; OWN="$(_own_name "$sb")"
+printf '%s\n' "$OWN" > "$sb/st/clusters"; echo 1 > "$sb/st/kind_get_fail_only"
+printf 'a1 kindccm-aaaa %s=%s\nc0 cloud-provider-kind -\n' "$_LBL" "$OWN" > "$sb/st/containers"
+_run_kd "$sb"
+if _has "$sb" a1 && _has "$sb" c0 && [ -z "$(_rm_argv "$sb")" ] && printf '%s' "$KD_OUT" | grep -q 'NOT pruning'; then
+  ok "cluster not confirmed gone: its sidecars and the controller are left, and the log says NOT pruning"
+else
+  bad "kind could not be asked, the cluster still exists, yet kind-down removed its sidecar or controller — docker rm argv: $(_rm_argv "$sb" | tr '\n' ';')"
+fi
+if [ -f "$sb/.env.state" ]; then
+  ok "cluster not confirmed gone: the state overlay is left in place"
+else
+  bad "kind could not be asked, yet the state overlay was archived"
+fi
+rm -rf "$sb"
+
+# 20b. NEITHER listing can be answered: the same rule holds — nothing of this cluster is pruned, and
+#      the log gives the operator the command for when the cluster is known to be gone.
+sb="$(_stateful_sandbox)"; OWN="$(_own_name "$sb")"
+printf '%s\n' "$OWN" > "$sb/st/clusters"; echo 1 > "$sb/st/kind_get_fail_from"
+printf 'a1 kindccm-aaaa %s=%s\nc0 cloud-provider-kind -\n' "$_LBL" "$OWN" > "$sb/st/containers"
+_run_kd "$sb"
+if _has "$sb" a1 && _has "$sb" c0 && [ -z "$(_rm_argv "$sb")" ] && printf '%s' "$KD_OUT" | grep -q 'remove them with:  docker rm -f a1'; then
+  ok "kind unanswerable twice: nothing is removed, and the log prints the docker rm command for later"
+else
+  bad "kind could not be asked at all, yet kind-down removed something or gave no way forward — docker rm argv: $(_rm_argv "$sb" | tr '\n' ';')"
+fi
+rm -rf "$sb"
+
+# 21. DRY_RUN=1 changes nothing and previews the REAL decision: with only our cluster on the host it
+#     must print both removals (the delete it only printed must not make it say "leaving").
+sb="$(_stateful_sandbox)"; OWN="$(_own_name "$sb")"
+printf '%s\n' "$OWN" > "$sb/st/clusters"
+printf 'a1 kindccm-aaaa %s=%s\nc0 cloud-provider-kind -\n' "$_LBL" "$OWN" > "$sb/st/containers"
+DRY_RUN=1 _run_kd "$sb"
+if _has "$sb" a1 && _has "$sb" c0 && grep -qx "$OWN" "$sb/st/clusters" && [ -f "$sb/.env.state" ] && [ -z "$(_rm_argv "$sb")" ]; then
+  ok "DRY_RUN=1 removes nothing (cluster, sidecar, controller and overlay all still there)"
+else
+  bad "DRY_RUN=1 changed something — containers: $(tr '\n' ';' < "$sb/st/containers") docker rm argv: $(_rm_argv "$sb" | tr '\n' ';')"
+fi
+if grep -q 'DRY_RUN docker rm -f cloud-provider-kind' <<< "$KD_OUT" && grep -q 'DRY_RUN docker rm -f a1' <<< "$KD_OUT"; then
+  ok "DRY_RUN=1 previews what the real run does: the controller and this cluster's sidecar would be removed"
+else
+  bad "DRY_RUN=1 does not preview the real decision — output: $(printf '%s' "$KD_OUT" | grep -i 'DRY_RUN\|leaving\|NOT pruning' | tr '\n' ';' | cut -c1-240)"
+fi
+rm -rf "$sb"
+
+# 19. Never a graceful stop of the shared controller: on SIGTERM it removes the sidecars of EVERY
+#     cluster it serves. Comments stripped first (the script explains this in a comment).
+if sed -E 's@^[[:space:]]*#.*@@' "$KD" | grep -qE '(^|[;&|[:space:]])docker[[:space:]]+(stop|restart)([[:space:]]|$)'; then
+  bad "kind-down uses docker stop/restart — a graceful stop makes cloud-provider-kind delete every cluster's sidecars"
+else
+  ok "kind-down never stops the controller gracefully (docker rm -f only)"
+fi
 
 [ "$fail" = 0 ] && { echo "test-kind-down-safety: OK"; exit 0; }
 echo "test-kind-down-safety: FAILED" >&2; exit 1

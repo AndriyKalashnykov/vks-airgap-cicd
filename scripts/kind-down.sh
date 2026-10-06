@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
 # scripts/kind-down.sh — tear down the local KinD end-to-end environment.
 #
-# ORDER MATTERS (known cloud-provider-kind gotcha): the per-Service
-# `kindccm-<hash>` envoy sidecars survive `kind delete cluster`, hold LB IPs in
-# the kind docker network, and poison the next run's LB assignment. They must be
-# pruned BEFORE deleting the cluster.
+# IT REMOVES ONLY WHAT THIS PROJECT'S CLUSTER OWNS. One cloud-provider-kind controller serves EVERY
+# kind cluster on the host, and its per-Service `kindccm-<hash>` envoy sidecars carry the label
+# io.x-k8s.cloud-provider-kind.cluster=<cluster> (upstream v0.11.1 sets it on every sidecar and
+# selects by it in its own cleanup). This script used to remove the controller and EVERY kindccm-*
+# container, so on a box that also runs another project's kind cluster it destroyed that project's
+# LoadBalancers. Now: sidecars are pruned by THIS cluster's label, and the controller goes only when
+# kind positively reports that no cluster is left.
+#
+# ORDER MATTERS: delete the cluster, THEN decide on the controller, THEN prune. The sidecars survive
+# `kind delete cluster`, hold LB IPs in the kind docker network and poison the next run, so they must
+# go -- but a controller that is still alive (another cluster needs it) recreates a sidecar that is
+# pruned while its Service still exists. So the prune comes last, and it is SKIPPED unless kind
+# confirmed this cluster is gone.
 #
 # Idempotent: safe to run when nothing is up.
 set -euo pipefail
@@ -44,9 +53,10 @@ ENGINE_ASKABLE=1
 
 # _dps FILTER -> prints ids on stdout and returns 0 when the question was ANSWERED (ids may be empty);
 # returns 2 when we COULD NOT ASK. rc=127 (docker absent) lands in the cannot-ask arm too.
+# FILTER is a whole `docker ps --filter` expression: `name=...` or `label=key=value`.
 _dps() {
   local out rc
-  out="$(docker ps -aq --filter "name=$1" 2>"$_DPS_ERR")"; rc=$?   # docker-ok: the cleanup target IS docker
+  out="$(docker ps -aq --filter "$1" 2>"$_DPS_ERR")"; rc=$?   # docker-ok: the cleanup target IS docker
   [ "$rc" -eq 0 ] || return 2
   printf '%s' "$out"
 }
@@ -56,33 +66,7 @@ _cannot_ask() {
   log_warn "  $(head -1 "$_DPS_ERR" 2>/dev/null || echo 'docker exited non-zero with no message')"
 }
 
-# --- 1. Stop + remove the cloud-provider-kind controller ---------------------
-if _cpk_ids="$(_dps "^/?${CPK_CONTAINER}\$")"; then
-  if [ -n "$_cpk_ids" ]; then
-    log_info "removing $CPK_CONTAINER container"
-    run docker rm -f "$CPK_CONTAINER"      # docker-ok: removing a container kind/cpk created
-  else
-    log_info "$CPK_CONTAINER container not present — skipping"
-  fi
-else
-  _cannot_ask "$CPK_CONTAINER"
-fi
-
-# --- 2. Prune orphaned kindccm-* sidecars BEFORE deleting the cluster --------
-if kindccm_ids="$(_dps kindccm-)"; then
-  if [ -n "$kindccm_ids" ]; then
-    log_info "pruning orphaned kindccm-* sidecar container(s)"
-    # Unquoted on purpose: pass each id as a separate arg. Guarded non-empty above.
-    # shellcheck disable=SC2086
-    run docker rm -f $kindccm_ids          # docker-ok: removing containers kind/cpk created
-  else
-    log_info "no kindccm-* sidecars to prune"
-  fi
-else
-  _cannot_ask "kindccm-* sidecars"
-fi
-
-# --- 3. Delete the kind cluster ----------------------------------------------
+# --- 1. Delete the kind cluster ----------------------------------------------
 # `kind get clusters` shells out to docker, so a 2>/dev/null here had the SAME defect: an unusable
 # socket made "the cluster is gone" and "I could not ask" identical. That distinction still matters
 # for the log the operator reads, even though nothing gates a DELETION on it any more (see §5).
@@ -97,6 +81,68 @@ if [ "$_kind_rc" -eq 0 ] && printf '%s\n' "$_kind_out" | grep -xF "$CLUSTER_NAME
   run kind delete cluster --name "$CLUSTER_NAME" --kubeconfig "$KIND_KUBECONFIG_PATH"
 else
   log_info "kind cluster '$CLUSTER_NAME' not present (or kind absent) — skipping"
+fi
+
+# --- 2. The cloud-provider-kind controller: remove it ONLY when no cluster is left ---------------
+# It is shared by every kind cluster on this host. The removal needs a POSITIVE answer: `kind get
+# clusters` returned 0 and listed nothing. "Could not ask" and "kind is absent" leave it in place.
+# This listing is taken AFTER the delete above and must NOT feed ENGINE_ASKABLE: the overlay decision
+# in step 4 is about whether THIS cluster is gone, which the first listing already settled.
+#
+# `docker rm -f` (SIGKILL), never `docker stop`: on a graceful stop the controller removes the
+# sidecars of EVERY cluster it serves on its way out.
+_left_out=""; _left_rc=0
+if have kind; then _left_out="$(kind get clusters 2>"$_DPS_ERR")" || _left_rc=$?; else _left_rc=127; fi
+# Under DRY_RUN the delete above only PRINTED, so kind still lists this cluster. Drop it from the
+# listing, or the dry run says "leaving the controller" where the real run removes it.
+if [ "${DRY_RUN:-0}" = 1 ] && [ "$_kind_rc" -eq 0 ]; then
+  _left_out="$(printf '%s\n' "$_left_out" | grep -vxF "$CLUSTER_NAME" || true)"
+fi
+_left="$(printf '%s\n' "$_left_out" | grep -v '^[[:space:]]*$' | tr '\n' ' ' || true)"
+if ! have kind; then
+  log_info "kind is not installed — cannot tell which clusters remain; not touching any $CPK_CONTAINER controller"
+elif [ "$_left_rc" -ne 0 ]; then
+  log_warn "CANNOT ASK kind which clusters remain — leaving the $CPK_CONTAINER controller in place."
+  log_warn "  $(head -1 "$_DPS_ERR" 2>/dev/null || echo 'kind exited non-zero with no message')"
+elif [ -n "$_left" ]; then
+  log_info "leaving the $CPK_CONTAINER controller in place — kind still lists: ${_left% }"
+elif _cpk_ids="$(_dps "name=^/?${CPK_CONTAINER}\$")"; then
+  if [ -n "$_cpk_ids" ]; then
+    log_info "removing $CPK_CONTAINER container (no kind cluster is left)"
+    run docker rm -f "$CPK_CONTAINER" || log_warn "docker rm of $CPK_CONTAINER reported an error (it may still be running) — continuing"   # docker-ok: removing a container kind/cpk created
+  else
+    log_info "$CPK_CONTAINER container not present — skipping"
+  fi
+else
+  _cannot_ask "$CPK_CONTAINER"
+fi
+
+# --- 3. Prune THIS cluster's kindccm-* sidecars, by label ----------------------------------------
+# Run whether or not the cluster was present, so sidecars orphaned by an earlier run go too.
+# A surviving controller removes a deleted cluster's sidecars itself (it polls every 30 s), so this
+# `rm` can collide with that removal; no error from it may stop the script before the file half.
+# The prune is SKIPPED unless kind confirmed the cluster is gone: the first listing answered (so the
+# delete above was really decided) and the second no longer lists it.
+CPK_CLUSTER_LABEL="io.x-k8s.cloud-provider-kind.cluster"
+if kindccm_ids="$(_dps "label=${CPK_CLUSTER_LABEL}=${CLUSTER_NAME}")"; then
+  if [ -n "$kindccm_ids" ] && [ "${DRY_RUN:-0}" != 1 ] && [ "$_left_rc" -eq 0 ] && printf '%s\n' "$_left_out" | grep -xF "$CLUSTER_NAME" >/dev/null; then
+    log_warn "kind still lists '$CLUSTER_NAME' — NOT pruning its kindccm-* sidecars (its LoadBalancers are live)."
+  elif [ -n "$kindccm_ids" ] && [ "$_kind_rc" -ne 0 ]; then
+    log_warn "NOT pruning the kindccm-* sidecar(s) of '$CLUSTER_NAME' — kind did not confirm that cluster is gone."
+    log_warn "  Once it is gone, remove them with:  docker rm -f $(printf '%s' "$kindccm_ids" | tr '\n' ' ')"
+  elif [ -n "$kindccm_ids" ]; then
+    log_info "pruning the kindccm-* sidecar container(s) of '$CLUSTER_NAME'"
+    # Unquoted on purpose: pass each id as a separate arg. Guarded non-empty above.
+    # shellcheck disable=SC2086
+    run docker rm -f $kindccm_ids || log_warn "docker rm reported an error (a sidecar may already be gone)"   # docker-ok: removing containers cpk created for THIS cluster
+    if _residue="$(_dps "label=${CPK_CLUSTER_LABEL}=${CLUSTER_NAME}")" && [ -n "$_residue" ] && [ "${DRY_RUN:-0}" != 1 ]; then
+      log_warn "sidecar(s) of '$CLUSTER_NAME' are still present after the prune: $(printf '%s' "$_residue" | tr '\n' ' ')"
+    fi
+  else
+    log_info "no kindccm-* sidecars of '$CLUSTER_NAME' to prune"
+  fi
+else
+  _cannot_ask "the kindccm-* sidecars of '$CLUSTER_NAME'"
 fi
 
 # --- 4. Clean the kind overlay so real-VKS runs aren't polluted --------------
