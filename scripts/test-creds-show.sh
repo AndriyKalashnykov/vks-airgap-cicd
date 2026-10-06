@@ -2073,10 +2073,22 @@ else
 fi
 if grep -qF 'so this report could not read:' <<< "$_tb_all" \
    && grep -qF 'the Harbor web UI admin password, the ArgoCD password, the guest node SSH address and password.' <<< "$_tb_all" \
-   && grep -qE '^     then re-run make creds\.$' <<< "$_tb_all"; then
-  ok "token banner: the human line names the same three values and ends with the re-run"
+   && grep -qE '^     Only after the token-only form: run make creds again \(make creds-renew has already printed it\)\.$' <<< "$_tb_all"; then
+  ok "token banner: the human line names the same three values and says WHICH form needs the re-run"
 else
-  bad "token banner: the named list or the re-run line is missing"
+  bad "token banner: the named list or the token-only re-run line is missing"
+fi
+# The banner must not tell the reader to run the report again after the ONE-STEP command: that
+# contradicts "renew and re-print, one step" on the line above it (measured 2026-10-06).
+if grep -qE '^ +then re-run make creds\.$' <<< "$_tb_all"; then
+  bad "token banner: the unconditional 'then re-run make creds.' is back under the one-step command"
+else
+  ok "token banner: no unconditional re-run under the one-step command"
+fi
+if grep -qF 'renew and re-print, one step: make creds-renew' <<< "$_tb_all"; then
+  ok "token banner: the one-step command is still the one named (the line under it depends on that)"
+else
+  bad "token banner: the one-step command is no longer named, so the token-only line has nothing to qualify"
 fi
 if grep -qE 'second command|values that depend on it could not be read' <<< "$_tb_all"; then
   bad "token banner: the removed 'second command' / unnamed-values wording is back"

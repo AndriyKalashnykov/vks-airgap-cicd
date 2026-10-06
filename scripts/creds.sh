@@ -1353,7 +1353,12 @@ if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
   # (2026-09-15) "— the ArgoCD row is read BY this report, not by a second command" was internal
   # detail with nothing to act on. It was also the tests' only proof the ArgoCD EXPIRED arm ran; that
   # proof is now the `sup-unread: argocd` token above.
-  printf '     then re-run make creds.\n'
+  # ⚠️ NOT "then re-run make creds." (2026-10-06). The line above says `make creds-renew` renews
+  # AND re-prints in one step, and this line then told the operator to run the report again --
+  # the two-step remedy the creds-renew target was added to remove (see its comment in the
+  # Makefile). MEASURED on the lab: creds-renew printed the full report by itself. The re-run is
+  # needed only after the token-only form, so the line says which form needs it.
+  printf '     Only after the token-only form: run make creds again (make creds-renew has already printed it).\n'
 fi
 printf '\n  Context\n'
 case "$_prov" in
