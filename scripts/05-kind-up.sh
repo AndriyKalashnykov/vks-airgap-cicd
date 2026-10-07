@@ -59,12 +59,72 @@ POLL_INTERVAL="${POLL_INTERVAL_SECONDS:-5}"
 KIND_CONFIG="${REPO_ROOT}/kind/kind-config.yaml"
 CPK_CONTAINER="cloud-provider-kind"
 CPK_IMAGE="registry.k8s.io/cloud-provider-kind/cloud-controller-manager:${CPK_VERSION}"
+# The one argument this project's controller runs with. Step 0 compares a running controller to it.
+CPK_FLAG="--gateway-channel=disabled"
 
 require_cmd kind
 require_cmd docker
 require_cmd kubectl
 
 [ -f "$KIND_CONFIG" ] || die "kind config not found at $KIND_CONFIG"
+
+# --- 0. Another project's kind cluster on this host? (B741) ------------------
+# ONE cloud-provider-kind controller serves EVERY kind cluster on a host, and step 3 below removes
+# whatever controller is running and starts this project's. Decide HERE, before anything is created,
+# so a refusal leaves no half-built cluster behind.
+#
+# MEASURED 2026-10-06 on Linux, with golang-web's kind cluster up beside ours (kind v0.32/v0.33,
+# cloud-provider-kind v0.11.1):
+#   * A controller LEFT RUNNING across a delete + immediate recreate of our cluster (11 s, inside its
+#     30 s poll) never gave the new cluster's LoadBalancer an address (300 s, then gave up). With
+#     about a minute between delete and recreate it did (3 s). So "reuse a compatible controller
+#     untouched" is not safe: step 3 always removes and starts it.
+#   * Removing and starting it with the SAME image and arguments fixed that stuck LoadBalancer in 1 s
+#     and the other cluster kept its address and its sidecar container. So a restart of OUR OWN
+#     controller is invisible to the other project.
+#   * Replacing ANOTHER project's controller (golang-web's: `--network kind`, no arguments) with ours
+#     kept golang-web serving on Linux. That is one project at one operating point, and ours runs
+#     with the Gateway API channel disabled, so it is not done silently: stop and let the operator
+#     decide.
+# The check is not repeated at step 3: a controller another project starts while our cluster is
+# being created is still replaced. Re-checking there would mean refusing with a cluster already built.
+_all_rc=0; _all_err="$(mktemp)"; _all_clusters="$(kind get clusters 2>"$_all_err")" || _all_rc=$?
+if [ "$_all_rc" -ne 0 ]; then
+  _all_msg="$(head -1 "$_all_err" 2>/dev/null || true)"; rm -f "$_all_err"
+  die "cannot list kind clusters (kind get clusters exited $_all_rc) — not creating anything.
+  ${_all_msg}
+  Is the docker daemon running and reachable for this user?  docker info"
+fi
+rm -f "$_all_err"
+_foreign="$(printf '%s\n' "$_all_clusters" | grep -v '^[[:space:]]*$' | grep -vxF "$CLUSTER_NAME" | tr '\n' ' ' || true)"
+_foreign="${_foreign% }"
+if [ -n "$_foreign" ] && docker ps -a --format '{{.Names}}' | grep -xF "$CPK_CONTAINER" >/dev/null; then
+  if ! _cur_image="$(docker inspect -f '{{.Config.Image}}' "$CPK_CONTAINER" 2>/dev/null)" \
+     || ! _cur_args="$(docker inspect -f '{{json .Args}}' "$CPK_CONTAINER" 2>/dev/null)"; then
+    die "docker listed a $CPK_CONTAINER container but could not inspect it (removed a moment ago?) — not creating anything.
+  Run it again:  make kind-up"
+  fi
+  if [ "$_cur_image" != "$CPK_IMAGE" ] || [ "$_cur_args" != "[\"${CPK_FLAG}\"]" ]; then
+    _takeover="  To let this project's controller take over (it then serves the other cluster(s) too, with the
+  Gateway API channel disabled; measured on Linux with one other project):
+    docker rm -f $CPK_CONTAINER
+  then re-run the make target you started (kind-up, e2e-kind, ...). Until this project's controller
+  is up, the other cluster keeps its current LoadBalancer addresses but gets no new ones."
+    if [ "$(uname -s)" = Darwin ]; then
+      _takeover="  On macOS two projects cannot share one controller (the other one publishes LoadBalancers on
+  host ports with --enable-lb-port-mapping; this one does not). Delete the other project's cluster
+  first (stopping it is not enough: kind still lists it), then re-run the make target you started."
+    fi
+    die "another kind cluster is on this host ($_foreign), and the $CPK_CONTAINER controller
+  container there is not the one this checkout starts (image or arguments differ; an older pin of
+  this project's own controller looks like this too). One controller serves EVERY kind cluster, and
+  kind-up would replace it. Nothing was created.
+    found:    image $_cur_image  arguments $_cur_args
+    ours:     image $CPK_IMAGE  arguments [\"${CPK_FLAG}\"]
+$_takeover"
+  fi
+  log_info "another kind cluster is on this host ($_foreign); the $CPK_CONTAINER controller is this project's and is restarted below (on Linux the other cluster kept its LoadBalancer address: one project, repeated runs)"
+fi
 
 # --- 1. Create the cluster (idempotent + health-checked) ---------------------
 # A cluster with this name may be listed yet BROKEN — an interrupted `kind create`
@@ -272,7 +332,7 @@ run docker run -d \
   --network host \
   --restart unless-stopped \
   -v "${CPK_HOST_SOCK}:/var/run/docker.sock" \
-  "$CPK_IMAGE" --gateway-channel=disabled
+  "$CPK_IMAGE" "$CPK_FLAG"
 
 # --- 4. Readiness: poll until all nodes are Ready (bounded, with delay) -------
 log_info "waiting for all nodes to become Ready (timeout ${READY_TIMEOUT}s, poll ${POLL_INTERVAL}s)"
@@ -296,16 +356,31 @@ log_info "all nodes Ready"
 #
 # And count CRASH lines rather than trusting `docker ps`: the container runs with
 # `--restart unless-stopped`, so a crash-looping CPK shows `Up` BETWEEN cycles — status false-greens.
-sleep 2
-cpk_log="$(docker logs "$CPK_CONTAINER" 2>&1 || true)"
-if ! grep -q 'Gateway API CRDs installation skipped' <<< "$cpk_log"; then
+# With another kind cluster on the host the fresh controller logs that line once PER CLUSTER, so the
+# line must be OURS; and it reaches each cluster on its own schedule, so poll for it (bounded).
+_cpk_deadline=$(( SECONDS + READY_TIMEOUT )); cpk_log=""; _cpk_mine=""; _cpk_ours=""
+while :; do
+  cpk_log="$(docker logs "$CPK_CONTAINER" 2>&1 || true)"
+  # Judge OUR cluster's lines only: another cluster's failure is not this run's verdict.
+  _cpk_mine="$(grep -F "cluster=\"${CLUSTER_NAME}\"" <<< "$cpk_log" || true)"
+  _cpk_ours="$(grep -F 'Gateway API CRDs installation skipped' <<< "$_cpk_mine" || true)"
+  # The controller logs "Starting cloud controller" AFTER its skip-or-install branch, so once that
+  # line is there for our cluster the answer is final either way: do not wait out the timeout.
+  if [ -n "$_cpk_ours" ] || [ "$SECONDS" -ge "$_cpk_deadline" ] \
+     || grep -F '"Starting cloud controller"' <<< "$_cpk_mine" >/dev/null; then break; fi
+  sleep "$POLL_INTERVAL"
+done
+if [ -z "$_cpk_ours" ]; then
+  if [ -z "$_cpk_mine" ]; then
+    log_error "cloud-provider-kind logged NOTHING for cluster '$CLUSTER_NAME' in ${READY_TIMEOUT}s — it never reached this cluster (is it restarting? docker ps -a)."
+  fi
   log_error "cloud-provider-kind did NOT log that it skipped the Gateway API CRD install."
   log_error "  Either --gateway-channel=disabled was not honoured by this CPK version, or CPK is"
   log_error "  installing the CRDs anyway — which makes our own CRD install untestable (a FALSE PROOF)."
   printf '%s\n' "$cpk_log" | tail -20 >&2
   die "cloud-provider-kind is still managing the Gateway API CRDs"
 fi
-crashes="$(printf '%s' "$cpk_log" | grep -c 'Failed to start\|Failed to install Gateway API CRDs' || true)"
+crashes="$(grep -c 'Failed to start\|Failed to install Gateway API CRDs' <<< "$_cpk_mine" || true)"
 [ "${crashes:-0}" -eq 0 ] || die "cloud-provider-kind is crash-looping (${crashes} failure lines) — LoadBalancers will never get an IP"
 log_info "cloud-provider-kind: Gateway API CRD management is DISABLED (we install them ourselves), 0 crash lines"
 
