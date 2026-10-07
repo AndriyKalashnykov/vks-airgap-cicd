@@ -11076,7 +11076,7 @@ Found by the B734 review, measured in both 2026-09-25/26 walk logs: `ARGOCD_KUBE
 current-context. Anything that later reads the file's current context gets the ArgoCD one. Not blocking;
 decide whether 31 should use its own file or 30 should pin its context explicitly.
 
-## B741 — `05-kind-up.sh` still replaces another project's cloud-provider-kind controller (OPEN, 2026-10-06)
+## ✅ B741 — (DONE 2026-10-06) `05-kind-up.sh` replaced another project's cloud-provider-kind controller
 
 `kind-down.sh` is fixed (same change as this entry): it prunes only this cluster's `kindccm-*`
 sidecars, by label, and removes the shared controller only when kind lists no cluster. Proven by
@@ -11084,7 +11084,7 @@ sidecars, by label, and removes the shared controller only when kind lists no cl
 or guards from the implementation review) and by one run against the real docker and kind with a
 foreign cluster present. The prune is skipped unless kind confirmed this cluster is gone.
 
-Still open, the other half: `05-kind-up.sh` (~line 226) removes ANY existing `cloud-provider-kind`
+The other half (open until the 2026-10-06 entry below): `05-kind-up.sh` (~line 226) removes ANY existing `cloud-provider-kind`
 container and starts its own (`--network host`, `--gateway-channel=disabled`). One controller serves
 every kind cluster on a host, so on a box that also runs another project's cluster (golang-web starts
 it on `--network kind`, with `--enable-lb-port-mapping` on macOS) kind-up silently swaps that
@@ -11102,6 +11102,37 @@ refused to clear it without a measurement:
 What would settle it (about 15 minutes, two real clusters on Linux): kind-down then kind-up with the
 other project's cluster still present, and show Harbor gets an address and the other project's
 Service keeps its own.
+
+**2026-10-06 — DONE.** Measured first, with golang-web's cluster and ours up together on Linux
+(kind v0.32/v0.33, cloud-provider-kind v0.11.1, scratch copy of this repo so no state file here was
+touched):
+
+- kind-up replaced golang-web's controller (`--network kind`, no arguments) with ours; both projects'
+  LoadBalancers answered 200 afterwards. One project, one operating point.
+- kind-down (the fix above) on the real engine: our cluster and sidecar removed, controller kept
+  ("kind still lists: golang-web"), golang-web still 200.
+- Controller LEFT UNTOUCHED, our cluster recreated 56 s or more after its delete: the new
+  LoadBalancer got an address in 0 to 6 s (4 of 4 runs).
+- Controller LEFT UNTOUCHED, delete then recreate within 10 to 13 s (inside the controller's 30 s
+  poll): the new LoadBalancer got NO address (7 of 7 runs: one waited 300 s, six waited 120 s), and
+  a sidecar of the old cluster was still running. So the stale-controller worry is real, and it
+  depends on the gap: two operating points, opposite results, each repeated.
+- Then `docker rm -f` + start with the same image and argument: the stuck LoadBalancer got its
+  address in 0 to 6 s (7 of 7); golang-web kept its address and answered 200 every time.
+
+Hence the shape in `05-kind-up.sh` step 0: always remove-and-start (never reuse untouched); with
+another cluster on the host and a controller whose image or arguments are not ours, stop BEFORE
+`kind create`, name the cluster, print both controllers and what to run (on macOS: delete the other
+cluster first). The log check after the start now judges OUR cluster's lines only, for the skip line
+and for the crash count, and stops waiting once the controller has started for our cluster.
+`scripts/test-kind-up-controller.sh`: 19 arms; 5 of the first 11 are RED against a5906cc, and twelve
+mutants of the guard and the log check are each caught (six of them found by the implementation
+review, which the first version of the test missed). Known gap: one transient `Failed to start` for
+our own cluster followed by a successful retry is still reported as crash-looping, as before. Run against the two
+real clusters: our controller + golang-web's cluster -> proceeds, golang-web keeps address and
+sidecar; golang-web-style controller -> stops, controller and clusters untouched.
+Not measured: macOS (golang-web needs `--enable-lb-port-mapping` there); a third project that uses
+the Gateway API channel our controller disables.
 
 Deliberate differences from golang-web, owner decisions of 2026-10-06 (do not "align" them): Docker
 on Linux from the distro package, never a third-party apt repo; macOS LoadBalancers through

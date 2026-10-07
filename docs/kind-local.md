@@ -126,6 +126,12 @@ Then: **[open the UIs](access-uis.md)** · **[walk a code change from Gitea to t
 make kind-down   # tear it all down (its cloud-provider-kind sidecars too; the shared controller only when no kind cluster is left)
 ```
 
+If another KinD cluster is on this machine and the `cloud-provider-kind` controller does not match
+this project's pinned image and argument, `make kind-up` stops before it creates anything and says
+what to run. On Linux that is one command that lets this project's controller take over (measured
+with one other project); on macOS delete the other project's cluster first (stopping it is not
+enough: kind still lists it).
+
 **You do not need a `.env`.** The KinD steps **discover** what they can (`KUBECONFIG`, Harbor's LB IP and
 CA, ArgoCD's LB IP) and **generate** the passwords for the components they install, writing both into a
 gitignored `.env.state`. `make creds-show` prints the result.
