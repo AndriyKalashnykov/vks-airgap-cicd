@@ -44,7 +44,7 @@ min_version = "2026.9.2"
 # check-app-toolchains now asserts every enrolled app ships a Dockerfile.builder (RED-proven).
 #
 # node STAYS below: it is INFRA (npx markdownlint for docs-lint, npx renovate), not an app toolchain.
-kubectl  = "1.36.4"
+kubectl  = "1.37.1"
 helm     = "4.2.4"
 kustomize = "5.8.1"
 # kind — the local KinD stand-in cluster (scripts/05-kind-up.sh `require_cmd kind`).
