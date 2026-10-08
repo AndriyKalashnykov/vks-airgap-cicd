@@ -252,7 +252,7 @@ jobs:
       # renovate: datasource=github-releases depName=jdx/mise
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
-          version: 2026.10.2
+          version: 2026.10.3
 
       # Persist kubeconform's downloaded JSON schemas across runs (validate.sh
       # points kubeconform -cache here) so githubusercontent isn't re-hit every run.
@@ -532,7 +532,7 @@ jobs:
       # renovate: datasource=github-releases depName=jdx/mise
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
-          version: 2026.10.2
+          version: 2026.10.3
           install_args: gitleaks
           cache: false
 
