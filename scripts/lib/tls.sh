@@ -380,6 +380,50 @@ vks_ca_default() {
   log_info "TLS: using the CA that 'make fetch-supervisor-ca' wrote (${VKS_CA_CERT_FILE})"
 }
 
+# supervisor_anchor_verdict <host> <ca-file> [port] — "is this anchor for the Supervisor that is RUNNING?"
+# ONE implementation with TWO callers: 30-vks-login.sh asks it before a credential is submitted, and
+# creds.sh asks it before it tells a reader to renew. It sends NO credential: TLS handshakes only,
+# each bounded by CA_VERIFY_TIMEOUT. The port defaults to the Supervisor API's fixed 443, the one
+# `vcf context create --endpoint` dials; the argument exists so a test can use a real listener.
+#
+# It returns ca_verifies_endpoint's verdicts (0 verifies, 1 does not, 2 no answer, 3 name, 4 no
+# certificate, 5 no usable anchor) and ONE more:
+#   6 = the anchor is RIGHT; the certificate's DATES are not valid on this machine.
+#
+# WHY 6. ca_verifies_endpoint's 1 means "connected, and verification failed for a reason that is not
+# the name". That includes a leaf that has EXPIRED (verify error 10) or is NOT YET VALID (error 9)
+# under the CORRECT anchor: measured with a real CA and real leaves on OpenSSL 3.5.5, both give 1.
+# Both callers answer 1 with "the anchor is for a different Supervisor, re-pin it", which for an
+# expired certificate or a wrong clock on this machine sends the reader to replace a correct anchor.
+# ca_verifies_endpoint's own codes are NOT changed (its other callers branch on them). Instead, on a
+# 1 this makes ONE more handshake with the same arguments plus `-no_check_time`, which tells openssl
+# to ignore validity dates and nothing else: the chain and the name are still checked. If THAT one
+# verifies, the dates were the only thing wrong.
+# The second handshake is accepted only on all three of: CONNECTED(, "Verify return code: 0 (ok)",
+# and a peer certificate (a plaintext listener prints the ok line with no certificate at all).
+# An openssl whose s_client does not know `-no_check_time` exits on the unknown option, prints none
+# of those, and the verdict stays 1: the older, coarser answer, never a false 6.
+supervisor_anchor_verdict() {
+  local host="${1:?supervisor_anchor_verdict: host required}" ca="${2:-}" port="${3:-443}"
+  local rc=0 out="" namearg
+  ca_verifies_endpoint "$host" "$port" "$ca" || rc=$?
+  [ "$rc" -eq 1 ] || return "$rc"
+  case "$(ca_addr_kind "$host")" in
+    name) namearg="-verify_hostname" ;;
+    *)    namearg="-verify_ip" ;;
+  esac
+  out=$(printf '' | timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client \
+          -connect "${host}:${port}" -servername "$host" \
+          -CAfile "$ca" -verify_return_error -no_check_time "$namearg" "$host" 2>&1) || true
+  # Herestrings, not `printf | grep -q`: see ca_verifies_endpoint for why (pipefail + SIGPIPE).
+  if command grep -q 'CONNECTED(' <<< "$out" \
+     && command grep -q 'Verify return code: 0 (ok)' <<< "$out" \
+     && ! command grep -q 'no peer certificate available' <<< "$out"; then
+    return 6
+  fi
+  return 1
+}
+
 # ca_anchor_reject_reason <cert-file> — prints WHY the file is not a usable trust ANCHOR, or
 # nothing at all when it is one. Pure: reads a FILE with openssl, never a cluster.
 #

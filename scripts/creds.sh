@@ -1323,6 +1323,51 @@ if [ "$_pre_off" = 1 ]; then
   # OFFLINE one does (make state-show). URLs and logins are what always follow (adversary, ran-it).
   printf '      Every URL and login below needs the lab answering.\n'
 fi
+# ── CAN A RENEW WORK AT ALL? Ask the Supervisor, without a credential, BEFORE naming the command ──
+# MEASURED 2026-10-08 on a lab that had been destroyed and rebuilt: the banner below said "the
+# recorded ingress did not answer either — check the lab is UP" while the same report showed Harbor
+# and ArgoCD serving and the Supervisor endpoint answered. The lab was up; the stored login was for
+# the PREVIOUS lab. It then named `make creds-renew`, which the login refuses (correctly, before
+# the password is sent) because the stored CA no longer verifies the endpoint.
+# The ingress is a stand-in for "is the lab up"; the Supervisor is the thing a renew dials. So ask
+# IT: the same function the login uses (supervisor_anchor_verdict, lib/tls.sh), bounded by this
+# report's probe budget.
+#   stale    it answers and the anchor does NOT verify it -> renewing cannot work; print the re-pin
+#   dates    it answers, the anchor IS right, the certificate's dates are not valid here -> clock/expiry
+#   verifies it answers and the anchor verifies it        -> the lab is up; renew
+#   silent   it did not answer in time                    -> check the lab first
+#   skip     the check did not run, or its answer is none of those -> the wording the banner had
+#            before the check existed. NEVER a claim the check did not make.
+# skip covers: probes forbidden, no SUPERVISOR_HOST, no anchor file, no openssl/timeout on this
+# machine, and the verdicts with their own remedy in the login (wrong name 3, no certificate 4,
+# unusable anchor 5).
+# Two FUNCTIONS, at column 0, so the tests can run each alone: the no-probe guard in particular can
+# only be reached that way today (with probes off the banner does not print at all).
+# _sup_anchor_ca: the anchor file, by vks_ca_default, the login's own rule. The caller runs this in
+# a command substitution, so the export vks_ca_default makes does not reach the rest of the report.
+_sup_anchor_ca() {
+  vks_ca_default >/dev/null 2>&1 || true
+  printf '%s' "${VKS_CA_CERT_FILE:-}"
+}
+# _sup_anchor_probe <ca-file>: prints one of skip|verifies|stale|dates|silent.
+_sup_anchor_probe() {
+  local _ca="${1:-}" _rc=0
+  if [ "$_no_probe_snapshot" = 1 ] || [ -z "${SUPERVISOR_HOST:-}" ] || [ -z "$_ca" ] || [ ! -s "$_ca" ] \
+     || ! command -v openssl >/dev/null 2>&1 || ! command -v timeout >/dev/null 2>&1; then
+    printf 'skip'; return 0
+  fi
+  CA_VERIFY_TIMEOUT="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" \
+    supervisor_anchor_verdict "$SUPERVISOR_HOST" "$_ca" >/dev/null 2>&1 || _rc=$?
+  case "$_rc" in
+    0) printf 'verifies' ;;
+    1) printf 'stale' ;;
+    2) printf 'silent' ;;
+    6) printf 'dates' ;;
+    *) printf 'skip' ;;
+  esac
+}
+# Set here, not inside the banner: the ingress paragraph further down reads it too.
+_sup_anchor=skip; _sup_ca=""
 if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
   # F5: the old headline said "every <not read> below needs it" and MEASURED to ZERO referents in
   # a reachable state, while nine unrelated `<not read — …>` variants compete for the reader's eye.
@@ -1333,11 +1378,40 @@ if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
   printf '\n  %s\u26a0\ufe0f  Supervisor token EXPIRED %s — so this report could not read:%s\n' \
     "${_BOLD}${_RED}" "${_SUP_DEAD_AT:-?}" "${_RST}"
   printf '     %s.\n' "$_sup_unread"
+  # The decision is _sup_anchor_probe's (defined above the banner, with the reasons).
+  _sup_ca="$(_sup_anchor_ca)"
+  _sup_anchor="$(_sup_anchor_probe "$_sup_ca")"
+  [ "${CREDS_TOKEN:-0}" = 1 ] && printf 'sup-anchor: %s\n' "$_sup_anchor"
+  if [ "$_sup_anchor" = stale ]; then
+    # No renew command in this arm, and no "check the lab is UP": the endpoint answered.
+    printf '     RENEWING CANNOT WORK YET. The Supervisor %s answers, but the CA stored at\n' "$SUPERVISOR_HOST"
+    printf '     %s does not verify its certificate: the login this repo has stored is for a\n' "$_sup_ca"
+    printf '     DIFFERENT Supervisor, usually a lab that was destroyed and rebuilt (a rebuild issues a new CA at the\n'
+    printf '     same address). make creds-renew stops on that before it sends the password, so do this instead:\n'
+    supervisor_repin_how "$SUPERVISOR_HOST" "$_sup_ca" | sed 's/^/     /'
+    printf '     After the login: make creds\n'
+  elif [ "$_sup_anchor" = dates ]; then
+    # The anchor is RIGHT. No re-pin, no renew command, no "check the lab is UP".
+    printf '     RENEWING CANNOT WORK YET. The Supervisor %s answers, and the CA stored at\n' "$SUPERVISOR_HOST"
+    printf "     %s is the right one, but the certificate's dates are not valid on this\n" "$_sup_ca"
+    printf "     machine: the certificate has expired (or is not valid yet), or this machine's clock is wrong.\n"
+    printf '     make creds-renew stops on that before it sends the password.\n'
+    supervisor_dates_how "$SUPERVISOR_HOST" | sed 's/^/     /'
+    printf '     Once the time is inside those two dates: make creds\n'
+  fi
   # BEFORE the command, never after: it is the reason NOT to run it yet.
-  if [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; then
+  # Not when the Supervisor answered (stale, dates, verifies): then the lab IS up, whatever the ingress did.
+  _sup_answered=0
+  case "$_sup_anchor" in stale|dates|verifies) _sup_answered=1 ;; esac
+  if [ "$_sup_anchor" = silent ] && ! { [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; }; then
+    printf '     FIRST: the Supervisor %s did not answer within %ss — check the lab is UP before spending\n' \
+      "$SUPERVISOR_HOST" "${CREDS_PROBE_TIMEOUT_SECONDS:-2}"
+    printf '     an SSO attempt — %s.\n' "$(sso_lockout_note)"
+  elif [ "$_sup_answered" != 1 ] && [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; then
     printf '     FIRST: the recorded ingress did not answer either — check the lab is UP before spending\n'
     printf '     an SSO attempt — %s.\n' "$(sso_lockout_note)"
   fi
+  if [ "$_sup_anchor" != stale ] && [ "$_sup_anchor" != dates ]; then
   # ⚠️ TWO DEPENDENT STEPS, NUMBERED — NOT A LIST OF ALTERNATIVES. `make argocd-password` reads the
   # SAME Supervisor token this banner has just declared dead, so offering it alongside the renew
   # command read as "either of these". MEASURED 2026-09-10: the operator ran it and got
@@ -1359,6 +1433,7 @@ if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
   # Makefile). MEASURED on the lab: creds-renew printed the full report by itself. The re-run is
   # needed only after the token-only form, so the line says which form needs it.
   printf '     Only after the token-only form: run make creds again (make creds-renew has already printed it).\n'
+  fi
 fi
 printf '\n  Context\n'
 case "$_prov" in
@@ -1591,7 +1666,16 @@ elif [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
   echo "      rebuild, so it may be a previous lab's — but a POWERED-OFF or still-booting lab is"
   echo "      silent in exactly the same way, and nothing here can tell those apart."
   echo "      Do not add /etc/hosts entries for it yet — a hosts entry pointing at nothing sends you"
-  echo "      to debug your browser. Check the lab is up FIRST; if it is, re-run the ingress"
+  # ⚠️ NOT "check the lab is up" when the Supervisor has just ANSWERED this run (the banner at the
+  # top said so): that clause sent the reader to check a lab the same report shows is up. Only the
+  # clause changes; `_sup_anchor` is `skip` unless the expired-token banner ran its check.
+  case "${_sup_anchor:-skip}" in
+    stale|dates|verifies)
+  echo "      to debug your browser. The Supervisor answered on this run, so the lab is UP: settle the"
+  echo "      item at the top of this report first, then re-run the ingress" ;;
+    *)
+  echo "      to debug your browser. Check the lab is up FIRST; if it is, re-run the ingress" ;;
+  esac
   # ⚠️ NAME WHICH. Only Harbor and ArgoCD have their own LoadBalancer rows; Gitea, Tekton,
   # headlamp and every app row resolve ONLY through this ingress, so telling the operator to
   # "reach the services on their own LoadBalancers" is a remedy that does not exist for most

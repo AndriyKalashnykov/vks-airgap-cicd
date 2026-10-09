@@ -207,7 +207,9 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
   matters). Either VKS_CA_CERT_FILE is the wrong file, or the digest you were given is stale.
   Confirm it with the platform team over a channel that is NOT this connection." ;;
       esac
-      case "$( ca_verifies_endpoint "$SUPERVISOR_HOST" 443 "$VKS_CA_CERT_FILE" >/dev/null 2>&1; echo $? )" in
+      # supervisor_anchor_verdict (lib/tls.sh) is ca_verifies_endpoint for the Supervisor's port; the
+      # access report (creds.sh) calls the SAME function, so the two cannot disagree about staleness.
+      case "$( supervisor_anchor_verdict "$SUPERVISOR_HOST" "$VKS_CA_CERT_FILE" >/dev/null 2>&1; echo $? )" in
         0) : ;;   # verifies — proceed
         2) log_warn "TLS: could not reach ${SUPERVISOR_HOST}:443 to check the CA — proceeding, and
   the CLI will fail closed if it cannot verify. This is NOT evidence the anchor is wrong." ;;
@@ -288,16 +290,42 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
   (-k on that curl is deliberate and safe: you are FETCHING a trust anchor you then verify
    out-of-band by fingerprint — the fingerprint is what authenticates it, not the transport.)
   REFUSING to continue: a credential is submitted over this connection." ;;
-        *) die "the CA at ${VKS_CA_CERT_FILE} does NOT verify the certificate ${SUPERVISOR_HOST}
+        # 6 = supervisor_anchor_verdict's own verdict: the chain and the name verify once validity
+        # DATES are ignored, so the anchor is RIGHT and the certificate has expired, is not valid
+        # yet, or this machine's clock is wrong. It used to fall into the arm below and be told
+        # "different Supervisor, re-pin" — the wrong remedy for a clock. Still a hard stop: the vcf
+        # CLI would refuse the same certificate, and nothing here may skip verification.
+        6) die "the CA at ${VKS_CA_CERT_FILE} is the RIGHT anchor for ${SUPERVISOR_HOST}, but the certificate
+  it presents is not valid at this machine's current time: the certificate has expired (or is not
+  valid yet), or this machine's clock is wrong.
+  No password was sent.
+
+$(supervisor_dates_how "$SUPERVISOR_HOST" | sed 's/^/  /')
+
+  Then re-run. Do NOT reach for VKS_INSECURE_SKIP_TLS_VERIFY: a credential is submitted over this connection." ;;
+        # The remedy is supervisor_repin_how (lib/os.sh): the commands, with this run's endpoint and
+        # file in them. This arm used to end "Re-pin it from the lab that is actually running", which
+        # names no command. The access report prints the SAME text, so the two cannot drift.
+        # The two names below are EQUAL after a rebuild (every cut mints a new CA under the same
+        # subject), which read as "these match, so why does it fail?" — hence the line under them.
+        *) _an_subj="$(openssl x509 -in "$VKS_CA_CERT_FILE" -noout -subject 2>/dev/null | sed 's/^subject=//' || true)"
+           _an_iss="$(printf '' | timeout 15 openssl s_client -connect "${SUPERVISOR_HOST}:443" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | sed 's/^issuer=//' || true)"
+           _an_same=""
+           if [ -n "$_an_subj" ] && [ "$_an_subj" = "$_an_iss" ]; then
+             _an_same="
+  The two names are the same and the CAs are NOT: a rebuilt lab issues a new CA under the old name,
+  so a name cannot tell them apart. Checking the certificate itself does, and that check failed."
+           fi
+           die "the CA at ${VKS_CA_CERT_FILE} does NOT verify the certificate ${SUPERVISOR_HOST}
   presents. The endpoint ANSWERED, so this is not a reachability problem — the anchor is for a
   different (usually a DESTROYED and rebuilt) Supervisor. A rebuild mints a new VMCA.
-    your anchor is:            $(openssl x509 -in "$VKS_CA_CERT_FILE" -noout -subject 2>/dev/null | sed 's/^subject=//')
-    the endpoint's cert issuer: $(printf '' | timeout 15 openssl s_client -connect "${SUPERVISOR_HOST}:443" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | sed 's/^issuer=//')
-  (⚠️ these are SUBJECT vs ISSUER on purpose. An earlier version of this message printed the stored
-   CA's fingerprint beside the live LEAF's fingerprint — two different objects, which would never
-   match even when the anchor is correct. Comparable things, or the message misleads.)
-  Re-pin it from the lab that is actually running, then re-run. Do NOT reach for
-  VKS_INSECURE_SKIP_TLS_VERIFY: a credential is submitted over this connection." ;;
+    your anchor is:            ${_an_subj}
+    the endpoint's cert issuer: ${_an_iss}${_an_same}
+  No password was sent.
+
+$(supervisor_repin_how "$SUPERVISOR_HOST" "$VKS_CA_CERT_FILE" | sed 's/^/  /')
+
+  Do NOT reach for VKS_INSECURE_SKIP_TLS_VERIFY: a credential is submitted over this connection." ;;
       esac
       create_args+=(--ca-certificate "$VKS_CA_CERT_FILE")
       log_info "TLS: verifying the Supervisor against ${VKS_CA_CERT_FILE}"

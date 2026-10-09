@@ -119,5 +119,76 @@ done
 [ -z "$_missing" ] || { printf 'FAIL - verdict(s)%s were produced by NO case — two have collapsed. observed: %s\n' \
   "$_missing" "$(printf '%b' "$OBSERVED" | tr '\n' ' ')"; fail=$((fail+1)); }
 
+# ── supervisor_anchor_verdict: a leaf whose DATES are wrong, under the RIGHT anchor ─────────────
+# ca_verifies_endpoint answers 1 for it (verification failed, and not on the name), and 1 is what
+# both callers read as "the anchor is for a different Supervisor: re-pin it". For an expired
+# certificate or a wrong clock that replaces a correct anchor. supervisor_anchor_verdict keeps
+# ca_verifies_endpoint's codes and adds 6 for exactly this, decided by a second handshake that
+# ignores validity dates and nothing else. Real listeners, like every case above: the whole point
+# is what s_client prints for a state nobody had looked at.
+# These do NOT go through ck(): its OBSERVED list feeds the coverage check above, which is about
+# ca_verifies_endpoint's six verdicts only.
+ck2() { # <label> <want-rc> <got-rc>
+  if [ "$2" = "$3" ]; then printf 'ok   - %s (rc=%s)\n' "$1" "$3"; pass=$((pass+1))
+  else printf 'FAIL - %s: want rc=%s got rc=%s\n' "$1" "$2" "$3"; fail=$((fail+1)); fi
+}
+D="$TMP/dated"; mkdir -p "$D/db"; : > "$D/db/index.txt"; printf '01\n' > "$D/db/serial"
+cat > "$D/ca.cnf" <<CNF
+[ ca ]
+default_ca = d
+[ d ]
+dir = $D/db
+database = $D/db/index.txt
+new_certs_dir = $D/db
+serial = $D/db/serial
+default_md = sha256
+policy = p
+copy_extensions = copy
+unique_subject = no
+[ p ]
+commonName = supplied
+CNF
+# A CA that is valid NOW, and three leaves it signs: one valid, one EXPIRED, one NOT YET VALID.
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "$D/cakey.pem" -out "$D/ca.pem" -days 1 \
+  -subj "/CN=dated-ca" -addext "basicConstraints=critical,CA:TRUE" >/dev/null 2>&1
+mint_leaf() { # <name> <startdate> <enddate>   (YYYYMMDDHHMMSSZ)
+  openssl req -new -newkey rsa:2048 -nodes -keyout "$D/$1.key" -out "$D/$1.csr" \
+    -subj "/CN=$1" -addext "subjectAltName=IP:127.0.0.1" >/dev/null 2>&1 || return 1
+  openssl ca -batch -notext -config "$D/ca.cnf" -cert "$D/ca.pem" -keyfile "$D/cakey.pem" \
+    -in "$D/$1.csr" -out "$D/$1.pem" -startdate "$2" -enddate "$3" >/dev/null 2>&1
+}
+_y="$(date -u +%Y)"
+if mint_leaf good "$((_y - 1))0101000000Z" "$((_y + 5))0101000000Z" \
+   && mint_leaf expired 20200101000000Z 20200102000000Z \
+   && mint_leaf notyet "$((_y + 5))0101000000Z" "$((_y + 6))0101000000Z"; then
+  GOOD_PORT="$(pick_port)"; EXP_PORT="$(pick_port)"; NY_PORT="$(pick_port)"
+  openssl s_server -accept "$GOOD_PORT" -cert "$D/good.pem"    -key "$D/good.key"    -quiet >/dev/null 2>&1 & GOOD_PID=$!
+  openssl s_server -accept "$EXP_PORT"  -cert "$D/expired.pem" -key "$D/expired.key" -quiet >/dev/null 2>&1 & EXP_PID=$!
+  openssl s_server -accept "$NY_PORT"   -cert "$D/notyet.pem"  -key "$D/notyet.key"  -quiet >/dev/null 2>&1 & NY_PID=$!
+  sleep 1
+  # POSITIVE CONTROL: the CA verifies its own valid leaf. Without it, a broken fixture (a CA that
+  # signs nothing usable) would make every "1" below true for the wrong reason.
+  r=0; supervisor_anchor_verdict 127.0.0.1 "$D/ca.pem" "$GOOD_PORT" || r=$?
+  if [ "$r" = 0 ]; then
+    ck2 "dated fixture: the CA verifies its own VALID leaf (control)" 0 "$r"
+    r=0; ca_verifies_endpoint      127.0.0.1 "$EXP_PORT" "$D/ca.pem"       || r=$?; ck2 "EXPIRED leaf, right anchor: ca_verifies_endpoint still says 1"          1 "$r"
+    r=0; supervisor_anchor_verdict 127.0.0.1 "$D/ca.pem" "$EXP_PORT"       || r=$?; ck2 "EXPIRED leaf, right anchor: supervisor_anchor_verdict says DATES"       6 "$r"
+    r=0; ca_verifies_endpoint      127.0.0.1 "$NY_PORT"  "$D/ca.pem"       || r=$?; ck2 "NOT-YET-VALID leaf, right anchor: ca_verifies_endpoint still says 1"    1 "$r"
+    r=0; supervisor_anchor_verdict 127.0.0.1 "$D/ca.pem" "$NY_PORT"        || r=$?; ck2 "NOT-YET-VALID leaf, right anchor: supervisor_anchor_verdict says DATES" 6 "$r"
+    # The other direction: a WRONG anchor must stay 1, whatever the dates. Ignoring dates must not
+    # turn "different CA" into "right CA".
+    r=0; supervisor_anchor_verdict 127.0.0.1 "$TMP/other.pem" "$GOOD_PORT" || r=$?; ck2 "valid leaf, WRONG anchor: stays 1 (not 6)"                              1 "$r"
+    r=0; supervisor_anchor_verdict 127.0.0.1 "$TMP/other.pem" "$EXP_PORT"  || r=$?; ck2 "EXPIRED leaf, WRONG anchor: stays 1 (not 6)"                            1 "$r"
+    # And the pass-through verdicts are untouched by the wrapper.
+    r=0; supervisor_anchor_verdict localhost "$D/ca.pem" "$GOOD_PORT"      || r=$?; ck2 "name absent from SAN: the wrapper passes 3 through"                     3 "$r"
+    r=0; supervisor_anchor_verdict 127.0.0.1 "$D/ca.pem" "$DEAD_PORT"      || r=$?; ck2 "nothing listening: the wrapper passes 2 through"                        2 "$r"
+  else
+    printf 'FAIL - the dated-leaf oracle is not answering (rc=%s) — its cases would be vacuous\n' "$r"; fail=$((fail+1))
+  fi
+  kill "$GOOD_PID" "$EXP_PID" "$NY_PID" 2>/dev/null
+else
+  printf 'FAIL - could not mint the dated leaves with "openssl ca" — broken fixture, not a clean tree\n'; fail=$((fail+1))
+fi
+
 printf 'test-ca-verifies-endpoint: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

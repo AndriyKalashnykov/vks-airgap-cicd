@@ -2684,6 +2684,96 @@ supervisor_renew_how() {
   printf 'renew and re-print, one step: make creds-renew   (token only: VKS_AUTH_METHOD=vcf make vks-login — the prefix is required). Not yours to renew? Ask the lab owner.'
 }
 
+# ── supervisor_repin_how <supervisor-host> <ca-file> — how to replace a Supervisor anchor that no
+# longer verifies the endpoint. ONE text, shared by BOTH places that find that out: the login
+# (30-vks-login.sh, which stops before the password is sent) and the access report (creds.sh, which
+# must not send the reader to a renew that cannot work).
+# Every command is one the repo ships and every value is the caller's real one: the endpoint, the
+# anchor file, the vCenter name, the namespace and the cluster. It prints lines with NO indentation;
+# each caller indents them to fit its own block.
+#
+# What each sentence rests on (read in the code, not assumed):
+#   * `make fetch-supervisor-ca` (fetch-supervisor-ca.sh) reads vCenter's roots with no credential,
+#     keeps the one whose subject is the issuer the Supervisor presents, verifies it against the live
+#     endpoint, writes ${VKS_CA_CERT_FILE:-./secrets/supervisor-ca.crt} and prints its SHA-256. It
+#     dies without VCENTER_HOST, so an unset one is said here instead of being found by running it.
+#   * The Supervisor serves only its leaf, so the CA cannot be taken off that connection; the SHA-256
+#     confirmed over another channel is what authenticates the fetched file.
+#   * 30-vks-login.sh compares the file with VKS_CA_SHA256 BEFORE anything else and refuses a
+#     mismatch, so a pin left over from the old anchor blocks the new file. Said only when a pin is
+#     set. The pin's VALUE is never printed; nor is any password.
+#   * The login activates <context>:<VKS_NAMESPACE> and stops when that namespace does not exist,
+#     which is the state after a rebuild until scenario-1 Step 2 has created it again. That stop is
+#     AFTER `vcf context create`, i.e. after the password has been sent, and the text says so.
+#   * With no pin the login only WARNS about a fetched anchor and then sends the password, so the
+#     text never offers removing the pin: a stale anchor and an intercepted connection look the same.
+supervisor_repin_how() {
+  local _host="${1:?supervisor_repin_how: the Supervisor endpoint is required}"
+  local _ca="${2:?supervisor_repin_how: the anchor file is required}" _what=""
+  printf 'Re-pin it from the Supervisor that is running now. Neither command sends a password:\n'
+  printf '  make fetch-supervisor-ca\n'
+  printf '  openssl x509 -in %s -noout -fingerprint -sha256\n' "$_ca"
+  if [ -n "${VCENTER_HOST:-}" ]; then
+    printf "The first reads vCenter's root certificates from %s, keeps the one that signed the\n" "$VCENTER_HOST"
+  else
+    printf 'The first needs VCENTER_HOST in .env (your vCenter FQDN, not the Supervisor address), and it is\n'
+    printf "NOT set: set it first. It reads vCenter's root certificates, keeps the one that signed the\n"
+  fi
+  printf 'certificate %s presents, and writes it to %s.\n' "$_host" "$_ca"
+  printf 'The second prints the SHA-256 of that file. Confirm it with whoever runs the lab, over a channel\n'
+  printf 'that is not this connection: the download is unverified TLS, so that SHA-256 is what proves the file.\n'
+  printf 'Not your lab? Ask whoever runs it for the current CA file and its SHA-256, and save the file as\n'
+  printf '%s.\n' "$_ca"
+  if [ -n "${VKS_CA_SHA256:-}" ]; then
+    # "matched the OLD file" is printed only when it is measured here: the login reaches its refusal
+    # only after that comparison passed, but the access report gets here without making it.
+    if command -v ca_pin_verdict >/dev/null 2>&1 && ca_pin_verdict "$_ca" "$VKS_CA_SHA256" 2>/dev/null; then
+      printf 'VKS_CA_SHA256 is set, and it matched the OLD file. Set it to the SHA-256 you confirmed.\n'
+    else
+      printf 'VKS_CA_SHA256 is set. Set it to the SHA-256 you confirmed.\n'
+    fi
+    printf 'Do NOT remove it: without it the login only warns before it sends your password.\n'
+    printf 'An intercepted connection looks exactly like this, so confirming the SHA-256 is not optional.\n'
+  fi
+  if [ -n "${VKS_NAMESPACE:-}" ] && [ -n "${VKS_CLUSTER_NAME:-}" ]; then
+    _what="the vSphere Namespace '${VKS_NAMESPACE}' and the guest cluster '${VKS_CLUSTER_NAME}' this repo points at
+(VKS_NAMESPACE, VKS_CLUSTER_NAME)"
+  elif [ -n "${VKS_NAMESPACE:-}" ]; then
+    _what="the vSphere Namespace '${VKS_NAMESPACE}' this repo points at (VKS_NAMESPACE), and its
+guest cluster,"
+  elif [ -n "${VKS_CLUSTER_NAME:-}" ]; then
+    _what="the guest cluster '${VKS_CLUSTER_NAME}' this repo points at (VKS_CLUSTER_NAME), and its
+vSphere Namespace,"
+  else
+    _what="the vSphere Namespace and the guest cluster this repo was pointed at"
+  fi
+  printf 'If the lab was REBUILT, %s\n' "$_what"
+  printf 'may no longer exist, and nothing this repo installed is on the new lab. Then start again at\n'
+  printf 'docs/scenario-1.md, "2. The vSphere Namespace": it creates the namespace, and its Step 3 is the\n'
+  printf 'login below. Without the namespace that login still sends your password, and stops after it.\n'
+  printf 'Otherwise log in again. This command sends your SSO password; if it is rejected, STOP:\n'
+  printf '%s.\n' "$(sso_lockout_note)"
+  printf 'Do not run it until you have confirmed the SHA-256.\n'
+  printf '  VKS_AUTH_METHOD=vcf make vks-login\n'
+}
+
+# ── supervisor_dates_how <supervisor-host> — what to do when the stored anchor IS the right one and
+# the certificate's validity dates are the only thing that fails (supervisor_anchor_verdict's 6).
+# Shared by the login and the access report, like supervisor_repin_how, and for the same reason.
+# Two commands, both credential-free, both with the caller's real endpoint: this machine's time, and
+# the certificate's notBefore/notAfter. No re-pin (the anchor is correct), no renew (the login stops
+# on this before the password is sent), and nothing that skips verification.
+supervisor_dates_how() {
+  local _host="${1:?supervisor_dates_how: the Supervisor endpoint is required}"
+  printf 'Compare the two. Neither command sends a password:\n'
+  printf '  date -u\n'
+  printf '  openssl s_client -connect %s:443 -servername %s </dev/null 2>/dev/null | openssl x509 -noout -dates\n' "$_host" "$_host"
+  printf "The first prints this machine's time in UTC; the second prints the certificate's notBefore and\n"
+  printf 'notAfter, also in UTC. If the time is outside those two, and the time is wrong, correct this\n'
+  printf "machine's clock. If the time is right, the certificate has expired (or is not valid yet): ask\n"
+  printf 'whoever runs the lab to renew it. Do NOT re-fetch or re-pin the CA: it is the right one.\n'
+}
+
 # ── jwt_exp_seconds <jwt> — the `exp` claim in SECONDS, or EMPTY. Never guesses. ─────────────────
 # ONE parser, because there were TWO and they diverged: the headlamp decoder in creds.sh kept a
 # greedy `.*` (last match wins), a `[0-9]*` (zero-or-more), and no ceiling, while this one was
