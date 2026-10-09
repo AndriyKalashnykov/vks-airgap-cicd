@@ -2817,7 +2817,11 @@ if grep -qF 'is not a readable certificate' <<< "$_hca_unread" && grep -qF 'make
 else
   bad "harbor-ca rc=5: the unreadable-CA verdict is missing"
 fi
-if grep -qF 'make fetch-harbor-ca lists them' <<< "$_hca_name"; then
+# NOT `make fetch-harbor-ca lists them`: on a Harbor that sends one certificate signed by a CA it
+# does not send, that command stops before it reads any name. The line is a login-free read of the
+# names off the handshake, with the real host and port (the fixture's HARBOR_URL has no port: 443).
+if grep -qF 'openssl s_client -connect harbor.lab.example:443 -servername harbor.lab.example </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName' <<< "$_hca_name" \
+   && ! grep -qF 'make fetch-harbor-ca lists them' <<< "$_hca_name"; then
   ok "harbor-ca rc=3: points at the command that lists the names the cert carries"
 else
   bad "harbor-ca rc=3: names no way to find the name the cert carries"

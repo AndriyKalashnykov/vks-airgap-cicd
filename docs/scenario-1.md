@@ -827,17 +827,22 @@ Two details in there are load-bearing:
   file. It looks right, and then image pulls fail with `certificate signed by unknown authority`
   long after this step.
 
-Then **check it against a digest you got from whoever runs Harbor**, over some other channel —
+Then **check it against a fingerprint you got from whoever runs Harbor**, over some other channel —
 `-k` above means you fetched it over a connection you could not yet verify:
 
 ```bash
-sha256sum ./secrets/harbor-ca.crt
+openssl x509 -in ./secrets/harbor-ca.crt -noout -fingerprint -sha256
 ```
 
-**Expect:** one line — a 64-hex digest followed by `./secrets/harbor-ca.crt`. Compare that digest
-with the one your platform team gave you; they must match. *(<1 min)*
+**Expect:** one line containing `Fingerprint=` and then 32 two-character groups separated by
+colons. Compare it with the certificate fingerprint your platform team gave you; they must match.
+*(<1 min)*
 
-The digest proves it is the file Harbor's operator meant you to have. One more check proves it is the
+This is the certificate's SHA-256 fingerprint, the same value `make fetch-harbor-ca` and
+`make harbor-ca-from-cluster` print. `sha256sum` of the file gives a **different** number that
+never matches it, so make sure both sides are comparing the fingerprint.
+
+The fingerprint proves it is the file Harbor's operator meant you to have. One more check proves it is the
 right file for **this** Harbor — a certificate left over from an earlier lab is still a perfectly
 valid certificate, and a rebuilt lab issues a new one at the *same address*, so the old file keeps
 looking fine until it fails:
@@ -856,7 +861,11 @@ why the failure messages point at it. Run it directly whenever a lab has been re
 
 <details><summary>Alternatives if that endpoint is unavailable</summary>
 
-- Harbor's UI: your project → **Registry Certificate** → download `ca.crt`.
+- Harbor's UI: your project → **Repositories** tab → **Registry Certificate** → download `ca.crt`
+  (if the button is not there, use the next route). Print the fingerprint of the **downloaded**
+  file with `openssl x509 -in ~/Downloads/ca.crt -noout -fingerprint -sha256`
+  (`~/Downloads/ca.crt` stands for wherever your browser saved it) and confirm it with whoever
+  runs Harbor **before** you save it as `./secrets/harbor-ca.crt`.
 - From the cluster, if you have Supervisor access:
 
   ```bash

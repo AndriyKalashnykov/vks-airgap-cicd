@@ -629,7 +629,7 @@ env_validate() {
         # is a rebuild. That script already distinguishes the cases with ca_verifies_endpoint; this one
         # did not, so the SAME rebuild produced a good diagnosis for the Supervisor and a wrong one for
         # Harbor. An error that names the wrong cause sends the operator to fix something that is not broken.
-        local _ca_verdict _h _p          # these three leaked to GLOBAL scope until 2026-08-08
+        local _ca_verdict _h _p _refetch _wire # the first three leaked to GLOBAL scope until 2026-08-08
         _ca_verdict=0
         if [ -n "${HARBOR_CA_FILE:-}" ] && [ -s "${HARBOR_CA_FILE}" ]; then
           # ⚠️ Strip an IPv6 bracket form BEFORE splitting on ':', or `%%:*` cuts "[fd00" out of
@@ -663,15 +663,35 @@ env_validate() {
     - a TLS-INTERCEPTING proxy — curl honours https_proxy/HTTPS_PROXY, the direct check does not.
       Check:  env | grep -i _proxy      (and whether ${_h} belongs in NO_PROXY)
     - the certificate was rotated between the two probes — simply retry."; errs=$((errs+1)) ;;
-          1) log_error "the CA at ${HARBOR_CA_FILE} does NOT verify the certificate ${HARBOR_URL} presents.
+          1) # WHICH command gets the new one depends on what this Harbor SENDS. `make fetch-harbor-ca`
+             # takes the CA off the connection; a Harbor that sends one certificate signed by a CA it
+             # does not send has none there, and that command refuses. tls_ca_on_the_wire is the
+             # SAME test fetch-ca.sh makes (lib/tls.sh), bounded and credential-free. Anything but a
+             # definite `leaf-only`, "could not tell" included, keeps the sentence this always printed.
+             # DATES FIRST: an expired or not-yet-valid certificate under the CORRECT CA is also a
+             # verdict 1. Saying "the anchor is for a DIFFERENT Harbor" there is false, and on a
+             # Harbor that does not send its CA it costs the reader a long detour. Same second
+             # check the Supervisor login uses (lib/tls.sh). Still an error: the count is unchanged.
+             if ca_endpoint_dates_only "$_h" "$_p" "$HARBOR_CA_FILE"; then
+               log_error "the CA at ${HARBOR_CA_FILE} is the RIGHT one for ${HARBOR_URL}, but the certificate it presents is outside its dates.
+$(harbor_cert_dates_advice "$_h" "$_p" | sed 's/^/  /')"
+               errs=$((errs+1))
+             else
+             _refetch="  Re-fetch it from the lab that is actually running:  make fetch-harbor-ca"
+             _wire="$(tls_ca_on_the_wire "$_h" "$_p")"
+             if [ "$_wire" = leaf-only ] || [ "$_wire" = chain-incomplete ]; then
+               _refetch="$(harbor_ca_not_on_wire_advice "$HARBOR_CA_FILE" "$_h" "$_wire" | sed 's/^/  /')"
+             fi
+             log_error "the CA at ${HARBOR_CA_FILE} does NOT verify the certificate ${HARBOR_URL} presents.
   The endpoint ANSWERED, so this is not a reachability problem — the anchor is for a DIFFERENT (usually a
   destroyed and rebuilt) Harbor. A rebuild mints a new CA, and nothing in this repo re-fetches it for you.
     your anchor is:            $(openssl x509 -in "$HARBOR_CA_FILE" -noout -subject 2>/dev/null | sed 's/^subject=//')
     the endpoint's cert issuer: $(printf '' | timeout 15 openssl s_client -connect "${_h}:${_p}" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | sed 's/^issuer=//')
-  Re-fetch it from the lab that is actually running:  make fetch-harbor-ca
+${_refetch}
   (⚠️ SUBJECT vs ISSUER on purpose — comparing a stored CA's fingerprint to a live LEAF's is the mistake
    30-vks-login.sh records; they are different objects and can never match even when the anchor is right.)"
-             errs=$((errs+1)) ;;
+             errs=$((errs+1))
+             fi ;;
           2) log_error "could not reach ${_h}:${_p} to check HARBOR_CA_FILE — this is NOT evidence the anchor is wrong.
   Harbor is unreachable or still starting; retry before touching the certificate."; errs=$((errs+1)) ;;
           # 3 = right anchor, wrong NAME. Opposite remedy to staleness, so it must not share that arm —
@@ -689,11 +709,16 @@ env_validate() {
   Do NOT re-fetch the CA; there is nothing for it to verify. Check HARBOR_URL: this is usually a
   plain-HTTP endpoint or the wrong port. If this Harbor is deliberately HTTP, it must not be
   addressed as https."; errs=$((errs+1)) ;;
-          # 5 = HARBOR_CA_FILE exists but is EMPTY (the `-f` guard above passed, `-s` did not).
+          # 5 = HARBOR_CA_FILE is there and NOT usable as a CA: ca_verifies_endpoint could not parse
+          # it. ⚠️ This comment and the message used to say "exists but is EMPTY". An empty file
+          # never reaches this arm: the verdict is asked only when the file is non-empty (`-s`
+          # above), so an empty one takes the catch-all below. What arrives here is a NON-empty
+          # file that is not a certificate (truncated, the wrong file, an HTML error page).
           # Distinct from 9 (not configured at all) and from 1 (configured and wrong).
-          5) log_error "HARBOR_CA_FILE='${HARBOR_CA_FILE}' exists but is EMPTY, so nothing can be
-  verified. This is NOT a stale anchor — re-fetch it:  make fetch-harbor-ca  (which as of B553
-  REFUSES unless HARBOR_URL is an address the certificate presents)"; errs=$((errs+1)) ;;
+          5) log_error "HARBOR_CA_FILE='${HARBOR_CA_FILE}' is not a usable CA certificate (empty, truncated,
+  or not a certificate), so nothing can be verified. This is NOT a stale anchor — it has to be fetched again.
+$(harbor_ca_fetch_hedge | sed 's/^/  /')
+  (make fetch-harbor-ca also REFUSES unless HARBOR_URL is an address the certificate presents)"; errs=$((errs+1)) ;;
           *) log_error "Harbor TLS not trusted at $scheme://$HARBOR_URL (curl exit $rc) — set HARBOR_CA_FILE for a self-signed Harbor, or the cert is not publicly trusted"; errs=$((errs+1)) ;;
         esac
       else
