@@ -32,9 +32,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/tls.sh
 . "${SCRIPT_DIR}/lib/tls.sh"
 
-EP="${1:?usage: fetch-ca.sh <endpoint> <out-file> [label]}"
-OUT="${2:?usage: fetch-ca.sh <endpoint> <out-file> [label]}"
+EP="${1:?usage: fetch-ca.sh <endpoint | -> <out-file> [label]   (- reads the endpoint from _FETCH_CA_ENDPOINT)}"
+OUT="${2:?usage: fetch-ca.sh <endpoint | -> <out-file> [label]}"
 LABEL="${3:-endpoint}"
+# `-` = THE ENDPOINT IS IN THE ENVIRONMENT (_FETCH_CA_ENDPOINT). The Makefile calls it this way: a
+# command line is readable by every user on the box (`ps`) for as long as the handshake runs, and
+# an address someone typed a login into must not sit there. Taken out of the environment again at
+# once, so the programs this script starts do not carry it either.
+if [ "$EP" = - ]; then
+  EP="${_FETCH_CA_ENDPOINT:-}"
+  [ -n "$EP" ] || die "no endpoint: the first argument is '-', which reads it from _FETCH_CA_ENDPOINT, and that is empty."
+fi
+unset _FETCH_CA_ENDPOINT
+# A login in the address that cannot be read out cleanly (a password with a `/` or `://` in it):
+# refuse, and print no part of the value. lib/os.sh url_login_unreadable has the shapes.
+if url_login_unreadable "$EP"; then
+  die "the ${LABEL} address is not used: it holds an @ that cannot be read as a plain login before the
+  host, so it is not dialled and not printed. A login must not be in the address: give only the
+  host (and port)."
+fi
+# This script does not call load_env, so the one check of the time limit it uses is made here, in
+# its main shell: an unusable CA_VERIFY_TIMEOUT is reported once, on this script's own stderr.
+bounds_normalize CA_VERIFY_TIMEOUT 15
 
 # ⚠️ VALIDATE THE LABEL BEFORE ANYTHING ELSE — it becomes a VARIABLE NAME (${LABEL^^}_CA_SHA256, read by
 # indirect expansion). MEASURED 2026-08-05: `fetch-ca.sh <ep> <out> my-registry` died with
@@ -46,8 +65,13 @@ case "$LABEL" in
   ${LABEL}_CA_SHA256, so it must contain only letters, digits and underscores." ;;
 esac
 
-hostport="$(printf '%s' "$EP" | sed -E 's#^https?://##; s#/.*##')"
-host="${hostport%%:*}"; port="${hostport##*:}"; [ "$port" = "$host" ] && port=443
+# url_host_port (lib/os.sh) is the one splitter: scheme, path and any `user:password@` dropped,
+# `[::1]:8443` read as the address ::1 and the port 8443. `hostport` is what the messages show.
+url_host_port "$EP"; host="$URL_HOST"; port="$URL_PORT"
+hostport="$(host_port_join "$host" "$port")"
+# Two messages below have always shown the address AS IT WAS WRITTEN (no `:443` nobody typed).
+# They keep that, minus the scheme, the path and any login.
+ep_written="$(url_without_userinfo "$EP" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*##')"
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 # CTRL-C ENDS THE RUN, AND SAYS WHAT STATE IT LEFT. The handshakes below run under `timeout`
@@ -98,6 +122,7 @@ _b561_kind_provenance() {
       case "$k" in "${up}_URL"|"${up}_CA_FILE"|"${up}_SERVER"|"${up}_LB_IP") ;; *) continue ;; esac
       v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"                           # strip one quote layer
       [ "$v" = "$EP" ] || [ "$v" = "$host" ] || [ "$v" = "$OUT" ] || continue
+      v="$(url_without_userinfo "$v")"                                             # never print a login
       if [ "$certain" = 1 ]; then
         log_warn "the ${LABEL} ${k}='${v}' you are fetching comes from a KinD-stamped overlay (${f##*/}) — this is the LOCAL stand-in, not the real ${LABEL}. If you meant the real lab, run 'make kind-down' (or unset ${k}); do NOT persist this CA to .env (it dies with the KinD cluster)."
         _from_kind_overlay=1
@@ -111,7 +136,7 @@ _b561_kind_provenance() {
 }
 _b561_kind_provenance
 
-log_info "fetching the ${LABEL} CA from ${host}:${port}"
+log_info "fetching the ${LABEL} CA from ${hostport}"
 
 # -showcerts prints the WHOLE chain the server sends. Keep it all; we choose from it deliberately.
 # The handshake, the split into one file per certificate (leaf first) and the "one certificate, is
@@ -135,11 +160,11 @@ if [ "$_chain_rc" -eq 3 ] && tls_port_accepts "$host" "$port" "$_bound"; then
   _more="${_bound%%.*}"; _more=$(( 10#${_more:-0} * 4 )); [ "$_more" -ge 60 ] || _more=60
   case "$LABEL" in
     harbor|argocd) _retry_cmd="make fetch-${LABEL}-ca CA_VERIFY_TIMEOUT=${_more}" ;;
-    *)             _retry_cmd="CA_VERIFY_TIMEOUT=${_more} $0 $(printf '%q %q %q' "$EP" "$OUT" "$LABEL")" ;;
+    *)             _retry_cmd="CA_VERIFY_TIMEOUT=${_more} $0 $(printf '%q %q %q' "$(url_without_userinfo "$EP")" "$OUT" "$LABEL")" ;;
   esac
   # The default label is the bare word `endpoint`; in a sentence it needs its article.
   _who="$LABEL"; [ "$LABEL" = endpoint ] && _who="the endpoint"
-  die "${host}:${port} accepted the connection and did not answer within ${_bound} s.
+  die "${hostport} accepted the connection and did not answer within ${_bound} s.
   No certificate was read and ${OUT} is UNCHANGED — nothing was written.
   A server that accepts and stays silent is usually still starting, or stalled: this says
   nothing about any CA file. Wait a minute and run this again.
@@ -147,11 +172,11 @@ if [ "$_chain_rc" -eq 3 ] && tls_port_accepts "$host" "$port" "$_bound"; then
     ${_retry_cmd}"
 fi
 [ "$_chain_rc" -eq 0 ] \
-  || die "could not connect to ${host}:${port} — is ${LABEL} reachable over HTTPS?"
+  || die "could not connect to ${hostport} — is ${LABEL} reachable over HTTPS?"
 tls_presented_shape "$tmp"
 
 n="$TLS_PRESENTED_N"
-[ "$n" -ge 1 ] || die "${host}:${port} presented NO certificate (is it really serving TLS?)"
+[ "$n" -ge 1 ] || die "${hostport} presented NO certificate (is it really serving TLS?)"
 
 leaf="${tmp}/cert-01.pem"
 last="$TLS_PRESENTED_LAST"
@@ -161,9 +186,9 @@ last="$TLS_PRESENTED_LAST"
 # so every actionable die below would be unreachable exactly when it is needed. MEASURED 2026-08-04.
 subj="$TLS_PRESENTED_SUBJ"
 issu="$TLS_PRESENTED_ISSU"
-[ -n "$subj" ] && [ -n "$issu" ] || die "could not parse the certificate ${host}:${port} presented.
+[ -n "$subj" ] && [ -n "$issu" ] || die "could not parse the certificate ${hostport} presented.
   This is usually a DEFECT IN THIS SCRIPT (the chain splitter), not in the server — check that
-  ${last} contains a PEM block. Re-check with: openssl s_client -connect ${host}:${port} -showcerts"
+  ${last} contains a PEM block. Re-check with: openssl s_client -connect ${hostport} -showcerts"
 
 if [ "$n" -eq 1 ]; then
   # A single cert. It is a legitimate trust anchor ONLY if it is self-signed (subject == issuer);
@@ -191,7 +216,7 @@ if [ "$n" -eq 1 ]; then
         make harbor-ca-from-cluster" ;;
       *)      _cluster_route_cmd=" it is not automated for ${LABEL}; follow §8 by hand." ;;
     esac
-    die "${host}:${port} presents ONE certificate that is NOT self-signed (subject != issuer).
+    die "${hostport} presents ONE certificate that is NOT self-signed (subject != issuer).
   Its CA is not on the wire, so it cannot be fetched from here.
     subject: ${subj}
     issuer:  ${issu}
@@ -241,6 +266,20 @@ if openssl verify -CAfile "$CAND" "$leaf" >/dev/null 2>&1; then
     log_info "chain is internally consistent — note an attacker supplies BOTH halves of it"
   fi
 else
+  # DATES FIRST. `openssl verify` checks validity dates too, so a server certificate that has
+  # EXPIRED (or is not valid yet, or this machine's clock is off) fails right here, and "the
+  # certificate we extracted does NOT verify … ask for the issuing CA" then sends the reader for
+  # a CA they were about to be handed. Same question the reports ask, same text.
+  # The dates question is valid ONLY after the plain check said "connected, and it does not
+  # verify" (1). Asked cold it also says yes for a server that sends an intermediate we did not
+  # take: there the handshake verifies with or without dates, and the fault is the one below.
+  _pre=0; ca_verifies_endpoint "$host" "$port" "$CAND" >/dev/null 2>&1 || _pre=$?
+  if [ "$_pre" -eq 1 ] && ca_endpoint_dates_only "$host" "$port" "$CAND"; then
+    case "$LABEL" in harbor) _dates_who=Harbor ;; argocd) _dates_who=ArgoCD ;; *) _dates_who="$LABEL" ;; esac
+    die "the CA ${hostport} sends is the right one, but the certificate it presents is outside its dates.
+  ${OUT} is UNCHANGED — nothing was written.
+$(tls_cert_dates_advice "$_dates_who" "$host" "$port" | sed 's/^/  /')"
+  fi
   die "the certificate we extracted does NOT verify ${host}'s leaf — refusing to write a trust anchor that
   does not work (it would fail later, inside crane/Kaniko, as 'x509: certificate signed by unknown
   authority', pointing you at the wrong thing). Ask the platform team for ${LABEL}'s issuing CA."
@@ -298,7 +337,7 @@ if [ "$verdict" -ne 3 ]; then
   if [ "$verdict" -eq 0 ]; then
     log_info "CA fingerprint MATCHES the expected value from ${pin_var}"
   else
-    die "CA FINGERPRINT MISMATCH for ${host}:${port} — REFUSING to write a trust anchor.
+    die "CA FINGERPRINT MISMATCH for ${hostport} — REFUSING to write a trust anchor.
 
     expected (${pin_var}): $(printf '%s' "$pin" | tr -d ': ' | tr '[:upper:]' '[:lower:]')
     served by ${host}:     ${fp_bare}
@@ -401,7 +440,7 @@ if [ "$_ep_rc" -ne 0 ] && [ "$_ep_rc" -ne 2 ]; then
   # ⚠️ STDERR, not stdout. Same lesson as the consent block at :229: with the warning on stdout,
   # `make fetch-argocd-ca > log` swallowed it entirely and left rc the only signal.
   {
-    printf '\n  🔴 REFUSING TO WRITE %s — this anchor cannot verify %s.\n' "$OUT" "$hostport"
+    printf '\n  🔴 REFUSING TO WRITE %s — this anchor cannot verify %s.\n' "$OUT" "$ep_written"
     case "$_ep_rc" in
       3) printf '     The chain is fine; the ADDRESS is wrong. The certificate does not present\n'
          printf '     %s (an IP needs an IP SAN, and most self-signed server certs carry none).\n' "$host" ;;
@@ -538,7 +577,7 @@ fi
 # is green for a MITM by construction (lib/tls.sh:197-201 says so).
 if [ "$_ep_rc" -eq 2 ]; then
   {
-    printf '  ⚠️  could not re-check against %s (unreachable/timed out) — the anchor is written,\n' "$hostport"
+    printf '  ⚠️  could not re-check against %s (unreachable/timed out) — the anchor is written,\n' "$ep_written"
     printf '     but nothing here proves it verifies that endpoint.\n'
   } >&2
 else

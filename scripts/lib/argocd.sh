@@ -939,11 +939,12 @@ argocd_await_revision() {
 #   _afv_msg   = the ComparisonError message, when there is one
 #   _afv_err   = path to the CLI's stderr capture (caller classifies + removes it)
 argocd_app_fetch_verdict() {
-  local app="$1" _rc=0 _json="" _tmo="${ARGOCD_REPO_TIMEOUT_SECONDS:-180}"
+  local app="$1" _rc=0 _json="" _tmo
+  _tmo="$(bound_seconds "${ARGOCD_REPO_TIMEOUT_SECONDS:-}" 180)"
   _afv_state=unknown; _afv_msg=""
   _afv_err="$(mktemp)" || { _afv_state=cli; _afv_msg="could not create a temp file (TMPDIR=${TMPDIR:-/tmp})"; return 0; }
 
-  _json="$(timeout "$_tmo" argocd app get "$app" --refresh -o json 2>"$_afv_err")" || _rc=$?
+  _json="$(run_bounded_group "=$_tmo" 180 argocd app get "$app" --refresh -o json 2>"$_afv_err")" || _rc=$?
   if [ "$_rc" -ne 0 ]; then
     # 124 is timeout(1)'s own code. Name it, because "the controller is not running" and "the CLI
     # was rejected" have different remedies and the caller's transport classifier sees only stderr.
@@ -1076,7 +1077,7 @@ argocd_name_resolves_to() {
   local got
   # Bounded, as lib/harbor.sh bounds its resolver: an unreachable DNS server otherwise waits
   # timeout x attempts x search domains. (os.sh refuses to run on macOS without GNU timeout.)
-  got="$(timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent ahosts "$1" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
+  got="$(run_bounded CREDS_PROBE_TIMEOUT_SECONDS 2 getent ahosts "$1" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
   [ "$got" = "$2 " ]
 }
 

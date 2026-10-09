@@ -111,12 +111,25 @@ _sup_timeout() {
     printf 'NOT ATTEMPTED: the Supervisor token EXPIRED at %s\n' "${_SUP_DEAD_AT}" >&2
     return 119
   fi
-  timeout "$_b" "$@"
+  # The budget is a value here, not a variable's name: the three variables it comes from are
+  # checked (and reported) once, right after load_env below. Plain timeout, not --foreground:
+  # kubectl can start a credential plugin, and the bound has to take that with it.
+  run_bounded_group "=$_b" 10 "$@"
 }
 # Silence the internal state-stamp warning for this report only: it names .env.state and its
 # "stamp", which is maintainer vocabulary, and the Context block below already states the same
 # fact in plain English. Every other caller of load_env still gets the warning.
 load_env 2> >(grep -v "does not record which cluster it belongs to" >&2)
+# THE TIME LIMITS THIS REPORT IS BUILT ON ARE CHECKED BY load_env ITSELF now (bounds_normalize,
+# lib/os.sh, its last step): the three lines that did it here moved there, so every script gets
+# the same check in its own main shell. What they did, and still happens above:
+# (was) THE THREE TIME LIMITS THIS REPORT IS BUILT ON, CHECKED ONCE. Each is handed to `timeout`, to
+# curl, and printed in sentences ("did not answer within Ns"). A 0 means NO limit to timeout, and
+# a typo fails the bounded command outright, which this report would then print as "not
+# answering". So a value that is set and cannot be used is replaced by the default HERE, with one
+# line on stderr saying so (bounds_normalize, lib/os.sh), and everything below reads a usable number
+# of seconds. A unit suffix is accepted and converted (2s -> 2, 1m -> 60).
+# Only when SET: an unset CREDS_KUBE_TIMEOUT_SECONDS means 3 here and 10 to the Headlamp readback.
 
 # ⚠️ AFTER load_env, NOT BEFORE — this was a HIGH found by an implementation round on this very diff.
 # `supervisor_kubeconfig_candidates()` resolves from VKS_SUPERVISOR_KUBECONFIG, REPO_ROOT,
@@ -411,7 +424,7 @@ else
   _argo_ip=""
   if [ -n "${ARGOCD_KUBECONFIG:-}${KUBECONFIG:-}" ] && have kubectl; then
     _argo_ns="${ARGOCD_NAMESPACE:-}"
-    [ -n "$_argo_ns" ] || _argo_ns="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" env KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null \
+    [ -n "$_argo_ns" ] || _argo_ns="$(run_bounded_group CREDS_KUBE_TIMEOUT_SECONDS 3 env KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null \
         get svc -A -o jsonpath='{range .items[?(@.metadata.name=="argocd-server")]}{.metadata.namespace}{end}' 2>/dev/null || true)"
     if [ -n "$_argo_ns" ]; then
       # ⚠️ `timeout` AS WELL AS `--request-timeout`. MEASURED 2026-09-05: this exact call took
@@ -422,7 +435,7 @@ else
       # Guarded like every other probe: MEASURED 2026-09-07 this still fired
       # under CREDS_NO_PROBE while the banner said nothing had been probed.
       if [ "$_no_probe_snapshot" != 1 ]; then
-        _argo_ip="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" env KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null -n "$_argo_ns" \
+        _argo_ip="$(run_bounded_group CREDS_KUBE_TIMEOUT_SECONDS 3 env KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null -n "$_argo_ns" \
         get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
       fi
     fi
@@ -625,7 +638,7 @@ else
   # kubeconfig (:105-122), so an expired SUPERVISOR token does NOT prove this cannot succeed.
   # Wrapping it here was a category error; test-creds-show.sh caught it (the ArgoCD row lost
   # its password). Skipping a call that another credential can still serve is a fast lie.
-  argo_pw="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" "${SCRIPT_DIR}/argocd-password.sh" --wait 0 --raw 2>"$_argo_err")" || _argo_rc=$?
+  argo_pw="$(run_bounded_group CREDS_KUBE_TIMEOUT_SECONDS 3 "${SCRIPT_DIR}/argocd-password.sh" --wait 0 --raw 2>"$_argo_err")" || _argo_rc=$?
 fi
 # THREE states now, not one hedge. argocd-password.sh compares argocd-secret's admin.passwordMtime
 # against argocd-initial-admin-secret's creationTimestamp — free, because it already talks to that
@@ -894,7 +907,7 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
   # having said anything at all. MEASURED (B544): with the outer budget equal to `--request-timeout`
   # the process is killed before kubectl can print, so "not reachable" was being asserted on the
   # strength of us not waiting. Say what we know instead.
-  timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s version -o json \
+  run_bounded_group CREDS_KUBE_TIMEOUT_SECONDS 3 kubectl --request-timeout=3s version -o json \
     >/dev/null 2>"$_reach_err" </dev/null && _reach_rc=0 || _reach_rc=$?
   case "$_reach_rc" in
     0)       _cluster="reachable — context '$(kubectl config current-context </dev/null 2>/dev/null || echo '?')'"
@@ -941,7 +954,7 @@ if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; t
             # env proxy. (round 8, ran-it) Go uses HTTP_PROXY for an http:// API server and HTTPS_PROXY for
             # https://, and lowercases the scheme. (round 9, ran-it) A SCHEME-LESS server was sent over http
             # through HTTP_PROXY, so any scheme that is not plainly https/http counts EITHER variable (cautious).
-            _px_view="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl config view --minify -o jsonpath='{.clusters[0].cluster.proxy-url}|{.clusters[0].cluster.server}' </dev/null 2>/dev/null || true)"
+            _px_view="$(run_bounded_group CREDS_KUBE_TIMEOUT_SECONDS 3 kubectl config view --minify -o jsonpath='{.clusters[0].cluster.proxy-url}|{.clusters[0].cluster.server}' </dev/null 2>/dev/null || true)"
             _px_url="${_px_view%%|*}"; _px_srv=""
             if [[ "$_px_view" == *"|"* ]]; then _px_srv="${_px_view#*|}"; fi
             _px_scheme="${_px_srv,,}"
@@ -1142,12 +1155,11 @@ _reach_argocd() {
   local _h="${ARGOCD_SERVER:-}"
   [ -n "$_h" ] || _h="${argocd_url%% *}"
   case "$_h" in ''|'<not'*) printf 'not set'; return ;; esac   # "<not set>" cut at its first space is "<not"
-  _h="${_h#https://}"; _h="${_h#http://}"; _h="${_h%%/*}"
-  local _port="${_h##*:}"; case "$_h" in *:*) : ;; *) _port=443 ;; esac
-  _h="${_h%%:*}"
+  local _port
+  url_host_port "$_h"; _h="$URL_HOST"; _port="$URL_PORT"   # lib/os.sh: the one splitter
   # BOUNDED for the same measured reason as lib/harbor.sh's pair: neither timeout variable
   # reaches getent, and a stale resolver turns this into a 20s hang with no output.
-  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "$_h" >/dev/null 2>&1 || case "$_h" in
+  run_bounded CREDS_PROBE_TIMEOUT_SECONDS 2 getent hosts "$_h" >/dev/null 2>&1 || case "$_h" in
     *[!0-9.]*) printf 'unresolved'; return ;;      # a NAME that does not resolve
   esac
   _probe_tcp "$_h" "$_port" && printf 'serving' || printf 'silent'
@@ -1407,7 +1419,7 @@ if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
     printf "     %s is the right one, but the certificate's dates are not valid on this\n" "$_sup_ca"
     printf "     machine: the certificate has expired (or is not valid yet), or this machine's clock is wrong.\n"
     printf '     make creds-renew stops on that before it sends the password.\n'
-    supervisor_dates_how "$SUPERVISOR_HOST" | sed 's/^/     /'
+    supervisor_dates_how "$SUPERVISOR_HOST" "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" | sed 's/^/     /'
     printf '     Once the time is inside those two dates: make creds\n'
   elif [ "$_sup_anchor" = cadates ]; then
     # The stored CA FILE is what is out of date: replacing it IS the fix, so this arm re-pins.
@@ -1870,7 +1882,7 @@ _reach_ingress() {
     # red — including cases that had nothing to do with DNS. Real getent ties rc and output
     # together, so the two forms agree in production and disagree only under the stub; the stub is
     # right to isolate the arm, and the status is the honest question.
-    _raw="$(timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "$_h" 2>/dev/null)" || _grc=$?
+    _raw="$(run_bounded CREDS_PROBE_TIMEOUT_SECONDS 2 getent hosts "$_h" 2>/dev/null)" || _grc=$?
     [ "$_grc" -eq 0 ] || { printf 'no DNS here'; return; }
     # ⚠️ ALL ADDRESSES, NOT `NR==1`. `getent hosts` returns every family, and the ORDER is the
     # resolver's -- on a GitHub runner `localhost` comes back `::1` FIRST. Taking only the first row
@@ -2092,7 +2104,7 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
   # NotFound are BOTH rc=1, so the two rendered byte-identically — which is precisely why one
   # sentence could serve four different faults.
   _hl_err="$(mktemp)"
-  _hl_t="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s \
+  _hl_t="$(run_bounded_group CREDS_KUBE_TIMEOUT_SECONDS 3 kubectl --request-timeout=3s \
              -n "$_hl_ns" create token "$_hl_sa" --duration="${HEADLAMP_TOKEN_DURATION:-24h}" \
              </dev/null 2>"$_hl_err")" && _hl_rc=0 || _hl_rc=$?
   # _mask, NOT _lab_secret: that wrapper is defined ~380 lines BELOW this line, so calling it
@@ -3410,8 +3422,7 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
       #   5 -> the CA file is unusable                              2/4/unprobed -> the conditional hedge
       _h_ca_rc=9
       if [ "$_no_probe_snapshot" != 1 ] && [ "${_reach_harbor_cell:-}" = serving ] && [ "$harbor_scheme" = https ]; then
-        _h_host="${HARBOR_URL%%:*}"; _h_port=443
-        case "$HARBOR_URL" in *:*) _h_port="${HARBOR_URL##*:}" ;; esac
+        url_host_port "$HARBOR_URL"; _h_host="$URL_HOST"; _h_port="$URL_PORT"   # lib/os.sh: the one splitter
         if CA_VERIFY_TIMEOUT="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" ca_verifies_endpoint "$_h_host" "$_h_port" "$_ca_abs"; then
           _h_ca_rc=0
         else
@@ -3545,8 +3556,14 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
     # (impl round 2026-09-15) host and port SPLIT: `10.0.0.9:8443` is not an /etc/hosts entry, and the
     # final login must keep the port. `_argocd_bare` may also carry a path.
     _a_hp="${_argocd_bare#*://}"; _a_hp="${_a_hp%%/*}"
-    _a_host="${_a_hp%%:*}"; _a_port=""
-    case "$_a_hp" in *:*) _a_port=":${_a_hp##*:}" ;; esac
+    # url_host_port (lib/os.sh) is the one splitter. `_a_port` stays EMPTY unless a port was
+    # written: it is appended to a login line, and `:443` nobody typed must not appear there.
+    url_host_port "$_a_hp"; _a_host="$URL_HOST"; _a_port=""
+    case "$_a_hp" in
+      \[*\]:*) _a_port=":${URL_PORT}" ;;
+      \[*\]|*:*:*) : ;;
+      *:*)     _a_port=":${URL_PORT}" ;;
+    esac
     # ⚠️ ARGOCD_CA_FILE IS PROBED, NOT ASSUMED USELESS (impl round F-B). fetch-ca.sh writes an anchor for an
     # IP only when the cert CARRIES that IP SAN, so the most direct way to hold a CA file and an IP is a
     # cert where --server-crt WORKS — and "no CA can verify this IP" would push that reader to --insecure.
@@ -3565,10 +3582,24 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
       printf '    - ArgoCD CLI: ARGOCD_CA_FILE verifies this address (a browser still does not trust it):\n'
       printf '      argocd login %s --server-crt %s\n' "$_a_hp" "$_a_ca"
     elif [ "$_a_ca_rc" = 1 ]; then
+      # DATES FIRST, as for Harbor above: an expired or not-yet-valid certificate under the RIGHT
+      # CA is also rc=1, and "re-fetch it" is false there; and a CA FILE that is itself out of
+      # date gets the file's own dates. Same question, same two texts, this report's probe bound.
+      _a_dates=0
+      CA_VERIFY_TIMEOUT="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" ca_endpoint_dates_only "$_a_host" "${_a_port#:}" "$_a_ca" || _a_dates=$?
+      if [ "$_a_dates" = 0 ]; then
+        printf '    - ArgoCD CLI: the CA at %s is the right one; the certificate ArgoCD serves is outside its dates.\n' "$_a_ca"
+        tls_cert_dates_advice ArgoCD "$_a_host" "${_a_port#:}" "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" | sed 's/^/      /'
+      elif [ "$_a_dates" = 2 ]; then
+        printf '    - ArgoCD CLI: the CA at %s is itself outside its dates, so it cannot verify ArgoCD.\n' "$_a_ca"
+        tls_ca_file_dates_advice "$_a_ca" "$_a_host" | sed 's/^/      /'
+        printf '      make fetch-argocd-ca\n'
+      else
       # (final round, ran-it) connected and the cert carries this address, but THIS CA does not verify it:
       # the remedy is a re-fetch, not --insecure and not a name hunt.
       printf '    - ArgoCD CLI: the CA at %s does NOT verify this address — re-fetch it:\n' "$_a_ca"
       printf '      make fetch-argocd-ca\n'
+      fi
     elif [ "$_a_ca_rc" = 5 ]; then
       printf '    - ArgoCD CLI: the CA at %s is not a readable certificate — get one:\n' "$_a_ca"
       printf '      make fetch-argocd-ca\n'

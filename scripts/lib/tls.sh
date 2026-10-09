@@ -14,6 +14,13 @@
 
 [ -n "${__VKS_TLS_SH_LOADED:-}" ] && return 0
 __VKS_TLS_SH_LOADED=1
+# lib/os.sh, SOURCED HERE and no longer left to the caller. This file has always called os.sh's
+# die/log_*; it now also takes its time bound (run_bounded) and its host/port handling
+# (host_port_join) from there, on the handshake path itself, so "works only because the caller
+# sourced os.sh first" would turn a missing source line into "the endpoint is unreachable".
+# os.sh has a load guard and no source-time effects on a script that already sourced it.
+# shellcheck source=scripts/lib/os.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/os.sh"
 
 # gen_selfsigned_ca_cert <endpoint-host-or-ip> <out-dir> [ca-cn]
 #   Writes, into <out-dir>: ca.crt, ca.key (a self-signed CA) and tls.crt, tls.key
@@ -176,6 +183,8 @@ crane_trust_env() {
 # (`[::1]:8443` -> host="["), so an IPv6 literal is broken well before it reaches here.
 ca_addr_kind() {
   case "${1:?ca_addr_kind: address required}" in
+    *:*:*)     printf 'ip' ;;      # an IPv6 literal: two or more colons (`host:port` has one, and
+                                   # stays what it was: callers hand this a host, not host:port)
     *[!0-9.]*) printf 'name' ;;
     *)         printf 'ip' ;;
   esac
@@ -203,7 +212,7 @@ ca_verifies_endpoint() {
     *)    namearg="-verify_ip" ;;
   esac
   out=$(printf '' | tls_bounded "" openssl s_client \
-          -connect "${host}:${port}" -servername "$host" \
+          -connect "$(host_port_join "$host" "$port")" -servername "$host" \
           -CAfile "$ca" -verify_return_error "$namearg" "$host" 2>&1) || rc=$?
   [ "$rc" -eq 124 ] && return 2                              # timed out: the endpoint, not the anchor
   # ⚠️ THIS TEST MUST PRECEDE THE "ok" TEST, and that ordering is the whole fix.
@@ -449,7 +458,7 @@ ca_endpoint_dates_only() {
     *)    namearg="-verify_ip" ;;
   esac
   out=$(printf '' | tls_bounded "" openssl s_client \
-          -connect "${host}:${port}" -servername "$host" \
+          -connect "$(host_port_join "$host" "$port")" -servername "$host" \
           -CAfile "$ca" -verify_return_error -no_check_time "$namearg" "$host" 2>&1) || true
   # Herestrings, not `printf | grep -q`: see ca_verifies_endpoint for why (pipefail + SIGPIPE).
   if command grep -q 'CONNECTED(' <<< "$out" \
@@ -589,10 +598,10 @@ ca_anchor_reject_reason() {
 tls_presented_chain() {
   local host="$1" port="$2" d="$3" t="${4:-}" rc=0
   if [ -n "$t" ]; then
-    tls_bounded "$t" openssl s_client -connect "${host}:${port}" -servername "$host" -showcerts \
+    tls_bounded "$t" openssl s_client -connect "$(host_port_join "$host" "$port")" -servername "$host" -showcerts \
       </dev/null 2>/dev/null > "${d}/chain.txt" || rc=$?
   else
-    openssl s_client -connect "${host}:${port}" -servername "$host" -showcerts \
+    openssl s_client -connect "$(host_port_join "$host" "$port")" -servername "$host" -showcerts \
       </dev/null 2>/dev/null > "${d}/chain.txt" || rc=$?
   fi
   if [ -n "$t" ] && [ "$rc" -eq 124 ]; then return 3; fi
@@ -658,49 +667,29 @@ tls_presented_shape() {
   return 0
 }
 
-# _tls_positive_number <value> — rc 0 for digits with an optional fraction and at least one non-zero digit.
-_tls_positive_number() {
-  [[ "${1:-}" =~ ^[0-9]*\.?[0-9]+$ ]] && [[ "$1" =~ [1-9] ]]
-}
-
 # tls_timeout_bound [value] — prints the number of seconds to hand `timeout`: <value> when it is a
-# positive number, else CA_VERIFY_TIMEOUT, else that variable's default.
+# positive duration (lib/os.sh duration_seconds: 2, 2.5, 30s, 2m), else CA_VERIFY_TIMEOUT, else
+# that variable's default. It prints nothing else: a CA_VERIFY_TIMEOUT that is set and unusable
+# is reported once by bounds_normalize (lib/os.sh) in the script's main shell, not from here.
 # ⚠️ THE CLAMP IS THE POINT. `timeout 0` means NO time limit, so a 0 (or a negative, or a word)
-# passed straight through turns a bounded dial into an unbounded one. ONE definition, and it is
-# reached through tls_bounded below: no script under scripts/ hands CA_VERIFY_TIMEOUT to `timeout`
-# itself (test-harbor-ca-refetch-advice.sh greps for that form and fails on one).
+# passed straight through turns a bounded dial into an unbounded one. The clamp and the runner
+# themselves are lib/os.sh's (bound_seconds, run_bounded): every script has those, and a script
+# that only needs a time bound must not have to source this file for it.
 tls_timeout_bound() {
-  local t="${1:-}"
-  _tls_positive_number "$t" || t="${CA_VERIFY_TIMEOUT:-}"
-  _tls_positive_number "$t" || t=15
-  printf '%s' "$t"
+  local out
+  if out="$(duration_seconds "${1:-}")"; then printf '%s' "$out"; return 0; fi
+  bound_seconds "${CA_VERIFY_TIMEOUT:-}" 15
 }
 
-# tls_bounded <seconds-or-empty> <command> [args…] — run the command under `timeout`, with the
-# bound CLAMPED by tls_timeout_bound (empty, 0, a negative or a word: CA_VERIFY_TIMEOUT, else its
-# default). The command's status comes back unchanged; 124 means the bound was reached.
-#
-# `--foreground` WHEN THIS timeout HAS IT. Without it `timeout` moves the command into a process
-# group of its own, so a Ctrl-C typed at the terminal never reaches it: MEASURED through a pty,
-# `make fetch-harbor-ca` against a server that accepts and stays silent ignored Ctrl-C and ran on
-# to its bound. With it, the command stays in the terminal's group and Ctrl-C ends it at once.
-# What `--foreground` gives up is the kill of the command's OWN children at the bound; every
-# command run through here (openssl s_client, one bash connect) has none.
-# The flag is PROBED, not assumed: a `timeout` that refuses it would otherwise fail every handshake
-# and read as "unreachable". The answer is kept for the shell that asked; most callers run inside
-# `$( )` or a pipeline, so in practice it is asked again there (about a millisecond each).
-_TLS_TIMEOUT_FOREGROUND=""
+# tls_bounded <seconds-or-empty> <command> [args…] — run_bounded (lib/os.sh) with the TLS bound:
+# empty, 0 or a word means CA_VERIFY_TIMEOUT, else its default. `--foreground` when this timeout
+# has it, so a Ctrl-C at the terminal reaches the handshake; every command run through here
+# (openssl s_client, one bash connect) has no children, which is what that flag requires.
+# The command's status comes back unchanged; 124 means the bound was reached.
 tls_bounded() {
   local t
   t="$(tls_timeout_bound "${1:-}")"; shift
-  if [ -z "${_TLS_TIMEOUT_FOREGROUND:-}" ]; then
-    if timeout --foreground 5 true >/dev/null 2>&1; then _TLS_TIMEOUT_FOREGROUND=yes; else _TLS_TIMEOUT_FOREGROUND=no; fi
-  fi
-  if [ "$_TLS_TIMEOUT_FOREGROUND" = yes ]; then
-    timeout --foreground "$t" "$@"
-  else
-    timeout "$t" "$@"
-  fi
+  run_bounded "=$t" 15 "$@"
 }
 
 # tls_port_accepts <host> <port> [timeout-seconds] — rc 0 when a TCP connection to the port is
@@ -853,6 +842,14 @@ tls_cert_dates_advice() {
   return 0
 }
 
+# supervisor_dates_how <supervisor-host> [timeout-seconds] — tls_cert_dates_advice for the
+# Supervisor, on the API's fixed port. The login and the access report call it by this name.
+# It used to be a text of its own in lib/os.sh (two commands for the reader to run and compare);
+# the same situation then had two wordings, and only this one shows the dates it read.
+supervisor_dates_how() {
+  tls_cert_dates_advice 'the Supervisor' "${1:?supervisor_dates_how: the Supervisor endpoint is required}" 443 "${2:-}"
+}
+
 # harbor_cert_dates_advice <host> <port> [timeout-seconds] — tls_cert_dates_advice for Harbor.
 # make env-validate and make creds call it by this name; its text is pinned byte for byte.
 harbor_cert_dates_advice() {
@@ -953,18 +950,12 @@ ca_status_report() {
   # lib/harbor.sh already answers "which host and port is this" (it strips the scheme with a warning,
   # strips a trailing slash, and splits the port). Two implementations of one predicate is exactly the
   # hazard this script's own header claims to avoid — so split it here the same way, in one helper.
+  # THE SPLIT ITSELF IS url_host_port (lib/os.sh), the one splitter. This wrapper only prints
+  # its two answers as `host|port`, the form the test of this report reads. The host comes back
+  # WITHOUT brackets and without any `user:password@`.
   _ca_hostport() {                       # <url> -> "host|port"
-    local u="$1" h p
-    h="${u#http://}"; h="${h#https://}"  # a scheme is a documented .env mistake, not a crash
-    h="${h%%/*}"; h="${h%/}"             # drop any path, then a trailing slash
-    case "$h" in
-      \[*\]:*) p="${h##*:}"; h="${h%:*}" ;;               # [v6]:port
-      \[*\])   p=443 ;;                                    # [v6]
-      *:*)     p="${h##*:}"; h="${h%:*}" ;;                # host:port
-      *)       p=443 ;;
-    esac
-    case "$p" in ''|*[!0-9]*) p=443 ;; esac
-    printf '%s|%s' "$h" "$p"
+    url_host_port "$1"
+    printf '%s|%s' "$URL_HOST" "$URL_PORT"
   }
 
   # THE FIELD SEPARATOR IS THE UNIT SEPARATOR (0x1f), NOT `|`. A file path may hold a `|`, and
@@ -1090,7 +1081,7 @@ ca_status_report() {
          # off, and the first person to see that rightly deletes the check. rc=1 and rc=2 being
          # DISTINCT is what makes this safe to ship; test-ca-staleness-check.sh asserts they differ.
          # It is NOT a pass either — see the ALL-MATCH token below, which this arm cannot reach.
-         log_warn "${label}: ${host}:${port} did not answer — skipping. This says nothing about the certificate."
+         log_warn "${label}: $(host_port_join "$host" "$port") did not answer — skipping. This says nothing about the certificate."
          log_warn "  (the address is printed WITH its port so a skip is diagnosable: a mis-parsed"
          log_warn "   HARBOR_URL used to land here as a false 'did not answer' on a healthy server.)" ;;
       3) log_error "${label} (${file}) issued the certificate at ${host}, but that certificate is"

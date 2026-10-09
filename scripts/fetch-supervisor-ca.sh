@@ -83,7 +83,7 @@ _deadline=$(( _t0 + ${SUPERVISOR_TLS_BUDGET_SECONDS:-600} ))
 while :; do
   # Keyed on the VALUE, not an exit code: `|| true` inside $( ) discards the rc anyway, and
   # `openssl x509` can exit before s_client finishes and SIGPIPE the producer.
-  issuer="$(timeout "${SUPERVISOR_TLS_TIMEOUT_SECONDS:-10}" \
+  issuer="$(run_bounded SUPERVISOR_TLS_TIMEOUT_SECONDS 10 \
               openssl s_client -connect "${SUPERVISOR_HOST}:443" </dev/null 2>/dev/null \
             | openssl x509 -noout -issuer 2>/dev/null | sed 's/^issuer=//' || true)"
   [ -n "$issuer" ] && break
@@ -139,7 +139,15 @@ while :; do
 done
 case "$_vrc" in
   0) : ;;                                          # verified
-  1) die "the CA that vCenter offers for this issuer does NOT verify ${SUPERVISOR_HOST}'s certificate - refusing to install it" ;;
+  1) # DATES FIRST: an expired or not-yet-valid Supervisor certificate under the matched CA is
+     # also a 1, and then the CA is the right one and "does NOT verify" names the wrong fault.
+     # (Not asked: "the CA file itself is out of date". That text is about the reader's saved
+     # file; this candidate was read from vCenter a moment ago.)
+     if ca_endpoint_dates_only "$SUPERVISOR_HOST" 443 "$ca_tmp"; then
+       die "the CA that vCenter offers is the right one for ${SUPERVISOR_HOST}, but the certificate it presents is outside its dates - nothing was installed.
+$(tls_cert_dates_advice 'the Supervisor' "$SUPERVISOR_HOST" 443 | sed 's/^/  /')"
+     fi
+     die "the CA that vCenter offers for this issuer does NOT verify ${SUPERVISOR_HOST}'s certificate - refusing to install it" ;;
   2) die "${SUPERVISOR_HOST}:443 stopped answering during verification and stayed away for the whole budget - this is a reachability problem, NOT a bad CA. Retry, or raise SUPERVISOR_TLS_BUDGET_SECONDS" ;;
   3) die "the chain verifies but the certificate does not name ${SUPERVISOR_HOST} - is SUPERVISOR_HOST the address this Supervisor's certificate was issued for?" ;;
   4) die "${SUPERVISOR_HOST}:443 presented no certificate" ;;

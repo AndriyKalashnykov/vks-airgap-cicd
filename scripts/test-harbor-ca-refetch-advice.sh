@@ -81,6 +81,13 @@ LIB_TLS="${REPO}/scripts/lib/tls.sh"
 . "$LIB_TLS"
 
 T="$(mktemp -d)"
+# The scripts under test make temp files of their own: keep them in this test's directory.
+export TMPDIR="$T/tmp"; mkdir -p "$TMPDIR"
+# EVERY SCRIPT RUN HERE IS GIVEN A SANDBOX AS ITS REPO_ROOT, WITH ITS OWN .env AS THE FIXTURE. A
+# caller's SKIP_DOTENV=1 (the e2e sets it, and so does anyone fencing a test run) would make
+# load_env ignore that fixture and every case would test an empty configuration. And a caller's
+# "already reported" list would hide the one line the time-limit cases look for.
+unset SKIP_DOTENV _VKS_BOUNDS_REPORTED
 PIDS=""
 cleanup() {
   local p
@@ -200,6 +207,10 @@ _serve "$T/expired.crt" "$T/expired.key"     || { echo "SKIP: s_server did not s
 P_EXP="$SERVED_PORT"
 _serve "$T/notyet.crt" "$T/notyet.key"       || { echo "SKIP: s_server did not start (not valid yet)"; exit 0; }
 P_NY="$SERVED_PORT"
+# An expired certificate whose server DOES send its CA: the shape `make fetch-harbor-ca` gets as
+# far as checking (a single not-self-signed certificate is refused before any date is looked at).
+_serve "$T/expired.crt" "$T/expired.key" "$T/ca.crt" || { echo "SKIP: s_server did not start (expired + its CA)"; exit 0; }
+P_EXPCHAIN="$SERVED_PORT"
 # The one that accepts and never answers: started like the others, then STOPPED.
 _serve "$T/ss.crt"   "$T/ss.key"             || { echo "SKIP: s_server did not start (silent)"; exit 0; }
 P_SILENT="$SERVED_PORT"
@@ -406,6 +417,27 @@ for row in "$P_INTER|leaf + intermediate" "$P_FULL|leaf + intermediate + root"; 
   fi
 done
 
+# DATES FIRST, IN THE FETCH TOO. Its own consistency check (`openssl verify`) fails on an EXPIRED
+# server certificate, and the message was "the certificate we extracted does NOT verify … ask the
+# platform team for the issuing CA": the CA was right there, and right.
+fetch_out="$(CA_VERIFY_TIMEOUT=5 timeout -k 2 40 bash "${REPO}/scripts/fetch-ca.sh" "localhost:${P_EXPCHAIN}" "$T/out-expchain.crt" harbor </dev/null 2>&1)"; fetch_rc=$?
+if [ "$fetch_rc" = 1 ] && has "$fetch_out" "the CA localhost:${P_EXPCHAIN} sends is the right one, but the certificate it presents is outside its dates." \
+   && has "$fetch_out" "$DATES" && has "$fetch_out" 'whoever operates Harbor has to renew it. Do NOT replace the CA file.' \
+   && ! has "$fetch_out" 'does NOT verify' && ! has "$fetch_out" 'Ask the platform team' && [ ! -e "$T/out-expchain.crt" ]; then
+  ok "fetch-ca.sh: an expired certificate under the CA the server sends -> the dates text, not 'does NOT verify … ask for the issuing CA'; nothing written"
+else
+  bad "fetch-ca.sh: an expired server certificate is still reported as a CA that does not verify" "rc=${fetch_rc}: $(printf '%s' "$fetch_out" | command grep -F -e 'right one' -e 'does NOT verify' | head -2 | cut -c1-160)"
+fi
+# …and ONLY then. Leaf + intermediate + root (refused above with 'does NOT verify') would also say
+# yes to the dates question asked cold: the handshake verifies there with or without dates. The
+# fetch asks it only after the plain check said "connected, and it does not verify".
+fetch_out="$(CA_VERIFY_TIMEOUT=5 timeout -k 2 40 bash "${REPO}/scripts/fetch-ca.sh" "localhost:${P_FULL}" "$T/out-full.crt" harbor </dev/null 2>&1)"
+if has "$fetch_out" 'does NOT verify' && ! has "$fetch_out" "$DATES" && ! has "$fetch_out" 'outside its dates'; then
+  ok "fetch-ca.sh: a chain it cannot use (dates fine) is NOT called a dates problem (control)"
+else
+  bad "fetch-ca.sh: the dates text is printed over a chain problem" "$(printf '%s' "$fetch_out" | command grep -F -e 'dates' -e 'does NOT verify' | head -2 | cut -c1-160)"
+fi
+
 # A port nothing listens on: the fetch fails at once with the sentence it always had. (What it
 # does when the time runs out is in test-fetch-ca-bound.sh: those cases wait out a bound.)
 fetch_out="$(CA_VERIFY_TIMEOUT=5 timeout -k 2 40 bash "${REPO}/scripts/fetch-ca.sh" "127.0.0.1:${P_DEAD}" "$T/out-dead.crt" harbor </dev/null 2>&1)"; fetch_rc=$?
@@ -429,6 +461,8 @@ bound_is - 0 15;   bound_is - -1 15;  bound_is - abc 15; bound_is - '' 15; bound
 bound_is - 2.5 2.5; bound_is - 30 30
 bound_is 7 0 7;    bound_is 7 '' 7;   bound_is 7 30 30
 bound_is 0 '' 15;  bound_is abc '' 15; bound_is -3 0 15; bound_is '' '' 15
+# A unit suffix is what `timeout` itself accepts; it was silently the default (2s -> 15).
+bound_is 2s '' 2;  bound_is 1m '' 60; bound_is - 30s 30; bound_is 0s '' 15; bound_is '"3"' '' 15
 # tls_bounded: the command's own status comes back; an unusable bound does not switch it off.
 r=0; tls_bounded 5 sh -c 'exit 7' || r=$?
 if [ "$r" = 7 ]; then ok "tls_bounded: the command's exit status comes back unchanged"
@@ -548,6 +582,45 @@ if command -v make >/dev/null 2>&1; then
     if [ "$got" = "$want" ]; then ok "make: ${what}"
     else bad "make: ${what}" "wanted '${want}', got '${got}'"; fi
   done
+  # ONE .env, TWO PARSERS. A shell reads `KEY="3"` as 3 and `KEY=3   # seconds` as 3; make read the
+  # first as the five characters "3" and the second as 3 plus the blanks before the #. The fetch
+  # gets these values from make alone, so both became the 15 s default (and a quoted pin "is not a
+  # SHA-256 digest"). What the script receives must be what a shell would have read.
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\nprintf "bound=[%%s] pin=[%%s]\\n" "${CA_VERIFY_TIMEOUT-UNSET}" "${HARBOR_CA_SHA256-UNSET}"\n' > "$MKS/stub/fetch-ca.sh"
+  mkq() {  # <one .env line> [make args] ; prints what the stub received
+    local sb="q$((PASS + FAIL))"; mkdir -p "$MKS/$sb"; printf '%s\n' "$1" > "$MKS/$sb/.env"; shift
+    mk "$sb" fetch-harbor-ca "$@"
+  }
+  while IFS='|' read -r line want what; do
+    [ -n "$what" ] || continue
+    got="$(mkq "$line")"
+    if [ "$got" = "$want" ]; then ok "make, .env parse: ${what}"
+    else bad "make, .env parse: ${what}" "the line [${line}] arrived as '${got}', wanted '${want}'"; fi
+  done <<'ENVROWS'
+CA_VERIFY_TIMEOUT="3"|bound=[3] pin=[]|a double-quoted timeout arrives unquoted
+CA_VERIFY_TIMEOUT='3'|bound=[3] pin=[]|a single-quoted timeout arrives unquoted
+CA_VERIFY_TIMEOUT=3   # seconds|bound=[3] pin=[]|a timeout with an inline comment arrives without the blanks before it
+CA_VERIFY_TIMEOUT=3   |bound=[3] pin=[]|a timeout with trailing blanks arrives trimmed
+HARBOR_CA_SHA256="AA:BB:CC"   # from the platform team|bound=[] pin=[AA:BB:CC]|a quoted pin with an inline comment arrives as the digest alone
+HARBOR_CA_SHA256='AA:BB:CC'  |bound=[] pin=[AA:BB:CC]|a single-quoted pin with trailing blanks arrives as the digest alone
+HARBOR_CA_SHA256=AA:BB:CC|bound=[] pin=[AA:BB:CC]|an ordinary pin is unchanged (control)
+ENVROWS
+  got="$(mkq 'CA_VERIFY_TIMEOUT="3"' CA_VERIFY_TIMEOUT=9)"
+  if [ "$got" = 'bound=[9] pin=[]' ]; then ok "make, .env parse: a per-run value still wins over a quoted .env value"
+  else bad "make, .env parse: a per-run value lost to a quoted .env value" "got '${got}'"; fi
+  # A value that STILL cannot be used reaches the real script, which says so (once) and uses 15 s.
+  mkdir -p "$MKS/bad"; printf 'CA_VERIFY_TIMEOUT=soon\n' > "$MKS/bad/.env"
+  bad_out="$(env -u CA_VERIFY_TIMEOUT -u HARBOR_CA_SHA256 -u SKIP_DOTENV -u MAKEFLAGS -u MAKELEVEL -u MFLAGS TMPDIR="$T" \
+               timeout -k 2 40 make --no-print-directory -f "${REPO}/Makefile" -C "$MKS/bad" fetch-harbor-ca SCRIPTS="${REPO}/scripts" \
+                 HARBOR_URL="127.0.0.1:${P_DEAD}" HARBOR_CA_FILE="$T/out-bad.crt" 2>&1 </dev/null)"
+  if [ "$(command grep -c "CA_VERIFY_TIMEOUT='soon' is not a usable time limit, so 15 s is used instead" <<< "$bad_out")" = 1 ] && has "$bad_out" 'could not connect to'; then
+    ok "make -> the real fetch: an unusable CA_VERIFY_TIMEOUT in .env is reported once, and 15 s is used"
+  else
+    bad "make -> the real fetch: an unusable CA_VERIFY_TIMEOUT is replaced without one clear line" "$(printf '%s' "$bad_out" | head -3 | cut -c1-160)"
+  fi
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\nprintf "bound=[%%s]\\n" "${CA_VERIFY_TIMEOUT-UNSET}"\n' > "$MKS/stub/fetch-ca.sh"
   got="$(MK_ENV='CA_VERIFY_TIMEOUT=4' mk with-env fetch-harbor-ca)"
   if [ "$got" = 'bound=[4]' ]; then ok "make: a value exported in the shell wins over .env"
   else bad "make: a value exported in the shell must win over .env" "wanted 'bound=[4]', got '${got}'"; fi
@@ -797,7 +870,7 @@ creds_render() {  # <dir> <HARBOR_URL> <ca-file-to-install | -> [path-prefix] [p
   ( cd "$t" && env -u HARBOR_URL -u HARBOR_CA_FILE -u KUBECONFIG -u HARBOR_INSECURE \
       PATH="$t/bin:${4:+$4:}$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
       CREDS_NO_PROBE=0 CREDS_TOKEN=1 CREDS_PROBE_TIMEOUT_SECONDS="${5:-5}" \
-      timeout -k 2 45 "${REPO}/scripts/creds.sh" 2>/dev/null )
+      timeout -k 2 45 "${REPO}/scripts/creds.sh" 2>"$t/stderr" )
 }
 OLD_CREDS='does NOT verify it — re-fetch it:'
 c_ss="$(creds_render "$T/c-ss" "localhost:$P_SS" "$T/old.crt")"
@@ -845,6 +918,69 @@ if has "$c_inj" 'canary-ingress' && [ ! -e "$T/c-inj/canary-ingress" ] && [ ! -e
 else
   bad "creds: an address from the state was EXECUTED (or the fixture never reached the report)" \
       "value shown in the report: $(has "$c_inj" 'canary-ingress' && echo yes || echo no); created: $(find "$T/c-inj" -maxdepth 1 -name 'canary-*' 2>/dev/null | tr '\n' ' ')"
+fi
+
+# THE REPORT'S OWN TIME LIMITS. CREDS_PROBE_TIMEOUT_SECONDS=0 used to reach `timeout` as 0 (no
+# limit); the first clamp then made it the default without a word. It is replaced, and SAID.
+c_zero="$(creds_render "$T/c-zero" "localhost:$P_SS" "$T/ss.crt" "" 0)"
+if has "$c_zero" 'Harbor' && [ "$(command grep -c "CREDS_PROBE_TIMEOUT_SECONDS='0' is not a usable time limit, so 2 s is used instead" "$T/c-zero/stderr")" = 1 ] \
+   && [ "$(command grep -c 'is not a usable time limit' "$T/c-zero/stderr")" = 1 ]; then
+  ok "creds: CREDS_PROBE_TIMEOUT_SECONDS=0 is replaced by 2 s and reported once on stderr; the report still renders"
+else
+  bad "creds: an unusable CREDS_PROBE_TIMEOUT_SECONDS is not reported exactly once" "$(command grep -c 'CREDS_PROBE_TIMEOUT_SECONDS' "$T/c-zero/stderr" 2>/dev/null) line(s): $(command grep -m1 'CREDS_PROBE' "$T/c-zero/stderr" 2>/dev/null | cut -c1-140)"
+fi
+c_sfx="$(creds_render "$T/c-sfx" "localhost:$P_SS" "$T/ss.crt" "" 5s)"
+if has "$c_sfx" 'Harbor' && ! command grep -q 'is not a usable time limit' "$T/c-sfx/stderr"; then
+  ok "creds: CREDS_PROBE_TIMEOUT_SECONDS=5s is accepted (no warning)"
+else
+  bad "creds: a unit suffix on CREDS_PROBE_TIMEOUT_SECONDS is refused" "$(command grep -m1 'usable time limit' "$T/c-sfx/stderr" | cut -c1-140)"
+fi
+
+# THE ArgoCD BULLET ASKS ABOUT DATES TOO (it said "does NOT verify this address — re-fetch it").
+# The bullet is printed for a bare-IP address with ARGOCD_CA_FILE set; the listeners carry IP:127.0.0.1.
+c_adates="$(CREDS_EXTRA_ENV="ARGOCD_SERVER=127.0.0.1:${P_EXP}
+ARGOCD_CA_FILE=$T/ca.crt" creds_render "$T/c-adates" "localhost:$P_SS" "$T/ss.crt")"
+if has "$c_adates" "- ArgoCD CLI: the CA at $T/ca.crt is the right one; the certificate ArgoCD serves is outside its dates." \
+   && has "$c_adates" 'whoever operates ArgoCD has to renew it. Do NOT replace the CA file.' \
+   && ! has "$c_adates" 'does NOT verify this address'; then
+  ok "creds, ArgoCD: an expired certificate under the right CA -> the dates text, for ArgoCD; not 're-fetch it'"
+else
+  bad "creds, ArgoCD: an expired certificate is still 'does NOT verify this address — re-fetch it' (or the bullet was not reached)" "$(command grep -F -A2 -- '- ArgoCD CLI' <<< "$c_adates" | cut -c1-170)"
+fi
+c_acad="$(CREDS_EXTRA_ENV="ARGOCD_SERVER=127.0.0.1:${P_LEAF}
+ARGOCD_CA_FILE=$T/caexp.crt" creds_render "$T/c-acad" "localhost:$P_SS" "$T/ss.crt")"
+if has "$c_acad" "- ArgoCD CLI: the CA at $T/caexp.crt is itself outside its dates, so it cannot verify ArgoCD." \
+   && has "$c_acad" 'The CA file itself is outside its validity period on this machine:' && ! has "$c_acad" 'Do NOT replace the CA file'; then
+  ok "creds, ArgoCD: an out-of-date CA FILE -> the file's own dates and make fetch-argocd-ca; never 'do NOT replace'"
+else
+  bad "creds, ArgoCD: an out-of-date CA file is not reported as such" "$(command grep -F -A2 -- '- ArgoCD CLI' <<< "$c_acad" | cut -c1-170)"
+fi
+c_awrong="$(CREDS_EXTRA_ENV="ARGOCD_SERVER=127.0.0.1:${P_LEAF}
+ARGOCD_CA_FILE=$T/old.crt" creds_render "$T/c-awrong" "localhost:$P_SS" "$T/ss.crt")"
+if has "$c_awrong" "- ArgoCD CLI: the CA at $T/old.crt does NOT verify this address — re-fetch it:" && ! has "$c_awrong" 'outside its dates'; then
+  ok "creds, ArgoCD: the WRONG CA still says 'does NOT verify this address — re-fetch it' (control)"
+else
+  bad "creds, ArgoCD: the wrong-CA bullet changed" "$(command grep -F -A2 -- '- ArgoCD CLI' <<< "$c_awrong" | cut -c1-170)"
+fi
+
+# EVERY SCRIPT THAT ASKS "does this CA verify this endpoint" ALSO ASKS THE DATES QUESTION. A
+# "connected, and it does not verify" (1) is three different faults (wrong CA, an expired server
+# certificate, an expired CA file) and only the second question tells them apart. Derived by
+# grep, not from a list: a new caller that reports a bare 1 as "wrong CA" fails here.
+# What this does NOT check is what each one PRINTS: the sites with a case above are the reports,
+# the fetch and the login; the installer-side ones are held only by this line.
+askers="$(command grep -rlE --include='*.sh' -- '(^|[^A-Za-z_#])ca_verifies_endpoint "' "${REPO}/scripts" \
+            | command grep -vE '/scripts/test-[^/]*\.sh$|/scripts/lib/tls\.sh$' | sort)"
+n_askers="$(command grep -c . <<< "$askers" || true)"
+no_dates=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  command grep -qE '(^|[^A-Za-z_#])(ca_endpoint_dates_only|supervisor_anchor_verdict) ' "$f" || no_dates="${no_dates} ${f##*/}"
+done <<< "$askers"
+if [ -z "$no_dates" ] && [ "${n_askers:-0}" -ge 8 ]; then
+  ok "every script that calls ca_verifies_endpoint also asks the dates question (${n_askers} scripts)"
+else
+  bad "a script reports a failed CA check without asking whether dates are the cause (or the scan found too few)" "scripts found: ${n_askers:-0}; without the dates question:${no_dates:- none}"
 fi
 
 # THE BOUND. The wire question is sent to the listener that never answers. The report must come
@@ -1069,10 +1205,39 @@ DOC="${REPO}/docs/scenario-1.md"
 if [ -f "$DOC" ]; then
   if command grep -qE '^sha256sum .*harbor-ca\.crt' "$DOC"; then
     bad "scenario-1 Step 8 tells the reader to compare sha256sum of the CA file" "the scripts print the certificate fingerprint; the two never match"
-  elif command grep -qxF 'openssl x509 -in ./secrets/harbor-ca.crt -noout -fingerprint -sha256' "$DOC"; then
-    ok "scenario-1 Step 8 compares the certificate fingerprint, the number the scripts print"
+  elif command grep -qxF 'openssl x509 -in ./secrets/harbor-ca.download.crt -noout -fingerprint -sha256' "$DOC"; then
+    ok "scenario-1 Step 8 compares the certificate fingerprint, the number the scripts print (of the DOWNLOAD)"
   else
     bad "scenario-1 Step 8 has no fingerprint command for the Harbor CA" "expected the openssl x509 -fingerprint -sha256 line"
+  fi
+  # THE ORDER OF STEP 8's MAIN FLOW: keep the download aside, print ITS fingerprint, and only after
+  # that install it where everything trusts it; then make ca-status. The flow used to install to
+  # ./secrets/harbor-ca.crt first and print the fingerprint of the installed file afterwards.
+  # The first pattern is the doc's own line, `$tmp` and all (SC2016 is deliberate).
+  # shellcheck disable=SC2016
+  d_keep="$(command grep -nF 'install -m0644 "$tmp/ca.crt" ./secrets/harbor-ca.download.crt' "$DOC" | head -1 | cut -d: -f1)"
+  d_fp="$(command grep -nxF 'openssl x509 -in ./secrets/harbor-ca.download.crt -noout -fingerprint -sha256' "$DOC" | head -1 | cut -d: -f1)"
+  d_inst="$(command grep -nxF 'install -m0644 ./secrets/harbor-ca.download.crt ./secrets/harbor-ca.crt' "$DOC" | head -1 | cut -d: -f1)"
+  d_stat="$(command grep -nxF 'make ca-status' "$DOC" | awk -F: -v a="${d_inst:-0}" '$1 > a { print $1; exit }')"
+  # shellcheck disable=SC2016
+  if [ -n "$d_keep" ] && [ -n "$d_fp" ] && [ -n "$d_inst" ] && [ -n "$d_stat" ] \
+     && [ "$d_keep" -lt "$d_fp" ] && [ "$d_fp" -lt "$d_inst" ] && [ "$d_inst" -lt "$d_stat" ] \
+     && ! command grep -qF 'install -m0644 "$tmp/ca.crt" ./secrets/harbor-ca.crt' "$DOC"; then
+    ok "scenario-1 Step 8: download kept aside, its fingerprint printed, THEN installed, then make ca-status (lines ${d_keep} < ${d_fp} < ${d_inst} < ${d_stat})"
+  else
+    bad "scenario-1 Step 8 installs the downloaded CA before its fingerprint is printed (or a step is missing)" "keep=${d_keep:-none} fingerprint=${d_fp:-none} install=${d_inst:-none} ca-status=${d_stat:-none}"
+  fi
+  # THE FIRST FENCE STARTS BY REMOVING AN EARLIER DOWNLOAD (a failed run must not leave the old
+  # file for the fingerprint step to print), and NO FENCE OF STEP 8 CARRIES A COMMENT LINE: in an
+  # interactive zsh a pasted `# …` line is a command, and two of them were in this block.
+  step8="$(awk '/^## 8\. /{s=1; next} s && /^## /{exit} s' "$DOC")"
+  first_cmd="$(awk '/^```bash/{f=1; next} f{print; exit}' <<< "$step8")"
+  fence_comments="$(awk '/^```bash/{f=1; next} /^```/{f=0} f && /^[[:space:]]*#/' <<< "$step8")"
+  n_fences="$(command grep -c '^```bash' <<< "$step8" || true)"
+  if [ "$first_cmd" = 'rm -f ./secrets/harbor-ca.download.crt' ] && [ -z "$fence_comments" ] && [ "${n_fences:-0}" -ge 4 ]; then
+    ok "scenario-1 Step 8: the first fence begins by removing an earlier download, and none of its ${n_fences} fences holds a comment line"
+  else
+    bad "scenario-1 Step 8: a stale download can survive, or a fence carries a comment line (it breaks a paste into zsh)" "first command: '${first_cmd}'; comment lines in fences: $(command grep -c . <<< "$fence_comments")"
   fi
   # The UI bullet must carry the command for the DOWNLOADED file itself. "The command above"
   # names ./secrets/harbor-ca.crt, which is the file not to have saved yet.

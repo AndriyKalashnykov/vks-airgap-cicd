@@ -8,6 +8,12 @@
 # token, a truncated one, and literal garbage all return 200 with a fresh cookie), so re-pasting
 # "succeeds" and bounces identically. The only cure is that the two numbers agree.
 
+# lib/os.sh, SOURCED HERE: headlamp_ttl_readback takes its time bound through bound_seconds and
+# run_bounded_group, and a caller that sources only this file (its unit test does) would get
+# "command not found" where a kubectl read was meant. os.sh has a load guard.
+# shellcheck source=scripts/lib/os.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/os.sh"
+
 # headlamp_ttl_seconds <duration> -> prints seconds on stdout, rc=0
 #                                    prints NOTHING, rc=1, on anything it will not accept.
 #
@@ -73,7 +79,7 @@ headlamp_deployed_ttl() {
   local _ns="${1:-headlamp}" _args
   # Its OWN knob. It used to read CREDS_KUBE_TIMEOUT_SECONDS, so an operator lowering that to
   # speed up `make creds` silently weakened the INSTALLER's assert to "UNVERIFIED".
-  _args="$(timeout "${HEADLAMP_READBACK_TIMEOUT_SECONDS:-${CREDS_KUBE_TIMEOUT_SECONDS:-10}}" kubectl --request-timeout=3s \
+  _args="$(run_bounded_group HEADLAMP_READBACK_TIMEOUT_SECONDS "$(bound_seconds "${CREDS_KUBE_TIMEOUT_SECONDS:-}" 10)" kubectl --request-timeout=3s \
              -n "$_ns" get deploy headlamp \
              -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].args}' \
              </dev/null 2>/dev/null || true)"

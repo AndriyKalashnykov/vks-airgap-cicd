@@ -212,6 +212,24 @@ _ENVMK_ENV := $(call regen_overlay_mk,.env,secrets/.env.make)
 # without this an out-of-band CA pin written to .env is SILENTLY INERT and the operator concludes pinning
 # is broken. This replaces a per-recipe `VAR='$(VAR)'` prefix, which MEASURED broke on a value containing
 # a single quote (`bash -n` -> unexpected EOF) and silently ate a `$`. A command-line override still wins.
+#
+# ⚠️ ONE .env, TWO PARSERS — AND THE SHELL OWNS THESE THREE VALUES. Every other script reads .env
+# by SOURCING it (load_env), where `KEY="3"` is 3 and `KEY=3   # seconds` is 3. make reads the
+# same line as text: the first arrives as the five characters `"3"`, the second as `3` followed
+# by the spaces before the `#`. fetch-ca.sh gets these three from make and from nowhere else, so
+# MEASURED: a quoted or commented CA_VERIFY_TIMEOUT became the 15 s default with no word, and a
+# quoted pin is "not a SHA-256 digest". So what make read from a FILE (or took from the
+# environment) is brought to what the shell would have read: surrounding blanks dropped, one
+# layer of matching quotes removed. A command-line value is left alone: the shell that typed it
+# already unquoted it. NOT handled, on purpose: a value with blanks INSIDE it (none of the three
+# can hold one) and a `#` with no blank before it (make cuts there, the shell does not).
+env_scalar = $(patsubst '%',%,$(patsubst "%",%,$(strip $(1))))
+define _shell_owned_scalar
+ifneq ($$(filter file environment,$$(origin $(1))),)
+$(1) := $$(call env_scalar,$$($(1)))
+endif
+endef
+$(foreach v,HARBOR_CA_SHA256 ARGOCD_CA_SHA256 CA_VERIFY_TIMEOUT,$(eval $(call _shell_owned_scalar,$(v))))
 export HARBOR_CA_SHA256
 export ARGOCD_CA_SHA256
 # CA_VERIFY_TIMEOUT bounds the two fetch targets' handshakes, and it has the same gap: set in .env
@@ -791,8 +809,17 @@ ca-status: ## Read-only: is each saved CA certificate still the right one for it
 	@$(SCRIPTS)/29-ca-status.sh
 
 .PHONY: fetch-harbor-ca
+# ⚠️ THE ENDPOINT GOES TO fetch-ca.sh IN THE ENVIRONMENT, NEVER ON A COMMAND LINE. It was
+# `fetch-ca.sh "$(HARBOR_URL)" …`: make pastes the value into the recipe, so it sat in the argv of
+# the recipe's shell AND of the script for the whole handshake bound, readable by every user on
+# the box through `ps`. An address is not a secret, but a login typed into one
+# (`user:password@harbor…`) is, and load_env's removal of it never ran on this path: the value
+# comes from make's own read of .env. `-` as the first argument tells the script to read
+# _FETCH_CA_ENDPOINT instead (a leading underscore: it is make's hand-off, not an operator knob). env_scalar reads the value the way a shell reads the .env line
+# (the quotes the recipe's own `"…"` used to absorb). Target-specific, so no other recipe gets it.
+fetch-harbor-ca: export _FETCH_CA_ENDPOINT := $(call env_scalar,$(HARBOR_URL))
 fetch-harbor-ca: ## Fetch the CA that ISSUED the lab Harbor's cert → HARBOR_CA_FILE, and VERIFY it (for HTTPS mirror/Kaniko trust)
-	@$(SCRIPTS)/fetch-ca.sh "$(HARBOR_URL)" "$(HARBOR_CA_FILE)" harbor
+	@$(SCRIPTS)/fetch-ca.sh - "$(HARBOR_CA_FILE)" harbor
 
 .PHONY: uninstall-all
 uninstall-all: ## DESTRUCTIVE (real lab): remove what scenario-1 created — ours only, by ownership label, never by name. Requires CONFIRM=<VKS_CLUSTER_NAME>
@@ -816,10 +843,12 @@ argocd-ca-from-cluster: ## Get ArgoCD's certificate from the SUPERVISOR (authent
 # ⚠️ Do NOT 'simplify' by dropping ARGOCD_LB_IP: ARGOCD_SERVER's writer 09-argocd-address.sh is
 # Supervisor-only and .env.example ships ARGOCD_SERVER commented, so nothing sets it on KinD
 # and the recipe would die with an empty endpoint (measured).
+# The endpoint travels in the environment here too (see fetch-harbor-ca above): it used to be
+# pasted into the recipe as `ep="…"`, which is the recipe shell's own command line.
+fetch-argocd-ca: export _FETCH_CA_ENDPOINT := $(call env_scalar,$(if $(ARGOCD_SERVER),$(ARGOCD_SERVER),$(ARGOCD_LB_IP)))
 fetch-argocd-ca: ## Fetch the CA that ISSUED the ArgoCD server's cert → ARGOCD_CA_FILE, and VERIFY it (endpoint: ARGOCD_SERVER, else ARGOCD_LB_IP)
-	@ep="$(if $(ARGOCD_SERVER),$(ARGOCD_SERVER),$(ARGOCD_LB_IP))"; \
-	 [ -n "$$ep" ] || { echo "ERROR: set ARGOCD_LB_IP (kind, from the state overlay) or ARGOCD_SERVER (lab argocd-server LB IP) first"; exit 1; }; \
-	 $(SCRIPTS)/fetch-ca.sh "$$ep" "$(if $(ARGOCD_CA_FILE),$(ARGOCD_CA_FILE),./secrets/argocd-ca.crt)" argocd
+	@[ -n "$$_FETCH_CA_ENDPOINT" ] || { echo "ERROR: set ARGOCD_LB_IP (kind, from the state overlay) or ARGOCD_SERVER (lab argocd-server LB IP) first"; exit 1; }; \
+	 $(SCRIPTS)/fetch-ca.sh - "$(if $(ARGOCD_CA_FILE),$(ARGOCD_CA_FILE),./secrets/argocd-ca.crt)" argocd
 
 ##@ Container engine (podman is the default; docker is supported when you ask for it)
 .PHONY: engine-check

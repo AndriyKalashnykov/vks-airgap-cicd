@@ -160,7 +160,7 @@ _read_secret() {
     [ -n "$kc" ] && [ -f "$kc" ] || continue
     # BOUNDED, and stdin CLOSED — see the timing note below.
     krc=0
-    enc="$(KUBECONFIG="$kc" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl --request-timeout=5s \
+    enc="$(KUBECONFIG="$kc" run_bounded_group CREDS_K8S_TIMEOUT 10 kubectl --request-timeout=5s \
              -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret \
              -o jsonpath='{.data.password}' </dev/null 2>"$one")" || krc=$?
     if [ "$krc" = 0 ] && [ -n "$enc" ]; then
@@ -240,12 +240,12 @@ _split_answer() { ANSWERED_KC="${1%%$'\t'*}"; ENC="${1#*$'\t'}"; }
 # QUERY first (this file has been bitten by that: see the 89%-of-runtime retry note above).
 _password_state() {
   local kc="$1" mt ct
-  mt="$(KUBECONFIG="$kc" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl --request-timeout=5s \
+  mt="$(KUBECONFIG="$kc" run_bounded_group CREDS_K8S_TIMEOUT 10 kubectl --request-timeout=5s \
           -n "$ARGOCD_NAMESPACE" get secret argocd-secret \
           -o jsonpath='{.data.admin\.passwordMtime}' </dev/null 2>/dev/null || true)"
   [ -n "$mt" ] || { printf 'UNKNOWN'; return 0; }
   mt="$(printf '%s' "$mt" | base64 -d 2>/dev/null || true)"
-  ct="$(KUBECONFIG="$kc" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl --request-timeout=5s \
+  ct="$(KUBECONFIG="$kc" run_bounded_group CREDS_K8S_TIMEOUT 10 kubectl --request-timeout=5s \
           -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret \
           -o jsonpath='{.metadata.creationTimestamp}' </dev/null 2>/dev/null || true)"
   [ -n "$mt" ] && [ -n "$ct" ] || { printf 'UNKNOWN'; return 0; }

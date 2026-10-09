@@ -429,15 +429,7 @@ if [ "$MECH" = api ] && [ "$can_api" = unknown ]; then
     # one for ARGOCD_SERVER as it does for HARBOR_URL), a trailing slash, `[::1]:443`, bare `::1`
     # and `fd00::1` (-> host=fd00:, port=1). Each degraded to rc 2 "did not answer", i.e. STRICTLY
     # WORSE than the generic text it replaced, because it blames reachability for a malformed value.
-    _cv_hp="$(printf '%s' "$ARGOCD_SERVER" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*##')"
-    case "$_cv_hp" in
-      \[*\]:*) _cv_h="${_cv_hp%]:*}]"; _cv_p="${_cv_hp##*]:}" ;;   # [v6]:port
-      \[*\])   _cv_h="$_cv_hp";        _cv_p=443 ;;                # [v6]
-      *:*:*)   _cv_h="$_cv_hp";        _cv_p=443 ;;                # bare IPv6, no port
-      *:*)     _cv_h="${_cv_hp%:*}";   _cv_p="${_cv_hp##*:}" ;;
-      *)       _cv_h="$_cv_hp";        _cv_p=443 ;;
-    esac
-    case "$_cv_p" in ''|*[!0-9]*) _cv_p=443 ;; esac
+    url_host_port "$ARGOCD_SERVER"; _cv_h="$URL_HOST"; _cv_p="$URL_PORT"   # lib/os.sh: the one splitter
     # ⚠️ F4: rc 2 conflates "does not RESOLVE" with "refused", and those have OPPOSITE remedies —
     # MEASURED separable (errno 6 vs errno 111). A tenant who correctly set ARGOCD_SERVER to a
     # certificate NAME and has not mapped it lands here, and rc 2's text tells them to "retry",
@@ -456,8 +448,18 @@ if [ "$MECH" = api ] && [ "$can_api" = unknown ]; then
   server that terminates TLS or cannot do HTTP/2 (see ARGOCD_OPTS --grpc-web in .env.example)." ;;
         3) _addr_verdict="  MEASURED: the ANCHOR IS CORRECT and the ADDRESS IS WRONG — the chain verified and the
   NAME did not. Change ONLY the ADDRESS: do NOT re-fetch the CA, it is already the right one." ;;
-        1) _addr_verdict="  MEASURED: connected, and ARGOCD_CA_FILE did NOT verify the chain — so the ANCHOR is
+        1) # DATES FIRST: an expired or not-yet-valid certificate under the RIGHT anchor is also a
+           # 1, and so is an anchor FILE that is itself out of date. Neither is "a rebuilt lab".
+           _cv_dates=0; ca_endpoint_dates_only "$_cv_h" "$_cv_p" "${ARGOCD_CA_FILE:-}" || _cv_dates=$?
+           case "$_cv_dates" in
+             0) _addr_verdict="  MEASURED: ARGOCD_CA_FILE is the right CA for '${ARGOCD_SERVER}', but the certificate it presents is outside its dates.
+$(tls_cert_dates_advice ArgoCD "$_cv_h" "$_cv_p" | sed 's/^/  /')" ;;
+             2) _addr_verdict="  MEASURED: ARGOCD_CA_FILE (${ARGOCD_CA_FILE:-}) is itself outside its dates, so it cannot verify '${ARGOCD_SERVER}'.
+$(tls_ca_file_dates_advice "${ARGOCD_CA_FILE:-}" "$_cv_h" | sed 's/^/  /')
+  make fetch-argocd-ca" ;;
+             *) _addr_verdict="  MEASURED: connected, and ARGOCD_CA_FILE did NOT verify the chain — so the ANCHOR is
   wrong (or belongs to a rebuilt lab). Re-fetch it: make fetch-argocd-ca. The address may be fine." ;;
+           esac ;;
         2) _addr_verdict="  MEASURED: '${ARGOCD_SERVER}' resolved but did not answer (refused, or it accepted and
   closed with zero bytes — what an LB VIP looks like while its backend is still starting). This is
   NOT evidence either knob is wrong; check reachability, then retry." ;;

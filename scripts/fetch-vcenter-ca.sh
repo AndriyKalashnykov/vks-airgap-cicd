@@ -52,7 +52,7 @@ unzip -j -o -q "$tmp/vmca.zip" 'certs/lin/*.0' -d "$tmp/c/" 2>/dev/null \
 # ⚠️ COUNTING IS NOT BOOKKEEPING. A bundle caught mid-rotation can carry TWO certs that both
 # verify, and a silent first-match is how you install the one that is about to expire. Report the
 # number; install only on exactly one, and make the operator choose otherwise.
-match=""; nmatch=0; ncand=0; n_namefail=0
+match=""; nmatch=0; ncand=0; n_namefail=0; chainfail=""
 for f in "$tmp"/c/*.0; do
   [ -e "$f" ] || continue
   ncand=$((ncand + 1))
@@ -60,6 +60,7 @@ for f in "$tmp"/c/*.0; do
   case "$rc" in
     0) nmatch=$((nmatch + 1)); [ -z "$match" ] && match="$f" ;;
     3) n_namefail=$((n_namefail + 1)) ;;   # chain verifies, NAME does not — see below
+    1) chainfail="${chainfail}${f}"$'\n' ;;   # connected, did not verify: asked about dates below
   esac
 done
 log_info "candidates in the bundle: ${ncand}; verified vCenter by handshake: ${nmatch}"
@@ -75,6 +76,19 @@ if [ "$nmatch" -eq 0 ]; then
   Set VCENTER_HOST to the FQDN the certificate carries:
     openssl s_client -connect '${VCENTER_HOST}:443' </dev/null 2>/dev/null | openssl x509 -noout -text | grep -A1 'Subject Alternative Name'"
   fi
+  # DATES BEFORE "none verifies": if vCenter's certificate has expired (or is not valid yet, or
+  # this machine's clock is off), EVERY root fails the handshake, and the right one among them
+  # is told apart only by asking again with the dates ignored. Asked here, on the failure path
+  # only, so the selection loop above stays one handshake per root.
+  # Only the roots the plain check answered 1 for ("connected, and it does not verify"): the
+  # dates question means nothing after any other answer.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if ca_endpoint_dates_only "$VCENTER_HOST" 443 "$f"; then
+      die "one of the ${ncand} roots in vCenter's own bundle is the right CA for ${VCENTER_HOST}, but the certificate ${VCENTER_HOST} presents is outside its dates - nothing was installed.
+$(tls_cert_dates_advice vCenter "$VCENTER_HOST" 443 | sed 's/^/  /')"
+    fi
+  done <<< "$chainfail"
   log_error "none of the ${ncand} roots in vCenter's own bundle verifies ${VCENTER_HOST}. Candidates:"
   for f in "$tmp"/c/*.0; do
     [ -e "$f" ] && openssl x509 -in "$f" -noout -subject 2>/dev/null | sed 's/^/    /' >&2

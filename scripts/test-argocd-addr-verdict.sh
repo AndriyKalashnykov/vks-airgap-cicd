@@ -37,18 +37,14 @@ bad() { fail=$((fail + 1)); printf '  FAIL  %s\n' "$1"; }
 # A copy of the shipped `case` rather than a source, because the shipped one is inline in a
 # die-path. If they drift this still pins the CONTRACT, and the drift surfaces as a live failure of
 # section 2, which drives the shipped path end to end.
+# THE SHIPPED PARSER, CALLED — no longer a copy of it. This section used to test a transcription,
+# because the parser lived inline in a die path; it is now url_host_port (lib/os.sh), the one
+# splitter 70-configure-argocd.sh calls, so the function below is the product's own.
+# shellcheck source=scripts/lib/os.sh
+. "${SCRIPT_DIR}/lib/os.sh"
 parse() {
-  local hp h p
-  hp="$(printf '%s' "$1" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*##')"
-  case "$hp" in
-    \[*\]:*) h="${hp%]:*}]"; p="${hp##*]:}" ;;
-    \[*\])   h="$hp";        p=443 ;;
-    *:*:*)   h="$hp";        p=443 ;;
-    *:*)     h="${hp%:*}";   p="${hp##*:}" ;;
-    *)       h="$hp";        p=443 ;;
-  esac
-  case "$p" in ''|*[!0-9]*) p=443 ;; esac
-  printf '%s|%s' "$h" "$p"
+  url_host_port "$1"
+  printf '%s|%s' "$URL_HOST" "$URL_PORT"
 }
 echo "== 1. host:port parser (7 of these 12 were MEASURED broken before the fix) =="
 while IFS= read -r line; do
@@ -65,10 +61,11 @@ https://argocd.lab.test:443|argocd.lab.test|443
 http://argocd.lab.test/|argocd.lab.test|443
 argocd.lab.test/|argocd.lab.test|443
 argocd.lab.test:|argocd.lab.test|443
-[::1]:443|[::1]|443
+[::1]:443|::1|443
+[::1]:8443|::1|8443
 ::1|::1|443
 fd00::1|fd00::1|443
-[fd00::1]|[fd00::1]|443
+[fd00::1]|fd00::1|443
 CASES
 
 # ── 2. rc -> arm, against a REAL endpoint ───────────────────────────────────────────────────────
@@ -204,15 +201,20 @@ fi
 # here; a subtly WRONG rewrite still would not, and closing that needs the die-path refactored so
 # the parser is a callable function (filed, not done).
 _shipped="${SCRIPT_DIR}/70-configure-argocd.sh"
-if grep -q "s#\^\[a-zA-Z\]\[a-zA-Z0-9+.-\]\*://##" "$_shipped"; then
-  ok "the shipped parser still strips a scheme (creds.sh:76 shows one is anticipated)"
+# These two greps used to look for the inline parser's scheme-strip and its bare-IPv6 arm. The
+# inline parser is gone on purpose: the script calls the one splitter, which section 1 now runs.
+# So what is pinned here is that it DOES call it, on the address it reports about.
+# The pattern is the call as written in the script (SC2016 is deliberate).
+# shellcheck disable=SC2016
+if grep -qF 'url_host_port "$ARGOCD_SERVER"; _cv_h="$URL_HOST"; _cv_p="$URL_PORT"' "$_shipped"; then
+  ok "the shipped script splits ARGOCD_SERVER with url_host_port, the parser section 1 runs"
 else
-  bad "the shipped scheme-strip is GONE — 'https://h' parses to host=https, port=//h"
+  bad "the shipped script no longer calls url_host_port on ARGOCD_SERVER — section 1 tests a parser it does not use"
 fi
-if grep -q '\*:\*:\*)' "$_shipped"; then
-  ok "the shipped parser still has its bare-IPv6 arm"
+if ! grep -q '_cv_hp=' "$_shipped"; then
+  ok "the shipped script carries no second, inline parser"
 else
-  bad "the bare-IPv6 arm is GONE — 'fd00::1' parses to host=fd00:, port=1"
+  bad "an inline host:port parser is back in the shipped script, beside the one splitter"
 fi
 
 # B552: the --insecure disclosure in 09-argocd-address.sh.
@@ -348,7 +350,7 @@ fi
 # shellcheck source=scripts/lib/tls.sh
 . "${SCRIPT_DIR}/lib/tls.sh" 2>/dev/null
 _bad=0
-for _c in '192.168.101.140|ip' 'argocd-server|name' '10.0.0.1:8443|name' 'fd00::1|name'; do
+for _c in '192.168.101.140|ip' 'argocd-server|name' '10.0.0.1:8443|name' 'fd00::1|ip' '::1|ip'; do
   _want="${_c##*|}"; _addr="${_c%|*}"
   [ "$(ca_addr_kind "$_addr")" = "$_want" ] || { _bad=1; printf '        %s -> %s, want %s\n' "$_addr" "$(ca_addr_kind "$_addr")" "$_want"; }
 done

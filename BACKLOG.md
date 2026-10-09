@@ -16,29 +16,91 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
-## 🔴 B749 — four things the Harbor CA advice change (2026-10-09) found and did not fix
+## ✅ B749 — DONE (#1377, #1379 and the change after them): the Harbor CA follow-ups, Step 8 walked on the lab ✅ closed 2026-10-09
 
-Found by the two diff reviews of the change that stopped `make ca-status`, `make env-validate` and
-`make creds` recommending `make fetch-harbor-ca` where the endpoint does not send its issuing CA.
-None is fixed. Grades are the reviewers'.
+**Step 8 was walked on the real lab, 2026-10-09 (MEASURED by the owner's session):** the first
+fence printed `harbor.crt: OK` and kept `./secrets/harbor-ca.download.crt` with the live CA
+untouched; the fingerprint printed and equalled the live CA's; the install and `make ca-status`
+(`ALL-MATCH`, 2 of 2) passed. ONE residual: after that walk the first fence gained a first line,
+`rm -f ./secrets/harbor-ca.download.crt` (a download kept by an earlier, failed attempt must not
+be the file whose fingerprint is printed), and its two comment lines moved out into prose (they
+broke a paste into zsh). The rest of the block is what was walked; that one line has not been.
 
-1. **`fetch-ca.sh`'s own handshake has no time bound.** MEASURED: against a listener that accepts
-   and never answers it hangs until killed. `tls_presented_chain` in `scripts/lib/tls.sh` already
-   takes a timeout argument; the fetch does not pass one. Done when: the fetch passes
-   `CA_VERIFY_TIMEOUT`, its die path for a timeout says so, and a silent-listener case pins it.
-2. **`ca_status_report` builds its pair list with `|` as the delimiter.** MEASURED:
-   `HARBOR_CA_FILE=/tmp/x/a|b/ca.crt` is mis-parsed and the message names a wrong file and a wrong
-   command. Done when: the delimiter is one a path cannot hold, with a case for such a path.
-3. **`docs/scenario-1.md` Step 8's main flow installs the file before it compares the
-   fingerprint.** READ. It installs only after `openssl verify`, which proves consistency, not
-   authenticity. The messages now give the order fingerprint, confirm, save; the doc's main flow
-   does not. Done when: the block is reordered and re-walked.
-4. **The Supervisor row of `make ca-status` reports an expired certificate under the right CA as a
-   leftover CA.** READ. Harbor's three sites ask `ca_endpoint_dates_only` first since this change;
-   the Supervisor row does not. Done when: it asks the same function and prints the dates message.
+**The four original items** (found by the two diff reviews of #1377, the change that stopped
+`make ca-status`, `make env-validate` and `make creds` recommending `make fetch-harbor-ca` where
+the endpoint does not send its issuing CA):
 
-Also unproven from that change: the dates message has run only against local listeners, and
-`-no_check_time` was measured on OpenSSL 3.5.5 only.
+1. `fetch-ca.sh`'s own handshake had no time bound. **FIXED (#1379).** It is bounded by
+   `CA_VERIFY_TIMEOUT`, says "accepted the connection and did not answer within N s" with the
+   command that raises the bound, and `test-fetch-ca-bound.sh` (slow tier) pins it against a
+   stopped listener.
+2. `ca_status_report` built its pair list with `|` as the delimiter. **FIXED (#1379).** The
+   separator is 0x1f; a path holding `|` and one holding a space are cases in
+   `test-harbor-ca-refetch-advice.sh`.
+3. Step 8's main flow installed the file before it compared the fingerprint. **REORDERED (the
+   change after #1379) AND WALKED ON THE LAB 2026-10-09.** Download kept aside as
+   `./secrets/harbor-ca.download.crt` → `openssl verify` → fingerprint of the download → confirm
+   out of band → install → `make ca-status`. A test pins the order of those lines in the document.
+4. The Supervisor row of `make ca-status` called an expired certificate under the right CA a
+   leftover. **FIXED (#1379).** It asks `ca_endpoint_dates_only` and prints the dates text.
+
+**What the two reviews of #1379 found beyond those, and what was done:**
+
+- *The dates answer was wrong when the CA FILE is the expired thing* (a CA re-issued with the same
+  key; `-no_check_time` relaxes the anchor's dates too), so "do NOT replace the CA file" was
+  printed where replacing it is the fix. **FIXED (#1379):** `ca_endpoint_dates_only` has a third
+  answer (2), `supervisor_anchor_verdict` a verdict 7, and every site prints the file's own dates.
+- *A `CA_VERIFY_TIMEOUT` in `.env` never reached the two fetch targets.* **FIXED (#1379)**, and
+  after it: a quoted value, an inline `# comment` and trailing blanks are read the way a shell
+  reads them, for the timeout and for the two pins (`HARBOR_CA_SHA256`, `ARGOCD_CA_SHA256`).
+- *Ctrl-C did not end a fetch against a silent server.* **FIXED (#1379):** `timeout --foreground`
+  where this timeout has it, and an INT trap in `fetch-ca.sh`.
+- *Two probes in `creds.sh` pasted a cluster-supplied address into shell text.* **FIXED (#1379).**
+- *A bound with a unit suffix (`2s`) silently became 15 s.* **FIXED (after #1379):** what
+  `timeout` accepts for a positive duration is accepted (from 1 s to one day, printed as plain
+  seconds); a value that is set and cannot be used is replaced by the default with ONE line on
+  stderr naming the variable, the value and the bound. That line is printed by `load_env`'s last
+  step (`bounds_normalize`), in the script's main shell. Its first version was printed from
+  inside the runner, where nearly every call site redirects stderr: it was never seen, or it
+  landed in the file a caller reads back as the command's own error.
+- *Twenty-odd other sites handed a variable straight to `timeout`, where 0 means no limit.*
+  **FIXED (after #1379):** one clamp and two runners in `lib/os.sh` (`run_bounded` with
+  `--foreground` for child-free commands, `run_bounded_group` with plain timeout for kubectl, the
+  argocd CLI, scripts and shimmed tools); `test-timeout-bounds.sh` greps `scripts/` and fails on a
+  variable that reaches `timeout` any other way.
+- *The dates question was asked at 4 of 12 call sites.* **FIXED (after #1379)** at the sites whose
+  caller prints something: the fetch, `make creds` (ArgoCD), `70-configure-argocd.sh`,
+  `09-argocd-address.sh`, `27-harbor-ca-from-cluster.sh`, `fetch-supervisor-ca.sh`,
+  `fetch-vcenter-ca.sh`. NOT asked, on purpose: the "CA file itself is out of date" half at the
+  four PRODUCERS (that text is about the reader's saved file; a producer's candidate was read from
+  the authority a moment ago), the fetch's second dial (its `openssl verify` passed, dates
+  included, one line earlier) and `fetch-vcenter-ca.sh`'s second loop (it prints only matches).
+- *Two wordings for an expired Supervisor certificate.* **FIXED (after #1379):**
+  `supervisor_dates_how` is `tls_cert_dates_advice` for the Supervisor.
+- *A login typed into `HARBOR_URL` / `ARGOCD_SERVER` was printed.* **FIXED (after #1379):**
+  `load_env` takes it out of the variable and says so without printing it; a login it cannot read
+  out cleanly (a password holding `/` or `://`) makes the variable unused instead; and the two
+  fetch targets hand the address to the script in the environment, not on a command line.
+- *IPv6 literals were read five different ways.* **FIXED (after #1379):** one splitter
+  (`url_host_port`), `[::1]:8443` and `[::1]` parsed, a bare `::1` read as the address on 443.
+
+**NOT PROVEN — none of this has met the real thing:**
+
+- a real EXPIRED certificate, or a real expired CA file, on Harbor, ArgoCD, vCenter or a
+  Supervisor: every dates case ran against `openssl s_server` on 127.0.0.1;
+- a real server that accepts and stays silent, and a BLACK-HOLED address (packets dropped): the
+  first is a stopped local listener, the second a stalled handshake plus a closed port;
+- Photon's bash and toybox `timeout` and `awk`: `/dev/tcp`, `--foreground`, the unit suffixes and
+  the seconds arithmetic were run on this workstation only (bash 5, uutils `timeout`);
+- a decimal-comma locale: `LC_ALL=C` is forced for the one awk call, and no such locale was
+  installed to prove it;
+- GNU versus uutils `timeout` for Ctrl-C: only the uutils build was driven through a pty;
+- `-no_check_time` and `openssl verify -partial_chain` on any OpenSSL but 3.5.5;
+- IPv6 against anything but a local listener on `::1`, and whether crane, podman, argocd or
+  kubectl accept an IPv6 address at all;
+- the dates routing in `70-configure-argocd.sh`, `09-argocd-address.sh`,
+  `27-harbor-ca-from-cluster.sh`, `fetch-supervisor-ca.sh` and `fetch-vcenter-ca.sh`: the code is
+  the same three lines as the tested sites, and no test reaches those five.
 
 ## 🔴 B748 — `trivy-config` is the one gate that lost its PR path as a SIDE EFFECT, and a skipped job keeps `ci-pass` green
 

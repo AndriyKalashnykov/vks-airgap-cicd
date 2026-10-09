@@ -164,7 +164,10 @@ harbor.example|harbor.example|443
 https://harbor.example|harbor.example|443
 harbor.example:8443|harbor.example|8443
 https://harbor.example:8443/|harbor.example|8443
-[2001:db8::1]:8443|[2001:db8::1]|8443
+[2001:db8::1]:8443|2001:db8::1|8443
+[::1]|::1|443
+::1|::1|443
+user:secret@harbor.example:8443|harbor.example|8443
 HP
 fi
 
