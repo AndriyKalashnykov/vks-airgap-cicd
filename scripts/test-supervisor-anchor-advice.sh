@@ -195,7 +195,10 @@ DEAD_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0))
 #            i.e. "ignoring dates changes nothing")
 #   X509RC   the exit status of `openssl x509` (1 = the anchor file does not parse)
 #   NOPROBE  CREDS_NO_PROBE for the run
-knobs() { SC2=""; X509RC=0; NOPROBE=0; }
+#   VERIFYOUT what `openssl verify` prints (the anchor FILE's own date check reads it; empty = in date)
+knobs() { SC2=""; X509RC=0; NOPROBE=0; VERIFYOUT=""; }
+CA_EXPIRED_OUT='error 10 at 0 depth lookup: certificate has expired'
+CA_DATES_HEAD='The CA file itself is outside its validity period on this machine:'
 knobs
 creds_render() {
   local sc="$1" scrc="$2" ing="$3" extra="${4:-}" anchor="${5:-yes}" t="$T/creds"
@@ -230,6 +233,7 @@ creds_render() {
 printf 'openssl %s\n' "\$*" >> "$T/creds.log"
 case "\$1" in
   x509) exit ${X509RC} ;;
+  verify) printf '%s\n' '${VERIFYOUT}'; exit 0 ;;
   s_client)
     in="\$(cat)"; printf 's_client-stdin-bytes=%s\n' "\${#in}" >> "$T/creds.log"
     case " \$* " in
@@ -242,7 +246,9 @@ exit 0
 STUB
   # timeout: records the budget given to the handshake, then runs the real one.
   # shellcheck disable=SC2016
-  { printf '#!/bin/sh\ncase "$*" in *"openssl s_client"*) printf "timeout-budget=%%s\\n" "$1" >> "%s" ;; esac\n' "$T/creds.log"
+  # The budget is the first argument that is not `--foreground` (lib/tls.sh passes that flag
+  # first when this machine's timeout has it).
+  { printf '#!/bin/sh\nb="$1"; [ "$b" = "--foreground" ] && b="$2"\ncase "$*" in *"openssl s_client"*) printf "timeout-budget=%%s\\n" "$b" >> "%s" ;; esac\n' "$T/creds.log"
     printf 'exec "%s" "$@"\n' "$REAL_TIMEOUT"; } > "$t/bin/timeout"
   # vcf: must never run from a read-only report. It only records that it did.
   # shellcheck disable=SC2016
@@ -349,6 +355,26 @@ else ok "dates: no <placeholder> in the banner"; fi
 if has "$(ingress_par "$out")" "$ING_UP"; then ok "dates: the ingress paragraph does not say '$ING_CHECK' either"
 else bad "dates: the ingress paragraph still tells the reader to check the lab is up"; fi
 
+# -- cadates: ignoring dates it verifies, and the stored CA FILE is itself outside its dates --
+# The opposite remedy to "dates": the file has to be replaced, so the banner re-pins and must NOT
+# say the CA is the right one to keep.
+SC2="$SC_OK"; VERIFYOUT="$CA_EXPIRED_OUT"
+out="$(creds_render "$SC_EXPIRED" 0 silent "$ANCHOR_ENV")"; b="$(banner "$out")"; knobs
+if hasline "$out" 'sup-anchor: cadates'; then ok "cadates: the check's verdict is 'cadates'"
+else bad "cadates: verdict is '$(command grep '^sup-anchor:' <<< "$out" || echo none)', want cadates"; fi
+if hasflat "$b" "The Supervisor ${HOST} answers, but the CA stored at ./secrets/supervisor-ca.crt is itself outside its dates, so it cannot verify the certificate." \
+   && has "$b" "$CA_DATES_HEAD" && has "$b" 'replace the file with the current CA:'; then
+  ok "cadates: says the stored CA file is outside its own dates, and to replace it"
+else bad "cadates: the banner does not say the CA FILE is outside its dates"; fi
+if hasline "$b" '       make fetch-supervisor-ca' && hasline "$b" '       openssl x509 -in ./secrets/supervisor-ca.crt -noout -fingerprint -sha256'; then
+  ok "cadates: prints the re-pin commands, each a whole line with the real file"
+else bad "cadates: the re-pin commands are missing"; fi
+if hasflat "$b" 'is the right one' || hasflat "$b" 'Do NOT re-fetch or re-pin the CA' || hasflat "$b" 'DIFFERENT Supervisor' || has "$b" "$RENEW"; then
+  bad "cadates: says the CA is the right one to keep, blames a different Supervisor, or offers a renew"
+else ok "cadates: no 'the right one', no 'do NOT re-pin', no 'different Supervisor', no renew command"; fi
+if has "$(ingress_par "$out")" "$ING_UP"; then ok "cadates: the ingress paragraph knows the Supervisor answered"
+else bad "cadates: the ingress paragraph still tells the reader to check the lab is up"; fi
+
 # A second handshake that "verifies" only because there is NO certificate (a plaintext listener
 # prints the ok line too) must not be read as "the anchor is right".
 SC2="$SC_NOCERT"
@@ -429,7 +455,7 @@ else bad "probe guard control: want 'stale called=1' with probes allowed, got '$
 _pc="$(probe_says 1 1)"
 if [ "$_pc" = 'skip called=0' ]; then ok "probe guard: with probes forbidden the check is NOT made and the answer is skip"
 else bad "probe guard: with probes forbidden want 'skip called=0', got '${_pc}'"; fi
-for _pv in '0 verifies' '2 silent' '6 dates' '3 skip' '4 skip' '5 skip' '9 skip'; do
+for _pv in '0 verifies' '2 silent' '6 dates' '7 cadates' '3 skip' '4 skip' '5 skip' '9 skip'; do
   _pc="$(probe_says 0 "${_pv%% *}")"
   if [ "$_pc" = "${_pv#* } called=1" ]; then ok "probe: verdict ${_pv%% *} -> ${_pv#* }"
   else bad "probe: verdict ${_pv%% *} should read '${_pv#* }', got '${_pc}'"; fi
@@ -460,6 +486,7 @@ case "$1" in
       *-fingerprint*) printf 'sha256 Fingerprint=AA:BB\n' ;;
     esac
     exit 0 ;;
+  verify) printf '%s\n' "${STUB_VERIFY:-}"; exit 0 ;;
   s_client) cat >/dev/null
     case " $* " in
       *" -no_check_time "*) printf '%s\n' "${STUB_SCLIENT2:-$STUB_SCLIENT}" ;;
@@ -478,6 +505,7 @@ login() {  # login <s_client transcript> <anchor subject> <endpoint issuer> [tra
       VCF_CLI_VSPHERE_PASSWORD="$CANARY" VKS_CA_CERT_FILE="$L/anchor.crt" \
       KUBECONFIG="$L/guest.kc" VKS_SUPERVISOR_KUBECONFIG="$L/sup.kc" VKS_STATE_FILE="$L/state" \
       STUB_SCLIENT="$1" STUB_SCLIENT2="${4:-$1}" STUB_SUBJ="$2" STUB_ISS="$3" STUB_CUR="vks-test:${NS}" \
+      STUB_VERIFY="${STUB_VERIFY:-}" \
       bash scripts/30-vks-login.sh 2>&1 )
 }
 # CONTROL first: with an anchor that verifies, the login goes on to `vcf context create`. Without
@@ -538,6 +566,23 @@ else ok "login dates: no 'different Supervisor', no re-pin"; fi
 if has "$out" 'VKS_INSECURE_SKIP_TLS_VERIFY' && ! command grep -qE '^ *VKS_INSECURE_SKIP_TLS_VERIFY=' <<< "$out"; then
   ok "login dates: warns against skipping TLS verification, and prints no command that does"
 else bad "login dates: the warning against VKS_INSECURE_SKIP_TLS_VERIFY is missing, or a skip command is printed"; fi
+# The stored CA FILE is itself outside its dates (verdict 7): its own refusal. Not the dates
+# message (that one says to keep the CA), not "a different Supervisor"; it re-pins.
+out="$(STUB_VERIFY="$CA_EXPIRED_OUT" login "$SC_EXPIRED" 'CN=CA' 'CN=CA' "$SC_OK")"; rc=$?
+if [ "$rc" != 0 ] && hasflat "$out" "the CA at ${L}/anchor.crt is itself outside its dates, so it cannot verify the certificate ${HOST} presents." \
+   && has "$out" "$CA_DATES_HEAD" && has "$out" 'replace the file with the current CA:'; then
+  ok "login cadates: stops, and says the CA FILE is outside its own dates (rc=$rc)"
+else bad "login cadates: an out-of-date CA file must stop with its own message (rc=$rc)"; fi
+if [ ! -s "$L/vcf.log" ] && has "$out" 'No password was sent.'; then ok "login cadates: vcf was never run, and the message says no password was sent"
+else bad "login cadates: vcf ran before the refusal, or the message does not say no password was sent"; fi
+if hasline "$out" '    make fetch-supervisor-ca' && hasline "$out" "    openssl x509 -in ${L}/anchor.crt -noout -fingerprint -sha256"; then
+  ok "login cadates: prints the re-pin commands with the real file"
+else bad "login cadates: the re-pin commands are missing"; fi
+if hasflat "$out" 'RIGHT anchor' || hasflat "$out" 'Do NOT re-fetch or re-pin the CA' || hasflat "$out" 'DESTROYED and rebuilt'; then
+  bad "login cadates: says to keep the CA, or blames a rebuilt Supervisor"
+else ok "login cadates: no 'RIGHT anchor', no 'do NOT re-pin', no 'rebuilt Supervisor'"; fi
+if has "$out" "$CANARY"; then bad "login cadates: the password is in the output"
+else ok "login cadates: the password is not in the output"; fi
 # And the other direction: when ignoring dates does NOT make it verify, it is still the stale arm.
 out="$(login "$SC_EXPIRED" 'CN=CA' 'CN=CA' "$SC_STALE")"
 if has "$out" 'does NOT verify' && has "$out" 'make fetch-supervisor-ca' && ! has "$out" 'RIGHT anchor'; then

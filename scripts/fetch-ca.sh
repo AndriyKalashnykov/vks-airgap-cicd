@@ -50,6 +50,26 @@ hostport="$(printf '%s' "$EP" | sed -E 's#^https?://##; s#/.*##')"
 host="${hostport%%:*}"; port="${hostport##*:}"; [ "$port" = "$host" ] && port=443
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+# CTRL-C ENDS THE RUN, AND SAYS WHAT STATE IT LEFT. The handshakes below run under `timeout`
+# (tls_bounded, lib/tls.sh), in the terminal's own process group so that Ctrl-C reaches them. But
+# what the SHELL then does depends on how that `timeout` reports an interrupted command: one that
+# exits with a status instead of dying by the signal leaves bash running, and the script carried on
+# to "could not connect ... is it reachable?" (MEASURED through a pty with the uutils `timeout`),
+# which is false. So the interrupt is handled here, once, for every such program.
+# ⚠️ IT WRITES TO A SAVED COPY OF STDERR (fd 8). Bash runs the trap as soon as the interrupted
+# command returns, which is INSIDE the helper function, where stderr is redirected to /dev/null:
+# MEASURED, the same message sent to `>&2` was never seen.
+_wrote=0
+exec 8>&2
+_on_interrupt() {
+  if [ "$_wrote" -eq 0 ]; then
+    printf '\ninterrupted: nothing was written, %s is unchanged.\n' "$OUT" >&8
+  else
+    printf '\ninterrupted while writing %s: check that file before you use it.\n' "$OUT" >&8
+  fi
+  exit 130
+}
+trap _on_interrupt INT
 # B561: a stale KinD overlay hijacks make's $(HARBOR_URL)/$(HARBOR_CA_FILE), which reach this script
 # as ARGV. This script does NOT call load_env, so state_check cannot help — and an idea round refuted
 # a gate here (state_check misses the DEFAULT posture, is blind to .env.kind, its permissive arms are
@@ -97,9 +117,36 @@ log_info "fetching the ${LABEL} CA from ${host}:${port}"
 # The handshake, the split into one file per certificate (leaf first) and the "one certificate, is
 # it its own issuer" test are tls_presented_chain / tls_presented_shape in lib/tls.sh. They were
 # inline here until the messages that RECOMMEND this script needed the same answer before naming
-# it; a second copy there could disagree with this one about the same server. No time bound is
-# passed, so the handshake behaves exactly as it did inline.
-tls_presented_chain "$host" "$port" "$tmp" \
+# it; a second copy there could disagree with this one about the same server.
+#
+# THE HANDSHAKE IS BOUNDED. It was not: MEASURED against a listener that accepts the connection
+# and never answers (a load balancer whose backend is still starting looks like that), this
+# script hung until killed, with nothing printed after "fetching". The bound is CA_VERIFY_TIMEOUT,
+# the one ca_verifies_endpoint below already uses, CLAMPED by tls_timeout_bound: `timeout 0` is
+# NO limit, so the raw variable must never reach `timeout`.
+# When the time runs out, ONE more question is asked (a bare TCP connect, nothing sent): was the
+# server there? "Accepted and silent" and "not there" are different sentences, and s_client
+# cannot say which (see tls_presented_chain). Not there keeps the sentence it always had.
+_bound="$(tls_timeout_bound)"
+_chain_rc=0
+tls_presented_chain "$host" "$port" "$tmp" "$_bound" || _chain_rc=$?
+if [ "$_chain_rc" -eq 3 ] && tls_port_accepts "$host" "$port" "$_bound"; then
+  # A longer bound to OFFER: four times the whole seconds in use, and never under a minute.
+  _more="${_bound%%.*}"; _more=$(( 10#${_more:-0} * 4 )); [ "$_more" -ge 60 ] || _more=60
+  case "$LABEL" in
+    harbor|argocd) _retry_cmd="make fetch-${LABEL}-ca CA_VERIFY_TIMEOUT=${_more}" ;;
+    *)             _retry_cmd="CA_VERIFY_TIMEOUT=${_more} $0 $(printf '%q %q %q' "$EP" "$OUT" "$LABEL")" ;;
+  esac
+  # The default label is the bare word `endpoint`; in a sentence it needs its article.
+  _who="$LABEL"; [ "$LABEL" = endpoint ] && _who="the endpoint"
+  die "${host}:${port} accepted the connection and did not answer within ${_bound} s.
+  No certificate was read and ${OUT} is UNCHANGED — nothing was written.
+  A server that accepts and stays silent is usually still starting, or stalled: this says
+  nothing about any CA file. Wait a minute and run this again.
+  If ${_who} is only slow to answer, give it longer (CA_VERIFY_TIMEOUT is in seconds):
+    ${_retry_cmd}"
+fi
+[ "$_chain_rc" -eq 0 ] \
   || die "could not connect to ${host}:${port} — is ${LABEL} reachable over HTTPS?"
 tls_presented_shape "$tmp"
 
@@ -470,7 +517,9 @@ fi
 # PUBLIC trust material: 0644, always. A 0600 CA is unreadable by a container user with a different uid,
 # and the failure it produces ("error adding trust anchors from file") names TRUST, not PERMISSIONS.
 ensure_secret_dir "$(dirname "$OUT")"
+_wrote=1
 install -m0644 "$CAND" "$OUT" || die "could not write ${OUT}"
+trap - INT          # the file is complete; from here an interrupt is an ordinary one
 
 printf 'wrote %s\n' "$OUT"
 printf '  CA SHA-256: %s\n' "$fp_colon"

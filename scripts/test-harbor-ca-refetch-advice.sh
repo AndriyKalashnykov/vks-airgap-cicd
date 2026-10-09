@@ -41,6 +41,25 @@
 # A second wrapper sends ONLY the `-showcerts` handshake there, so the CA check still gets its
 # answer from the live server and the wire question hangs until its bound cuts it off.
 #
+# fetch-ca.sh ITSELF IS BOUNDED, and that is pinned in test-fetch-ca-bound.sh (slow tier: every
+# case there waits out a bound). HERE, instantly: the clamp (tls_timeout_bound), the runner
+# (tls_bounded) and the TCP question (tls_port_accepts) as units; that no script hands
+# CA_VERIFY_TIMEOUT to `timeout` itself; and that make hands the variable to the two fetch targets
+# (a stub stands in for fetch-ca.sh and prints what it was given).
+#
+# THE CA FILE'S OWN DATES (section 6b): an EXPIRED or NOT-YET-VALID CA file over a server whose
+# certificate is valid is not "the CA is right, do not replace it". Every site shows the FILE's
+# dates and the way to get the current CA.
+#
+# AN ADDRESS IS NEVER SHELL TEXT (section 6): `make creds` with an ingress address and an ArgoCD
+# address of `$(touch …)` creates no file.
+#
+# A PATH WITH A `|` OR A SPACE (section 4): the report's fields are not separated by a character a
+# path can hold, so the message names the file that was configured.
+#
+# THE SUPERVISOR ROW ASKS ABOUT DATES TOO (section 4): an expired or not-yet-valid certificate
+# under the RIGHT CA gets the dates message, not "leftover"; a wrong CA still says leftover.
+#
 # DOES NOT PROVE: that a real Supervisor-Service Harbor sends one certificate (measured on a lab,
 # recorded in 27-harbor-ca-from-cluster.sh), that the Harbor UI has the button the text names, or
 # that the two routes work there. It proves the sentence follows the shape of what the server sends.
@@ -122,8 +141,17 @@ CNF
       -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' >/dev/null 2>&1
     openssl ca -batch -notext -config ca.cnf -cert ca.crt -keyfile ca.key -in "$n.csr" -out "$n.crt" \
       -startdate "${rest%%|*}" -enddate "${rest##*|}" >/dev/null 2>&1
+  done
+  # THE CA ITSELF with dates that are wrong today: the SAME key and subject as ca.crt (so it
+  # still verifies leaf.crt once dates are ignored), expired in 2021, or not valid for years.
+  openssl req -new -key ca.key -out caself.csr -subj '/CN=Harbor CA' \
+    -addext 'basicConstraints=critical,CA:TRUE' >/dev/null 2>&1
+  for row in "caexp|20200101000000Z|20210101000000Z" "cany|$((y + 5))0101000000Z|$((y + 6))0101000000Z"; do
+    n="${row%%|*}"; rest="${row#*|}"
+    openssl ca -batch -notext -config ca.cnf -selfsign -keyfile ca.key -in caself.csr -out "$n.crt" \
+      -startdate "${rest%%|*}" -enddate "${rest##*|}" >/dev/null 2>&1
   done )
-for f in ss.crt ss.key ca.crt leaf.crt leaf.key old.crt garbage.crt inter.crt leaf2.crt inter-and-root.crt expired.crt notyet.crt; do
+for f in ss.crt ss.key ca.crt leaf.crt leaf.key old.crt garbage.crt inter.crt leaf2.crt inter-and-root.crt expired.crt notyet.crt caexp.crt cany.crt; do
   [ -s "$T/$f" ] || { echo "fixture $f missing — aborting rather than testing nothing"; exit 1; }
 done
 
@@ -378,6 +406,155 @@ for row in "$P_INTER|leaf + intermediate" "$P_FULL|leaf + intermediate + root"; 
   fi
 done
 
+# A port nothing listens on: the fetch fails at once with the sentence it always had. (What it
+# does when the time runs out is in test-fetch-ca-bound.sh: those cases wait out a bound.)
+fetch_out="$(CA_VERIFY_TIMEOUT=5 timeout -k 2 40 bash "${REPO}/scripts/fetch-ca.sh" "127.0.0.1:${P_DEAD}" "$T/out-dead.crt" harbor </dev/null 2>&1)"; fetch_rc=$?
+if [ "$fetch_rc" = 1 ] && has "$fetch_out" "could not connect to 127.0.0.1:${P_DEAD} — is harbor reachable over HTTPS?" && [ ! -e "$T/out-dead.crt" ]; then
+  ok "fetch-ca.sh: a closed port says 'could not connect' and writes nothing"
+else
+  bad "fetch-ca.sh: the closed-port message changed" "rc=${fetch_rc}: $(printf '%s' "$fetch_out" | tail -1 | cut -c1-160)"
+fi
+
+# ══ 2b. the bound, the runner and the TCP question, as units (no waiting) ════════════════════
+# tls_timeout_bound: what reaches `timeout`. `timeout 0` is NO limit, so nothing that is not a
+# positive number may come out.
+bound_is() {  # <CA_VERIFY_TIMEOUT or -> <argument> <want>
+  local got
+  if [ "$1" = - ]; then got="$(unset CA_VERIFY_TIMEOUT; tls_timeout_bound "$2")"
+  else got="$(CA_VERIFY_TIMEOUT="$1" tls_timeout_bound "$2")"; fi
+  if [ "$got" = "$3" ]; then ok "tls_timeout_bound: argument '${2}', CA_VERIFY_TIMEOUT '${1}' -> ${3}"
+  else bad "tls_timeout_bound: argument '${2}', CA_VERIFY_TIMEOUT '${1}'" "wanted '${3}', got '${got}'"; fi
+}
+bound_is - 0 15;   bound_is - -1 15;  bound_is - abc 15; bound_is - '' 15; bound_is - 0.0 15
+bound_is - 2.5 2.5; bound_is - 30 30
+bound_is 7 0 7;    bound_is 7 '' 7;   bound_is 7 30 30
+bound_is 0 '' 15;  bound_is abc '' 15; bound_is -3 0 15; bound_is '' '' 15
+# tls_bounded: the command's own status comes back; an unusable bound does not switch it off.
+r=0; tls_bounded 5 sh -c 'exit 7' || r=$?
+if [ "$r" = 7 ]; then ok "tls_bounded: the command's exit status comes back unchanged"
+else bad "tls_bounded: the command's status was lost" "wanted 7, got ${r}"; fi
+# The flag is PROBED. Two stand-in `timeout`s record what they were handed: one accepts
+# --foreground, one refuses it. Both must end up running the command.
+REAL_TIMEOUT="$(command -v timeout)"
+mkdir -p "$T/fg-yes" "$T/fg-no"
+# The stubs' own "$@" / "$1" are written literally into the generated scripts (SC2016 is deliberate).
+# shellcheck disable=SC2016
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n[ "$1" = "--foreground" ] && shift\nexec %s "$@"\n' "$T/fg-yes.log" "$REAL_TIMEOUT" > "$T/fg-yes/timeout"
+# shellcheck disable=SC2016
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n[ "$1" = "--foreground" ] && { echo "unknown option" >&2; exit 125; }\nexec %s "$@"\n' "$T/fg-no.log" "$REAL_TIMEOUT" > "$T/fg-no/timeout"
+chmod +x "$T/fg-yes/timeout" "$T/fg-no/timeout"
+# Each in a fresh shell: the probe's answer is remembered per shell.
+# shellcheck disable=SC2016
+r_yes="$(PATH="$T/fg-yes:$PATH" bash -c '. "$1"; . "$2"; tls_bounded 0 sh -c "exit 3"; echo "rc=$?"' _ "$LIB_OS" "$LIB_TLS" 2>&1)"
+# shellcheck disable=SC2016
+r_no="$(PATH="$T/fg-no:$PATH" bash -c '. "$1"; . "$2"; tls_bounded 0 sh -c "exit 3"; echo "rc=$?"' _ "$LIB_OS" "$LIB_TLS" 2>&1)"
+if [ "$r_yes" = 'rc=3' ] && [ "$(tail -1 "$T/fg-yes.log")" = '--foreground 15 sh -c exit 3' ]; then
+  ok "tls_bounded: a timeout that has --foreground is given it, with the clamped bound (0 -> 15)"
+else
+  bad "tls_bounded: --foreground was not used where it is available" "said '${r_yes}'; last call '$(tail -1 "$T/fg-yes.log" 2>/dev/null)'"
+fi
+if [ "$r_no" = 'rc=3' ] && [ "$(tail -1 "$T/fg-no.log")" = '15 sh -c exit 3' ]; then
+  ok "tls_bounded: a timeout that refuses --foreground is used without it, and the command still runs"
+else
+  bad "tls_bounded: a timeout without --foreground broke the command" "said '${r_no}'; last call '$(tail -1 "$T/fg-no.log" 2>/dev/null)'"
+fi
+# tls_port_accepts: yes on a listener, no on a closed port, no on a port that is not a number.
+if tls_port_accepts 127.0.0.1 "$P_SS" 5; then ok "tls_port_accepts: a listening port -> yes"
+else bad "tls_port_accepts: a listening port must be yes"; fi
+if tls_port_accepts 127.0.0.1 "$P_SS" 0; then ok "tls_port_accepts: a bound of 0 is clamped, not refused (still yes on a listener)"
+else bad "tls_port_accepts: a bound of 0 must be clamped to the default"; fi
+if tls_port_accepts 127.0.0.1 "$P_DEAD" 5; then bad "tls_port_accepts: a closed port must be no"
+else ok "tls_port_accepts: a closed port -> no"; fi
+port_no=""
+# One of the ports is shell text on purpose (SC2016 is deliberate).
+# shellcheck disable=SC2016
+for badport in http 80x '' "${P_SS};true" '$(echo 1)'; do
+  if tls_port_accepts 127.0.0.1 "$badport" 5; then port_no="${port_no} [${badport}]"; fi
+done
+if [ -z "$port_no" ]; then ok "tls_port_accepts: a port that is not a number -> no (a service name, a suffix, empty, shell text)"
+else bad "tls_port_accepts: a non-numeric port was accepted" "accepted:${port_no}"; fi
+# ...and it is refused BEFORE anything is dialled: bash would look a word up as a service name
+# (`http` is port 80), so "no" alone could just mean nothing listens there. The recording
+# `timeout` from above must not be called at all.
+: > "$T/fg-yes.log"
+PATH="$T/fg-yes:$PATH" tls_port_accepts 127.0.0.1 http 5 || true
+if [ ! -s "$T/fg-yes.log" ]; then ok "tls_port_accepts: a service-name port is refused without dialling anything"
+else bad "tls_port_accepts: a service-name port was dialled" "timeout was run with: $(tail -1 "$T/fg-yes.log")"; fi
+PATH="$T/fg-yes:$PATH" tls_port_accepts 127.0.0.1 "$P_SS" 5 || true
+if [ -s "$T/fg-yes.log" ]; then ok "tls_port_accepts: (control) a numeric port does go through the recording timeout"
+else bad "tls_port_accepts: the recording timeout saw nothing for a numeric port" "the no-dial assertion above would then prove nothing"; fi
+# THE ADDRESS IS NEVER SHELL TEXT. Each of these would create the canary if the address were
+# pasted into the child shell's script. The canary's path has no `/` in it on purpose (cd first):
+# `/dev/tcp/<host>/<port>` would cut a path at its first slash and hide the execution.
+( cd "$T" || exit 1
+  # The command substitutions are the DATA under test (SC2016 is deliberate).
+  # shellcheck disable=SC2016
+  for evil in '$(touch canary-host)' '`touch canary-host`' '127.0.0.1; touch canary-host' 'x" ; touch canary-host ; "'; do
+    tls_port_accepts "$evil" "$P_SS" 2 || true
+  done
+  # shellcheck disable=SC2016
+  tls_port_accepts 127.0.0.1 '$(touch canary-port)' 2 || true )
+if [ ! -e "$T/canary-host" ] && [ ! -e "$T/canary-port" ]; then
+  ok "tls_port_accepts: an address or port holding \$(…), backticks or ';' is not executed (no canary)"
+else
+  bad "tls_port_accepts: text in the address was EXECUTED" "$(find "$T" -maxdepth 1 -name 'canary-*' | tr '\n' ' ')"
+fi
+# The same hostile addresses through the form this replaced DO create it: the instrument works.
+# shellcheck disable=SC2016
+( cd "$T" && evil='$(touch canary-control)' && timeout 2 bash -c "exec 3<>/dev/tcp/${evil}/1" 2>/dev/null ) || true
+if [ -e "$T/canary-control" ]; then ok "canary control: the interpolating form this replaced does execute the address"
+else bad "canary control: the old form did not create the canary" "the no-canary assertion above would then prove nothing"; fi
+
+# NO SCRIPT HANDS CA_VERIFY_TIMEOUT TO `timeout` ITSELF: a 0 there is no limit. Comment lines are
+# dropped; test files may spell the form (this one does, right here).
+RAW_FORM='timeout[[:space:]]+(--[a-z-]+[[:space:]]+)*"?\$\{?CA_VERIFY_TIMEOUT'
+raw_hits="$(command grep -rnE --include='*.sh' -- "$RAW_FORM" "${REPO}/scripts" \
+              | command grep -vE '/scripts/test-[^/]*\.sh:' | command grep -vE '^[^:]*:[0-9]+:[[:space:]]*#' || true)"
+n_scanned="$(command grep -rlE --include='*.sh' -- 'CA_VERIFY_TIMEOUT' "${REPO}/scripts" | command grep -cvE '/scripts/test-[^/]*\.sh$' || true)"
+# The planted line is the form being looked for, written literally (SC2016 is deliberate).
+# shellcheck disable=SC2016
+printf 'timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client\n' > "$T/raw-control.sh"
+if [ -z "$raw_hits" ] && [ "${n_scanned:-0}" -ge 3 ] && command grep -qE -- "$RAW_FORM" "$T/raw-control.sh"; then
+  ok "no script under scripts/ hands CA_VERIFY_TIMEOUT to timeout unclamped (${n_scanned} files name the variable; the pattern finds a planted line)"
+else
+  bad "a script hands CA_VERIFY_TIMEOUT straight to timeout (0 = no limit), or the scan looked at nothing" "files naming the variable: ${n_scanned:-0}; hits: $(printf '%s' "$raw_hits" | cut -c1-200)"
+fi
+
+# make HANDS CA_VERIFY_TIMEOUT TO THE TWO FETCH TARGETS. fetch-ca.sh does not read .env, so a
+# value there reached it only if make exported it, and it did not. A stub stands in for the
+# scripts and prints what it was given; the Makefile is the real one, run in a sandbox directory
+# with its own .env. Both directions: .env reaches it, and a per-run value wins over .env.
+if command -v make >/dev/null 2>&1; then
+  MKS="$T/mk"; mkdir -p "$MKS/stub" "$MKS/with-env" "$MKS/no-env"
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\nprintf "bound=[%%s]\\n" "${CA_VERIFY_TIMEOUT-UNSET}"\n' > "$MKS/stub/fetch-ca.sh"
+  cp "$MKS/stub/fetch-ca.sh" "$MKS/stub/27-harbor-ca-from-cluster.sh"
+  chmod +x "$MKS/stub/"*.sh
+  printf 'CA_VERIFY_TIMEOUT=3\n' > "$MKS/with-env/.env"
+  mk() {  # <sandbox> <target> [make args / VAR=value …] ; prints the stub's line
+    local sb="$1" tgt="$2"; shift 2
+    env -u CA_VERIFY_TIMEOUT -u SKIP_DOTENV -u MAKEFLAGS -u MAKELEVEL -u MFLAGS ${MK_ENV:+"$MK_ENV"} \
+      make --no-print-directory -f "${REPO}/Makefile" -C "$MKS/$sb" "$tgt" SCRIPTS="$MKS/stub" \
+        HARBOR_URL=h.example HARBOR_CA_FILE="$MKS/x.crt" ARGOCD_SERVER=a.example "$@" 2>&1 </dev/null | command grep -F 'bound=[' | head -1
+  }
+  for row in "with-env|fetch-harbor-ca||bound=[3]|a value in .env reaches make fetch-harbor-ca" \
+             "with-env|fetch-argocd-ca||bound=[3]|a value in .env reaches make fetch-argocd-ca" \
+             "with-env|fetch-harbor-ca|CA_VERIFY_TIMEOUT=9|bound=[9]|make fetch-harbor-ca CA_VERIFY_TIMEOUT=9 wins over .env" \
+             "no-env|fetch-harbor-ca|CA_VERIFY_TIMEOUT=9|bound=[9]|with no .env the per-run value still arrives" \
+             "no-env|fetch-harbor-ca||bound=[]|set nowhere it arrives empty (the script reads that as the default)" \
+             "with-env|harbor-ca-from-cluster||bound=[UNSET]|the export is for the two fetch targets only (another recipe does not get it)"; do
+    IFS='|' read -r sb tgt arg want what <<< "$row"
+    if [ -n "$arg" ]; then got="$(mk "$sb" "$tgt" "$arg")"; else got="$(mk "$sb" "$tgt")"; fi
+    if [ "$got" = "$want" ]; then ok "make: ${what}"
+    else bad "make: ${what}" "wanted '${want}', got '${got}'"; fi
+  done
+  got="$(MK_ENV='CA_VERIFY_TIMEOUT=4' mk with-env fetch-harbor-ca)"
+  if [ "$got" = 'bound=[4]' ]; then ok "make: a value exported in the shell wins over .env"
+  else bad "make: a value exported in the shell must win over .env" "wanted 'bound=[4]', got '${got}'"; fi
+else
+  printf 'SKIP  make is not installed: cannot check that CA_VERIFY_TIMEOUT reaches the fetch targets\n'
+fi
+
 # ══ 3. the wording itself: which file the admin route names ══════════════════════════════════
 # `make harbor-ca-from-cluster` writes to make's HARBOR_CA_FILE. Told about one file and handed a
 # command that writes another, the reader fixes the wrong file.
@@ -400,6 +577,26 @@ if command -v make >/dev/null 2>&1; then
   done
 else
   printf 'SKIP  make is not installed: cannot run the printed harbor-ca-from-cluster line through it\n'
+fi
+
+# THE DATES MESSAGE IS ONE BODY WITH ONE WORD THAT VARIES. Harbor's text is pinned whole (the
+# three date lines are data and are cut out); the Supervisor's must differ in that word only.
+DATES_BODY="The CA file is the right one: with the dates ignored, it verifies the certificate
+localhost presents. What fails is that certificate's validity period on this machine:
+If the clock is wrong, correct it. If it is right, the certificate has expired or is not
+valid yet, and whoever operates Harbor has to renew it. Do NOT replace the CA file."
+no_dates() { command grep -vE '^    (valid from:|valid until:|this machine.s clock \(date -u\):)' <<< "$1"; }
+adv_h="$(CA_VERIFY_TIMEOUT=5 harbor_cert_dates_advice localhost "$P_EXP")"
+if [ "$(no_dates "$adv_h")" = "$DATES_BODY" ] && [ "$(command grep -c '' <<< "$adv_h")" = 7 ]; then
+  ok "dates advice: Harbor's text is the pinned one, byte for byte (4 fixed lines + 3 data lines)"
+else
+  bad "dates advice: Harbor's text changed" "$(no_dates "$adv_h" | cut -c1-120)"
+fi
+adv_s="$(CA_VERIFY_TIMEOUT=5 tls_cert_dates_advice 'the Supervisor' localhost "$P_EXP")"
+if [ "$(no_dates "$adv_s")" = "${DATES_BODY/operates Harbor has/operates the Supervisor has}" ] && ! has "$adv_s" 'Harbor'; then
+  ok "dates advice: the Supervisor's text is the same body with its own name, and never says Harbor"
+else
+  bad "dates advice: the Supervisor's text is not the Harbor body with one name changed" "$(no_dates "$adv_s" | cut -c1-120)"
 fi
 
 # ══ 4. ca_status_report — `make ca-status` and `make lab-preflight` ══════════════════════════
@@ -452,15 +649,89 @@ if has "$r_sup" 'make fetch-supervisor-ca' && ! has "$r_sup" 'Harbor UI' && ! ha
 else
   bad "ca-status: Harbor's routes leaked into the Supervisor CA's message" "$(printf '%s' "$r_sup" | tail -6)"
 fi
-r_supexp="$( set +e
-             unset HARBOR_URL HARBOR_CA_FILE CA_STATUS_STRICT
-             SUPERVISOR_HOST="localhost:${P_EXP}" VKS_CA_CERT_FILE="$T/ca.crt" CA_VERIFY_TIMEOUT=5 \
-               ca_status_report 2>&1 )"
-if has "$r_sup" 'make fetch-supervisor-ca' && has "$r_supexp" 'make fetch-supervisor-ca' && ! has "$r_supexp" "$DATES"; then
-  ok "ca-status: the Supervisor CA on a leaf-only server keeps its own remedy (Harbor's routes are Harbor's)"
+if has "$r_sup" 'Supervisor CA' && has "$r_sup" 'does NOT match localhost — this is a leftover certificate.' \
+   && has "$r_sup" 'Get it again — this overwrites in place and cannot lose anything:  make fetch-supervisor-ca' \
+   && ! has "$r_sup" 'Harbor' && ! has "$r_sup" "$DATES"; then
+  ok "ca-status: the Supervisor CA under the WRONG CA still says leftover, with its own remedy and none of Harbor's (control)"
 else
-  bad "ca-status: Harbor's routes leaked into the Supervisor CA's message" "$(printf '%s' "$r_sup" | tail -6)"
+  bad "ca-status: the Supervisor CA's wrong-CA message changed, or Harbor's routes leaked into it" "$(printf '%s' "$r_sup" | tail -6)"
 fi
+# THE SUPERVISOR ROW ASKS ABOUT DATES TOO. This pin used to require the OPPOSITE (an expired
+# certificate under the right CA printed "leftover" and `make fetch-supervisor-ca`, and the test
+# held it there as "unchanged"). That sentence sent the reader to replace a correct CA, so the pin
+# is turned round on purpose: right CA + wrong dates is the dates message, for both dates.
+sup_report() {  # <port> <ca-file> ; echoes the report, sets nothing
+  ( set +e
+    unset HARBOR_URL HARBOR_CA_FILE CA_STATUS_STRICT
+    SUPERVISOR_HOST="localhost:$1" VKS_CA_CERT_FILE="$2" CA_VERIFY_TIMEOUT=5 ca_status_report 2>&1 )
+}
+for row in "$P_EXP|2020|expired" "$P_NY|$(( $(date -u +%Y) + 6 ))|not valid yet"; do
+  IFS='|' read -r port year what <<< "$row"
+  r_supd="$(sup_report "$port" "$T/ca.crt")"
+  assert_dates "ca-status, Supervisor CA, ${what}" "$r_supd" "$year"
+  if has "$r_supd" "Supervisor CA ($T/ca.crt) is the right CA for localhost, but the certificate localhost presents is outside its dates." \
+     && has "$r_supd" 'whoever operates the Supervisor has to renew it. Do NOT replace the CA file.' \
+     && ! has "$r_supd" 'Harbor' && ! has "$r_supd" 'fetch-supervisor-ca'; then
+    ok "ca-status, Supervisor CA, ${what}: names the Supervisor, not Harbor, and does not name make fetch-supervisor-ca"
+  else
+    bad "ca-status, Supervisor CA, ${what}: the dates message is missing, names Harbor, or still names the fetch" "$(printf '%s' "$r_supd" | tail -8 | cut -c1-170)"
+  fi
+  ( set +e; unset HARBOR_URL HARBOR_CA_FILE CA_STATUS_STRICT
+    SUPERVISOR_HOST="localhost:${port}" VKS_CA_CERT_FILE="$T/ca.crt" CA_VERIFY_TIMEOUT=5 ca_status_report >/dev/null 2>&1 ); sup_rc=$?
+  if [ "$sup_rc" = 1 ]; then ok "ca-status, Supervisor CA, ${what}: still counted as one problem (the exit status is unchanged)"
+  else bad "ca-status, Supervisor CA, ${what}: the problem count changed" "ca_status_report returned ${sup_rc}, wanted 1"; fi
+done
+( set +e; unset HARBOR_URL HARBOR_CA_FILE CA_STATUS_STRICT
+  SUPERVISOR_HOST="localhost:${P_LEAF}" VKS_CA_CERT_FILE="$T/old.crt" CA_VERIFY_TIMEOUT=5 ca_status_report >/dev/null 2>&1 ); sup_rc=$?
+if [ "$sup_rc" = 1 ]; then ok "ca-status, Supervisor CA, wrong CA: one problem (control)"
+else bad "ca-status, Supervisor CA, wrong CA: the problem count changed" "returned ${sup_rc}, wanted 1"; fi
+# Both pairs at once, both with wrong dates: two problems, each message with its own name.
+r_both="$( set +e; unset CA_STATUS_STRICT
+           HARBOR_URL="localhost:${P_EXP}" HARBOR_CA_FILE="$T/ca.crt" SUPERVISOR_HOST="localhost:${P_NY}" VKS_CA_CERT_FILE="$T/ca.crt" \
+             CA_VERIFY_TIMEOUT=5 ca_status_report 2>&1 )"
+( set +e; unset CA_STATUS_STRICT
+  HARBOR_URL="localhost:${P_EXP}" HARBOR_CA_FILE="$T/ca.crt" SUPERVISOR_HOST="localhost:${P_NY}" VKS_CA_CERT_FILE="$T/ca.crt" \
+    CA_VERIFY_TIMEOUT=5 ca_status_report >/dev/null 2>&1 ); both_rc=$?
+if [ "$both_rc" = 2 ] && [ "$(command grep -cF 'whoever operates Harbor has to renew it' <<< "$r_both")" = 1 ] \
+   && [ "$(command grep -cF 'whoever operates the Supervisor has to renew it' <<< "$r_both")" = 1 ]; then
+  ok "ca-status: Harbor and the Supervisor both outside their dates -> two problems, each named once"
+else
+  bad "ca-status: two pairs with wrong dates are not two separately named problems" "rc=${both_rc}"
+fi
+
+# A PATH WITH A `|` IN IT, AND ONE WITH A SPACE. The report's fields were separated by `|`, so
+# HARBOR_CA_FILE=/x/a|b/ca.crt was read as file `/x/a`, host `b/ca.crt`: the message named a file
+# nobody configured and a host that is not one. Every arm below must name the WHOLE path.
+mkdir -p "$T/a|b" "$T/my lab"
+for dir in "$T/a|b" "$T/my lab"; do
+  cp "$T/ss.crt" "$dir/ss.crt"; cp "$T/old.crt" "$dir/old.crt"; cp "$T/ca.crt" "$dir/ca.crt"
+  what="a path holding '${dir#"$T"/}'"
+  r_p="$(status_report "$P_SS" "" "$dir/ss.crt")"
+  if has "$r_p" "Harbor CA ($dir/ss.crt) matches localhost"; then ok "ca-status, ${what}: a matching CA is reported with its whole path"
+  else bad "ca-status, ${what}: the matching CA is not reported with its path" "$(printf '%s' "$r_p" | tail -3 | cut -c1-170)"; fi
+  r_p="$(status_report "$P_LEAF" "" "$dir/old.crt")"
+  assert_leaf_only "ca-status, ${what}" "$r_p" "$dir/old.crt" "$CLUSTER HARBOR_CA_FILE=$(printf '%q' "$dir/old.crt")"
+  if has "$r_p" "Harbor CA ($dir/old.crt) does NOT match localhost — this is a leftover certificate."; then
+    ok "ca-status, ${what}: the leftover line names the whole path and the real host"
+  else
+    bad "ca-status, ${what}: the leftover line names a wrong file or host" "$(command grep -F 'Harbor CA' <<< "$r_p" | cut -c1-170)"
+  fi
+  r_p="$(status_report "$P_SS" "" "$dir/no-such.crt")"
+  if has "$r_p" "Harbor CA ($dir/no-such.crt) is missing or empty." && has "$r_p" 'Try  make fetch-harbor-ca  —'; then
+    ok "ca-status, ${what}: a missing file is named with its whole path, with Harbor's command"
+  else
+    bad "ca-status, ${what}: the missing-file line names a wrong file or command" "$(printf '%s' "$r_p" | tail -3 | cut -c1-170)"
+  fi
+  r_p="$(sup_report "$P_EXP" "$dir/ca.crt")"
+  if has "$r_p" "Supervisor CA ($dir/ca.crt) is the right CA for localhost,"; then ok "ca-status, ${what}: the Supervisor pair reads the path whole too"
+  else bad "ca-status, ${what}: the Supervisor pair mis-reads the path" "$(printf '%s' "$r_p" | tail -3 | cut -c1-170)"; fi
+done
+# An ordinary host with a port, a scheme and a path still splits into host and port (the split
+# of `host|port` moved; this pins that it still lands the same).
+r_p="$( set +e; unset VKS_CA_CERT_FILE SUPERVISOR_HOST CA_STATUS_STRICT
+        HARBOR_URL="https://localhost:${P_SS}/harbor" HARBOR_CA_FILE="$T/ss.crt" CA_VERIFY_TIMEOUT=5 ca_status_report 2>&1 )"
+if has "$r_p" "Harbor CA ($T/ss.crt) matches localhost"; then ok "ca-status: HARBOR_URL with a scheme, a port and a path still reaches the right host and port"
+else bad "ca-status: the host/port split changed" "$(printf '%s' "$r_p" | tail -2 | cut -c1-170)"; fi
 
 # ══ 5. make env-validate ═════════════════════════════════════════════════════════════════════
 EV="$T/ev"; mkdir -p "$EV"
@@ -522,6 +793,7 @@ creds_render() {  # <dir> <HARBOR_URL> <ca-file-to-install | -> [path-prefix] [p
   printf '#!/bin/sh\nprintf 200\n' > "$t/bin/curl"
   chmod +x "$t/bin/getent" "$t/bin/curl"
   printf 'HARBOR_URL=%s\nHARBOR_PASSWORD=x\nHARBOR_CA_FILE=./secrets/harbor-ca.crt\n' "$2" > "$t/.env"
+  [ -z "${CREDS_EXTRA_ENV:-}" ] || printf '%s\n' "$CREDS_EXTRA_ENV" >> "$t/.env"
   ( cd "$t" && env -u HARBOR_URL -u HARBOR_CA_FILE -u KUBECONFIG -u HARBOR_INSECURE \
       PATH="$t/bin:${4:+$4:}$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
       CREDS_NO_PROBE=0 CREDS_TOKEN=1 CREDS_PROBE_TIMEOUT_SECONDS="${5:-5}" \
@@ -561,6 +833,20 @@ else
 fi
 assert_present_wording "creds" "unknown" "$c_unk" "$OLD_CREDS"
 
+# AN ADDRESS IS NEVER SHELL TEXT. The ingress address and the ArgoCD address come from a state
+# file or a cluster; the report used to paste them into `bash -c "exec 3<>/dev/tcp/…"`, where a
+# value of $(command) runs. Single-quoted in .env so that loading the file does not run it either.
+# The report runs with its sandbox as the working directory: a canary would land there.
+# shellcheck disable=SC2016
+c_inj="$(CREDS_EXTRA_ENV='INGRESS_LB_IP='"'"'$(touch canary-ingress)'"'"'
+ARGOCD_SERVER='"'"'$(touch canary-argocd)'"'"'' creds_render "$T/c-inj" "localhost:$P_SS" "$T/ss.crt")"
+if has "$c_inj" 'canary-ingress' && [ ! -e "$T/c-inj/canary-ingress" ] && [ ! -e "$T/c-inj/canary-argocd" ]; then
+  ok "creds: an ingress address and an ArgoCD address of \$(touch …) are probed as text and run nothing (no canary)"
+else
+  bad "creds: an address from the state was EXECUTED (or the fixture never reached the report)" \
+      "value shown in the report: $(has "$c_inj" 'canary-ingress' && echo yes || echo no); created: $(find "$T/c-inj" -maxdepth 1 -name 'canary-*' 2>/dev/null | tr '\n' ' ')"
+fi
+
 # THE BOUND. The wire question is sent to the listener that never answers. The report must come
 # back at about CREDS_PROBE_TIMEOUT_SECONDS, with the wording it always had. `creds_render` gives
 # up at 45 s, so a missing bound is a FAIL here and not a hung suite.
@@ -597,6 +883,104 @@ elif [ "$(line_after "$c_name" 'This lists them:')" = "$SAN_CMD" ]; then
   else bad "creds rc=3: the printed command does not list the names" "it printed: $(printf '%s' "$san_out" | head -3)"; fi
 else
   bad "creds rc=3: the command that lists the names is missing or wrong" "got '$(line_after "$c_name" 'This lists them:')'"
+fi
+
+# ══ 6b. the CA FILE's own dates (all four sites) ══════════════════════════════════════════════════════════════
+# caexp.crt / cany.crt are ca.crt's key and subject with dates that are wrong today. The server
+# (leaf.crt) is VALID. Ignoring dates, the file verifies it; "dates only, the CA is right, do NOT
+# replace it" was what every site printed, and replacing that file is the fix.
+CA_DATES='The CA file itself is outside its validity period on this machine:'
+CA_REPLACE='If the clock is wrong, correct it. If it is right, replace the file with the current CA:'
+for row in "2|$P_LEAF|$T/caexp.crt|an EXPIRED CA file over a valid certificate" "2|$P_LEAF|$T/cany.crt|a NOT-YET-VALID CA file over a valid certificate" \
+           "2|$P_EXP|$T/caexp.crt|an expired CA file over an expired certificate (the file comes first)"; do
+  IFS='|' read -r want port ca what <<< "$row"
+  r=0; CA_VERIFY_TIMEOUT=5 ca_endpoint_dates_only localhost "$port" "$ca" || r=$?
+  if [ "$r" = "$want" ]; then ok "ca_endpoint_dates_only: ${what} -> ${r}"
+  else bad "ca_endpoint_dates_only: ${what}" "wanted ${want}, got ${r}"; fi
+done
+for row in "0|$T/ca.crt|a CA file in date" "1|$T/caexp.crt|an expired CA file" "1|$T/cany.crt|a CA file not valid yet" \
+           "0|$T/garbage.crt|a file that is not a certificate (no claim)" "0|$T/no-such.crt|a missing file (no claim)"; do
+  IFS='|' read -r want ca what <<< "$row"
+  r=0; tls_ca_file_in_dates "$ca" || r=$?
+  if [ "$r" = "$want" ]; then ok "tls_ca_file_in_dates: ${what} -> ${r}"
+  else bad "tls_ca_file_in_dates: ${what}" "wanted ${want}, got ${r}"; fi
+done
+for row in "7|$P_LEAF|$T/caexp.crt|an expired CA file" "7|$P_LEAF|$T/cany.crt|a CA file not valid yet" "6|$P_EXP|$T/ca.crt|an expired certificate under a CA in date" \
+           "6|$P_NY|$T/ca.crt|a not-yet-valid certificate under a CA in date" "1|$P_LEAF|$T/old.crt|the wrong CA" "0|$P_LEAF|$T/ca.crt|the right CA, all in date"; do
+  IFS='|' read -r want port ca what <<< "$row"
+  r=0; CA_VERIFY_TIMEOUT=5 supervisor_anchor_verdict localhost "$ca" "$port" || r=$?
+  if [ "$r" = "$want" ]; then ok "supervisor_anchor_verdict: ${what} -> ${r}"
+  else bad "supervisor_anchor_verdict: ${what}" "wanted ${want}, got ${r}"; fi
+done
+# assert_ca_dates <site> <text> <year the FILE's dates must show>
+assert_ca_dates() {
+  local s="$1" t="$2" year="$3" bad_p="" p
+  for p in 'Do NOT replace the CA file' 'leftover certificate' 'is the right CA for' 'is the RIGHT one' 'is the right one;' 'DIFFERENT (usually a' 'does NOT verify' 'has to renew it'; do
+    has "$t" "$p" && bad_p="${bad_p} [${p}]"
+  done
+  if has "$t" "$CA_DATES" && has "$t" "$CA_REPLACE" && [ -z "$bad_p" ]; then
+    ok "${s} / CA file dates: says the FILE is outside its dates and to replace it; never 'do NOT replace', 'leftover' or 'the right CA'"
+  else
+    bad "${s} / CA file dates: the wrong sentence is printed over an out-of-date CA file" "has the CA-dates text: $(has "$t" "$CA_DATES" && echo yes || echo no); forbidden:${bad_p:- none}"
+  fi
+  if command grep -F 'valid from:' <<< "$t" | command grep -qF -- "$year" \
+     && command grep -F 'valid until:' <<< "$t" | command grep -qE '[0-9]{4} GMT' \
+     && command grep -F '(date -u):' <<< "$t" | command grep -qF -- "$(date -u +%Y)"; then
+    ok "${s} / CA file dates: shows the FILE's two dates (not the server's) and this machine's UTC clock"
+  else
+    bad "${s} / CA file dates: the file's dates or the clock are missing" "$(command grep -F -e 'valid ' -e 'date -u' <<< "$t" | cut -c1-120)"
+  fi
+}
+NY_YEAR="$(( $(date -u +%Y) + 5 ))"
+for row in "caexp|2020|expired" "cany|${NY_YEAR}|not valid yet"; do
+  IFS='|' read -r cf year what <<< "$row"
+  # make ca-status, Harbor. This Harbor sends one certificate, so the routes are the not-sent ones.
+  r_c="$(status_report "$P_LEAF" "" "$T/$cf.crt")"
+  assert_ca_dates "ca-status, Harbor, CA file ${what}" "$r_c" "$year"
+  if has "$r_c" "Harbor CA ($T/$cf.crt) is itself outside its dates, so it cannot verify localhost." && has "$r_c" "$NOT_WIRE" \
+     && [ "$(line_after "$r_c" "$ADMIN")" = "$CLUSTER HARBOR_CA_FILE=$T/$cf.crt" ]; then
+    ok "ca-status, Harbor, CA file ${what}: names the file, then Harbor's routes for a CA that is not sent"
+  else
+    bad "ca-status, Harbor, CA file ${what}: the headline or the routes are missing" "$(printf '%s' "$r_c" | head -2 | cut -c1-170)"
+  fi
+  ( set +e; unset VKS_CA_CERT_FILE SUPERVISOR_HOST CA_STATUS_STRICT
+    HARBOR_URL="localhost:$P_LEAF" HARBOR_CA_FILE="$T/$cf.crt" CA_VERIFY_TIMEOUT=5 ca_status_report >/dev/null 2>&1 ); c_rc=$?
+  if [ "$c_rc" = 1 ]; then ok "ca-status, Harbor, CA file ${what}: one problem (the exit status is unchanged)"
+  else bad "ca-status, Harbor, CA file ${what}: the problem count changed" "returned ${c_rc}, wanted 1"; fi
+  # make ca-status, Supervisor: its own fetch target, none of Harbor's routes.
+  r_c="$(sup_report "$P_LEAF" "$T/$cf.crt")"
+  assert_ca_dates "ca-status, Supervisor, CA file ${what}" "$r_c" "$year"
+  if has "$r_c" "Supervisor CA ($T/$cf.crt) is itself outside its dates, so it cannot verify localhost." \
+     && has "$r_c" 'Get it again — this overwrites in place and cannot lose anything:  make fetch-supervisor-ca' && ! has "$r_c" 'Harbor'; then
+    ok "ca-status, Supervisor, CA file ${what}: names the file and make fetch-supervisor-ca, nothing of Harbor's"
+  else
+    bad "ca-status, Supervisor, CA file ${what}: the headline or the remedy is wrong" "$(printf '%s' "$r_c" | tail -3 | cut -c1-170)"
+  fi
+  # make env-validate
+  v_c="$(validate "$P_LEAF" "" "$T/$cf.crt")"
+  assert_ca_dates "env-validate, CA file ${what}" "$v_c" "$year"
+  if has "$v_c" "the CA at $T/$cf.crt is itself outside its dates, so it cannot verify the certificate 127.0.0.1:${P_LEAF} presents." \
+     && has "$v_c" "$NOT_WIRE" && has "$v_c" 'env-validate: ' && has "$v_c" 'problem(s)'; then
+    ok "env-validate, CA file ${what}: names the file, gives Harbor's routes, and is still an error"
+  else
+    bad "env-validate, CA file ${what}: the headline, the routes or the error count is missing" "$(printf '%s' "$v_c" | tail -4 | cut -c1-170)"
+  fi
+  # make creds
+  c_c="$(creds_render "$T/c-$cf" "localhost:$P_LEAF" "$T/$cf.crt")"
+  assert_ca_dates "creds, CA file ${what}" "$c_c" "$year"
+  if has "$c_c" "- Harbor: the CA at $T/c-$cf/secrets/harbor-ca.crt is itself outside its dates, so it cannot verify Harbor." && has "$c_c" "$NOT_WIRE"; then
+    ok "creds, CA file ${what}: names the file, then Harbor's routes"
+  else
+    bad "creds, CA file ${what}: the bullet or the routes are missing" "$(command grep -F -A3 -- '- Harbor' <<< "$c_c" | cut -c1-170)"
+  fi
+done
+# The same out-of-date CA file where Harbor DOES send its CA: the fetch is the route, named bare.
+r_c="$(status_report "$P_CHAIN" "" "$T/caexp.crt")"
+assert_ca_dates "ca-status, Harbor sends its CA, CA file expired" "$r_c" 2020
+if has "$r_c" 'Get it again — this overwrites in place and cannot lose anything:  make fetch-harbor-ca' && ! has "$r_c" "$NOT_WIRE"; then
+  ok "ca-status, Harbor sends its CA, CA file expired: the route is make fetch-harbor-ca"
+else
+  bad "ca-status, Harbor sends its CA, CA file expired: the fetch is not named" "$(printf '%s' "$r_c" | tail -2 | cut -c1-170)"
 fi
 
 # ══ 7. the messages that do not ask what Harbor sends ════════════════════════════════════════

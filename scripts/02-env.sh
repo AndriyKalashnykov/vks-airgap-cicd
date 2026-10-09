@@ -672,7 +672,10 @@ env_validate() {
              # verdict 1. Saying "the anchor is for a DIFFERENT Harbor" there is false, and on a
              # Harbor that does not send its CA it costs the reader a long detour. Same second
              # check the Supervisor login uses (lib/tls.sh). Still an error: the count is unchanged.
-             if ca_endpoint_dates_only "$_h" "$_p" "$HARBOR_CA_FILE"; then
+             # A THIRD ANSWER (2): the CA FILE itself is outside its dates. Then replacing it IS
+             # the fix: the file's own dates are shown, with the same routes a leftover gets.
+             _dates=0; ca_endpoint_dates_only "$_h" "$_p" "$HARBOR_CA_FILE" || _dates=$?
+             if [ "$_dates" -eq 0 ]; then
                log_error "the CA at ${HARBOR_CA_FILE} is the RIGHT one for ${HARBOR_URL}, but the certificate it presents is outside its dates.
 $(harbor_cert_dates_advice "$_h" "$_p" | sed 's/^/  /')"
                errs=$((errs+1))
@@ -682,6 +685,11 @@ $(harbor_cert_dates_advice "$_h" "$_p" | sed 's/^/  /')"
              if [ "$_wire" = leaf-only ] || [ "$_wire" = chain-incomplete ]; then
                _refetch="$(harbor_ca_not_on_wire_advice "$HARBOR_CA_FILE" "$_h" "$_wire" | sed 's/^/  /')"
              fi
+             if [ "$_dates" -eq 2 ]; then
+               log_error "the CA at ${HARBOR_CA_FILE} is itself outside its dates, so it cannot verify the certificate ${HARBOR_URL} presents.
+$(tls_ca_file_dates_advice "$HARBOR_CA_FILE" "$_h" | sed 's/^/  /')
+${_refetch}"
+             else
              log_error "the CA at ${HARBOR_CA_FILE} does NOT verify the certificate ${HARBOR_URL} presents.
   The endpoint ANSWERED, so this is not a reachability problem — the anchor is for a DIFFERENT (usually a
   destroyed and rebuilt) Harbor. A rebuild mints a new CA, and nothing in this repo re-fetches it for you.
@@ -690,6 +698,7 @@ $(harbor_cert_dates_advice "$_h" "$_p" | sed 's/^/  /')"
 ${_refetch}
   (⚠️ SUBJECT vs ISSUER on purpose — comparing a stored CA's fingerprint to a live LEAF's is the mistake
    30-vks-login.sh records; they are different objects and can never match even when the anchor is right.)"
+             fi
              errs=$((errs+1))
              fi ;;
           2) log_error "could not reach ${_h}:${_p} to check HARBOR_CA_FILE — this is NOT evidence the anchor is wrong.
