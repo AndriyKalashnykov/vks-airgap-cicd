@@ -471,10 +471,14 @@ ca_endpoint_dates_only() {
 #     judged the same way. It covers BOTH ends of the period with openssl's own clock rule.
 #   * `openssl x509 -checkend 0`, which knows only the far end, for an openssl whose verify
 #     wording differs.
-# NOT HANDLED: a file holding several certificates is judged by its FIRST one.
+# A file holding SEVERAL certificates makes no claim (rc 0): openssl would judge it by its FIRST
+# certificate, and a bundle [expired old CA, valid current CA] over an expired server certificate
+# was then called "the CA file is outside its dates, replace it" while it holds a valid anchor.
 tls_ca_file_in_dates() {
-  local f="${1:-}" out=""
+  local f="${1:-}" out="" n=0
   [ -s "$f" ] || return 0
+  n="$(grep -c -e '-----BEGIN CERTIFICATE-----' -- "$f" 2>/dev/null || true)"
+  if [ "${n:-0}" -gt 1 ]; then return 0; fi
   out="$(openssl verify -partial_chain -CAfile "$f" "$f" 2>&1 || true)"
   case "$out" in
     *'certificate has expired'*|*'certificate is not yet valid'*|*'error 10 at '*|*'error 9 at '*) return 1 ;;
@@ -682,8 +686,9 @@ tls_timeout_bound() {
 # to its bound. With it, the command stays in the terminal's group and Ctrl-C ends it at once.
 # What `--foreground` gives up is the kill of the command's OWN children at the bound; every
 # command run through here (openssl s_client, one bash connect) has none.
-# The flag is PROBED, once per shell, not assumed: a `timeout` that refuses it would otherwise
-# fail every handshake and read as "unreachable".
+# The flag is PROBED, not assumed: a `timeout` that refuses it would otherwise fail every handshake
+# and read as "unreachable". The answer is kept for the shell that asked; most callers run inside
+# `$( )` or a pipeline, so in practice it is asked again there (about a millisecond each).
 _TLS_TIMEOUT_FOREGROUND=""
 tls_bounded() {
   local t

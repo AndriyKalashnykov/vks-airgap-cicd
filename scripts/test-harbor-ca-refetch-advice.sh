@@ -905,6 +905,15 @@ for row in "0|$T/ca.crt|a CA file in date" "1|$T/caexp.crt|an expired CA file" "
   if [ "$r" = "$want" ]; then ok "tls_ca_file_in_dates: ${what} -> ${r}"
   else bad "tls_ca_file_in_dates: ${what}" "wanted ${want}, got ${r}"; fi
 done
+# A BUNDLE makes no claim about its own dates: [expired old CA, valid current CA] over an EXPIRED
+# server certificate is the server's dates (6), never "replace the CA file" (7).
+cat "$T/caexp.crt" "$T/ca.crt" > "$T/bundle-exp-first.crt"
+r=0; tls_ca_file_in_dates "$T/bundle-exp-first.crt" || r=$?
+if [ "$r" = 0 ]; then ok "tls_ca_file_in_dates: a bundle whose FIRST certificate is expired makes no claim -> 0"
+else bad "tls_ca_file_in_dates: a bundle whose first certificate is expired" "wanted 0, got ${r}"; fi
+r=0; CA_VERIFY_TIMEOUT=5 supervisor_anchor_verdict localhost "$T/bundle-exp-first.crt" "$P_EXP" || r=$?
+if [ "$r" = 6 ]; then ok "supervisor_anchor_verdict: [expired CA, valid CA] over an expired certificate -> 6, the server's dates"
+else bad "supervisor_anchor_verdict: [expired CA, valid CA] over an expired certificate" "wanted 6, got ${r}"; fi
 for row in "7|$P_LEAF|$T/caexp.crt|an expired CA file" "7|$P_LEAF|$T/cany.crt|a CA file not valid yet" "6|$P_EXP|$T/ca.crt|an expired certificate under a CA in date" \
            "6|$P_NY|$T/ca.crt|a not-yet-valid certificate under a CA in date" "1|$P_LEAF|$T/old.crt|the wrong CA" "0|$P_LEAF|$T/ca.crt|the right CA, all in date"; do
   IFS='|' read -r want port ca what <<< "$row"
