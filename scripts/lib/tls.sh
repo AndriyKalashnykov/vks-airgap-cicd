@@ -202,7 +202,7 @@ ca_verifies_endpoint() {
     name) namearg="-verify_hostname" ;;
     *)    namearg="-verify_ip" ;;
   esac
-  out=$(printf '' | timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client \
+  out=$(printf '' | tls_bounded "" openssl s_client \
           -connect "${host}:${port}" -servername "$host" \
           -CAfile "$ca" -verify_return_error "$namearg" "$host" 2>&1) || rc=$?
   [ "$rc" -eq 124 ] && return 2                              # timed out: the endpoint, not the anchor
@@ -387,8 +387,13 @@ vks_ca_default() {
 # `vcf context create --endpoint` dials; the argument exists so a test can use a real listener.
 #
 # It returns ca_verifies_endpoint's verdicts (0 verifies, 1 does not, 2 no answer, 3 name, 4 no
-# certificate, 5 no usable anchor) and ONE more:
-#   6 = the anchor is RIGHT; the certificate's DATES are not valid on this machine.
+# certificate, 5 no usable anchor) and TWO more:
+#   6 = the anchor is RIGHT and inside its own dates; the SERVER certificate's DATES are not valid
+#       on this machine.
+#   7 = the ANCHOR FILE ITSELF is outside its dates on this machine (and, dates ignored, it does
+#       verify the endpoint). The remedy is the opposite of 6's: the file has to be replaced.
+#       This case answered 6 until it was measured: "do NOT replace the CA file" was printed over
+#       a CA file that had expired, with server dates that were plainly valid.
 #
 # WHY 6. ca_verifies_endpoint's 1 means "connected, and verification failed for a reason that is not
 # the name". That includes a leaf that has EXPIRED (verify error 10) or is NOT YET VALID (error 9)
@@ -408,15 +413,31 @@ supervisor_anchor_verdict() {
   local rc=0
   ca_verifies_endpoint "$host" "$port" "$ca" || rc=$?
   [ "$rc" -eq 1 ] || return "$rc"
-  if ca_endpoint_dates_only "$host" "$port" "$ca"; then return 6; fi
+  rc=0; ca_endpoint_dates_only "$host" "$port" "$ca" || rc=$?
+  case "$rc" in
+    0) return 6 ;;
+    2) return 7 ;;
+  esac
   return 1
 }
 
 # ca_endpoint_dates_only <host> <port> <ca-file> — ask it ONLY after ca_verifies_endpoint said 1.
-# rc 0 = the anchor is RIGHT and the certificate's validity DATES are the only thing wrong on this
-# machine (it has expired, it is not valid yet, or this machine's clock is off); rc 1 = anything
-# else, including an openssl that does not know `-no_check_time` (the coarser answer, never a
-# false "dates"). One more handshake, no credential, bounded by CA_VERIFY_TIMEOUT.
+# rc 0 = the anchor is RIGHT, the anchor FILE is inside its own dates, and the SERVER
+#        certificate's validity DATES are the only thing wrong on this machine (it has expired, it
+#        is not valid yet, or this machine's clock is off);
+# rc 2 = dates are the only thing wrong, and the ANCHOR FILE ITSELF is outside its dates;
+# rc 1 = anything else, including an openssl that does not know `-no_check_time` (the coarser
+#        answer, never a false "dates").
+# One more handshake, no credential, bounded by CA_VERIFY_TIMEOUT.
+#
+# ⚠️ WHY rc 2 EXISTS. `-no_check_time` relaxes the dates of EVERY certificate in the chain, the
+# anchor included. MEASURED: a CA re-issued with the same key and subject, the saved file dated
+# 2020 to 2021, the server certificate valid today: strict verify fails (error 10), the relaxed
+# one passes, and this function said "dates only". Every caller then printed "the CA file is the
+# right one ... do NOT replace it" beside server dates that were valid: the remedy inverted,
+# because replacing that file IS the fix. So rc 0 is now given only when tls_ca_file_in_dates
+# says the file is in date; rc 2 covers both "file out of date, server fine" and "both out".
+# `if ca_endpoint_dates_only …` still means what it meant, minus the case it had wrong.
 # It is the second half of supervisor_anchor_verdict, split out so the Harbor messages can ask the
 # same question: a "this CA is a leftover, get it again" printed over an expired certificate sends
 # the reader to replace a correct anchor, and on a Harbor that does not send its CA that is a long
@@ -427,16 +448,45 @@ ca_endpoint_dates_only() {
     name) namearg="-verify_hostname" ;;
     *)    namearg="-verify_ip" ;;
   esac
-  out=$(printf '' | timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client \
+  out=$(printf '' | tls_bounded "" openssl s_client \
           -connect "${host}:${port}" -servername "$host" \
           -CAfile "$ca" -verify_return_error -no_check_time "$namearg" "$host" 2>&1) || true
   # Herestrings, not `printf | grep -q`: see ca_verifies_endpoint for why (pipefail + SIGPIPE).
   if command grep -q 'CONNECTED(' <<< "$out" \
      && command grep -q 'Verify return code: 0 (ok)' <<< "$out" \
      && ! command grep -q 'no peer certificate available' <<< "$out"; then
-    return 0
+    if tls_ca_file_in_dates "$ca"; then return 0; fi
+    return 2
   fi
   return 1
+}
+
+# tls_ca_file_in_dates <ca-file> — rc 0: the certificate in the file is inside its validity dates
+# on this machine (or that could not be established: the answer callers had before); rc 1: it has
+# EXPIRED or is NOT VALID YET here. Reads a FILE; dials nothing.
+# Two independent readings, either of which says "outside":
+#   * `openssl verify -partial_chain -CAfile F F` puts the file's certificate at depth 0 with
+#     itself as its trusted issuer, so the only thing left to fail is a date: error 10 (expired)
+#     or 9 (not yet valid). `-partial_chain` is what lets an intermediate saved as the anchor be
+#     judged the same way. It covers BOTH ends of the period with openssl's own clock rule.
+#   * `openssl x509 -checkend 0`, which knows only the far end, for an openssl whose verify
+#     wording differs.
+# A file holding SEVERAL certificates makes no claim (rc 0): openssl would judge it by its FIRST
+# certificate, and a bundle [expired old CA, valid current CA] over an expired server certificate
+# was then called "the CA file is outside its dates, replace it" while it holds a valid anchor.
+tls_ca_file_in_dates() {
+  local f="${1:-}" out="" n=0
+  [ -s "$f" ] || return 0
+  n="$(grep -c -e '-----BEGIN CERTIFICATE-----' -- "$f" 2>/dev/null || true)"
+  if [ "${n:-0}" -gt 1 ]; then return 0; fi
+  out="$(openssl verify -partial_chain -CAfile "$f" "$f" 2>&1 || true)"
+  case "$out" in
+    *'certificate has expired'*|*'certificate is not yet valid'*|*'error 10 at '*|*'error 9 at '*) return 1 ;;
+  esac
+  if openssl x509 -in "$f" -noout >/dev/null 2>&1 && ! openssl x509 -in "$f" -noout -checkend 0 >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
 }
 
 # ca_anchor_reject_reason <cert-file> — prints WHY the file is not a usable trust ANCHOR, or
@@ -528,18 +578,24 @@ ca_anchor_reject_reason() {
 # tls_presented_chain <host> <port> <dir> [timeout-seconds]
 # Saves what the server sends as <dir>/chain.txt and one <dir>/cert-NN.pem per certificate, in the
 # order sent (so <dir>/cert-01.pem is the server's own certificate). rc 0 = the handshake ran (there may still be NO
-# certificate: count the files); rc 2 = no connection, or the time ran out.
-# With no 4th argument the handshake is NOT time-bounded: that is fetch-ca.sh's behaviour and this
-# keeps it. Callers that only want to choose a sentence pass a bound.
+# certificate: count the files); rc 2 = no connection; rc 3 = the time ran out (4th argument).
+# With no 4th argument the handshake is NOT time-bounded, and rc 3 cannot happen. Every caller in
+# this repo passes a bound: fetch-ca.sh ran without one until a listener that accepts and never
+# answers was measured to hang it until killed.
+# rc 3 says ONLY that the bound was reached. It does not say the server accepted the connection:
+# s_client's own "CONNECTED(" line is still in its output buffer when `timeout` kills it (MEASURED,
+# OpenSSL 3.5.5: chain.txt is 0 bytes), so that cannot be read here. A caller that needs to tell
+# "accepted and silent" from "no route" asks tls_port_accepts.
 tls_presented_chain() {
   local host="$1" port="$2" d="$3" t="${4:-}" rc=0
   if [ -n "$t" ]; then
-    timeout "$t" openssl s_client -connect "${host}:${port}" -servername "$host" -showcerts \
+    tls_bounded "$t" openssl s_client -connect "${host}:${port}" -servername "$host" -showcerts \
       </dev/null 2>/dev/null > "${d}/chain.txt" || rc=$?
   else
     openssl s_client -connect "${host}:${port}" -servername "$host" -showcerts \
       </dev/null 2>/dev/null > "${d}/chain.txt" || rc=$?
   fi
+  if [ -n "$t" ] && [ "$rc" -eq 124 ]; then return 3; fi
   [ "$rc" -eq 0 ] || return 2
   # ⚠️ `inc` is LOAD-BEARING — without it this splitter DESTROYS the certificate it just wrote.
   # In awk, `print > f` holds the stream open, but after `close(f)` a later `> f` REOPENS IT
@@ -607,6 +663,66 @@ _tls_positive_number() {
   [[ "${1:-}" =~ ^[0-9]*\.?[0-9]+$ ]] && [[ "$1" =~ [1-9] ]]
 }
 
+# tls_timeout_bound [value] — prints the number of seconds to hand `timeout`: <value> when it is a
+# positive number, else CA_VERIFY_TIMEOUT, else that variable's default.
+# ⚠️ THE CLAMP IS THE POINT. `timeout 0` means NO time limit, so a 0 (or a negative, or a word)
+# passed straight through turns a bounded dial into an unbounded one. ONE definition, and it is
+# reached through tls_bounded below: no script under scripts/ hands CA_VERIFY_TIMEOUT to `timeout`
+# itself (test-harbor-ca-refetch-advice.sh greps for that form and fails on one).
+tls_timeout_bound() {
+  local t="${1:-}"
+  _tls_positive_number "$t" || t="${CA_VERIFY_TIMEOUT:-}"
+  _tls_positive_number "$t" || t=15
+  printf '%s' "$t"
+}
+
+# tls_bounded <seconds-or-empty> <command> [args…] — run the command under `timeout`, with the
+# bound CLAMPED by tls_timeout_bound (empty, 0, a negative or a word: CA_VERIFY_TIMEOUT, else its
+# default). The command's status comes back unchanged; 124 means the bound was reached.
+#
+# `--foreground` WHEN THIS timeout HAS IT. Without it `timeout` moves the command into a process
+# group of its own, so a Ctrl-C typed at the terminal never reaches it: MEASURED through a pty,
+# `make fetch-harbor-ca` against a server that accepts and stays silent ignored Ctrl-C and ran on
+# to its bound. With it, the command stays in the terminal's group and Ctrl-C ends it at once.
+# What `--foreground` gives up is the kill of the command's OWN children at the bound; every
+# command run through here (openssl s_client, one bash connect) has none.
+# The flag is PROBED, not assumed: a `timeout` that refuses it would otherwise fail every handshake
+# and read as "unreachable". The answer is kept for the shell that asked; most callers run inside
+# `$( )` or a pipeline, so in practice it is asked again there (about a millisecond each).
+_TLS_TIMEOUT_FOREGROUND=""
+tls_bounded() {
+  local t
+  t="$(tls_timeout_bound "${1:-}")"; shift
+  if [ -z "${_TLS_TIMEOUT_FOREGROUND:-}" ]; then
+    if timeout --foreground 5 true >/dev/null 2>&1; then _TLS_TIMEOUT_FOREGROUND=yes; else _TLS_TIMEOUT_FOREGROUND=no; fi
+  fi
+  if [ "$_TLS_TIMEOUT_FOREGROUND" = yes ]; then
+    timeout --foreground "$t" "$@"
+  else
+    timeout "$t" "$@"
+  fi
+}
+
+# tls_port_accepts <host> <port> [timeout-seconds] — rc 0 when a TCP connection to the port is
+# accepted within the bound, non-zero otherwise (refused, no route, no answer in time, or a port
+# that is not a number). It sends nothing. The bound is clamped like every other one here.
+# Two questions use it: after a TLS handshake ran out of time, was the server there and silent, or
+# not there at all; and the access report's "does anything answer at this address".
+#
+# ⚠️ THE ADDRESS IS A POSITIONAL ARGUMENT OF THE CHILD SHELL, NEVER PART OF ITS TEXT. The form
+# this replaces in the access report was `bash -c "exec 3<>/dev/tcp/$host/$port"`: the address is
+# pasted into a script, so an address of `$(command)` (it comes from a cluster or a state file)
+# RUNS that command. Here the script is a constant and the address arrives as "$1".
+# The port must be digits: bash would otherwise look a word up as a service name.
+tls_port_accepts() {
+  local host="${1:-}" port="${2:-}" t="${3:-}"
+  if [ -z "$host" ]; then return 1; fi
+  case "$port" in ''|*[!0-9]*) return 1 ;; esac
+  # The child expands its own "$1" and "$2" (SC2016 is deliberate).
+  # shellcheck disable=SC2016
+  tls_bounded "$t" bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" >/dev/null 2>&1
+}
+
 # tls_ca_on_the_wire <host> <port> [timeout-seconds] — prints ONE word, for a message to branch on:
 #   self-signed   one certificate that is its own issuer: taking it off the connection works
 #   chain         more than one certificate, and the last one verifies the server's own by
@@ -619,13 +735,11 @@ _tls_positive_number() {
 # `unknown` is NOT a verdict. A caller that gets it keeps the sentence it had and adds no claim.
 # Bounded by the 3rd argument, else CA_VERIFY_TIMEOUT (the bound ca_verifies_endpoint uses).
 # Always returns 0, so `x="$(tls_ca_on_the_wire …)"` is safe under `set -e`.
-# ⚠️ THE BOUND IS CLAMPED. `timeout 0` means NO time limit, so a caller's 0 (or a negative, or a
-# word) would turn this into an unbounded dial inside a report. Anything that is not a positive
-# number falls back to CA_VERIFY_TIMEOUT, and if that is not one either, to its default.
+# ⚠️ THE BOUND IS CLAMPED (tls_timeout_bound): anything that is not a positive number falls back
+# to CA_VERIFY_TIMEOUT, and if that is not one either, to its default.
 tls_ca_on_the_wire() {
   local host="${1:-}" port="${2:-443}" t="${3:-}" d
-  _tls_positive_number "$t" || t="${CA_VERIFY_TIMEOUT:-}"
-  _tls_positive_number "$t" || t=15
+  t="$(tls_timeout_bound "$t")"
   if [ -z "$host" ] || ! command -v openssl >/dev/null 2>&1; then printf 'unknown'; return 0; fi
   d="$(mktemp -d 2>/dev/null)" || { printf 'unknown'; return 0; }
   if tls_presented_chain "$host" "$port" "$d" "$t"; then
@@ -711,15 +825,17 @@ harbor_ca_not_on_wire_advice() {
   return 0
 }
 
-# harbor_cert_dates_advice <host> <port> [timeout-seconds] — the lines to print when
-# ca_endpoint_dates_only said yes: the CA file is right, and the certificate Harbor serves is
+# tls_cert_dates_advice <who-operates-it> <host> [port] [timeout-seconds] — the lines to print when
+# ca_endpoint_dates_only said yes: the CA file is right, and the certificate the server presents is
 # outside its validity dates AS THIS MACHINE'S CLOCK SEES THEM. Either side can be the wrong one,
 # so both are shown: the certificate's two dates (read off one more bounded handshake) and this
 # machine's UTC time. Nothing here says to replace the CA file, and the last line says not to.
-harbor_cert_dates_advice() {
-  local host="$1" port="${2:-443}" t="${3:-}" d nb="" na=""
-  _tls_positive_number "$t" || t="${CA_VERIFY_TIMEOUT:-}"
-  _tls_positive_number "$t" || t=15
+# <who-operates-it> completes "whoever operates ... has to renew it": `Harbor`, `the Supervisor`.
+# It is the ONLY thing that differs between services, so there is one body and no copy of it.
+tls_cert_dates_advice() {
+  local who="${1:?tls_cert_dates_advice: who operates the endpoint is required}"
+  local host="${2:?tls_cert_dates_advice: host required}" port="${3:-443}" t="${4:-}" d nb="" na=""
+  t="$(tls_timeout_bound "$t")"
   if d="$(mktemp -d 2>/dev/null)"; then
     if tls_presented_chain "$host" "$port" "$d" "$t" && [ -s "${d}/cert-01.pem" ]; then
       nb="$(openssl x509 -in "${d}/cert-01.pem" -noout -startdate 2>/dev/null | sed 's/^notBefore=//' || true)"
@@ -733,7 +849,33 @@ harbor_cert_dates_advice() {
   printf '    valid until: %s\n' "${na:-could not be read}"
   printf '    this machine'"'"'s clock (date -u):  %s\n' "$(date -u 2>/dev/null || true)"
   printf 'If the clock is wrong, correct it. If it is right, the certificate has expired or is not\n'
-  printf 'valid yet, and whoever operates Harbor has to renew it. Do NOT replace the CA file.\n'
+  printf 'valid yet, and whoever operates %s has to renew it. Do NOT replace the CA file.\n' "$who"
+  return 0
+}
+
+# harbor_cert_dates_advice <host> <port> [timeout-seconds] — tls_cert_dates_advice for Harbor.
+# make env-validate and make creds call it by this name; its text is pinned byte for byte.
+harbor_cert_dates_advice() {
+  tls_cert_dates_advice Harbor "$@"
+}
+
+# tls_ca_file_dates_advice <ca-file> <host> — the lines to print when ca_endpoint_dates_only said
+# 2 (supervisor_anchor_verdict's 7): the CA FILE is outside its own validity dates as this
+# machine's clock sees them. It shows the FILE's two dates and this machine's UTC time, and ends
+# on a colon: the caller prints, right under it, the way to get the current CA for ITS service
+# (Harbor's routes, the Supervisor's re-pin). It never says to keep the file.
+tls_ca_file_dates_advice() {
+  local file="${1:?tls_ca_file_dates_advice: the CA file is required}"
+  local host="${2:?tls_ca_file_dates_advice: host required}" nb="" na=""
+  nb="$(openssl x509 -in "$file" -noout -startdate 2>/dev/null | sed 's/^notBefore=//' || true)"
+  na="$(openssl x509 -in "$file" -noout -enddate   2>/dev/null | sed 's/^notAfter=//' || true)"
+  printf 'The CA file itself is outside its validity period on this machine:\n'
+  printf '    valid from:  %s\n' "${nb:-could not be read}"
+  printf '    valid until: %s\n' "${na:-could not be read}"
+  printf '    this machine'"'"'s clock (date -u):  %s\n' "$(date -u 2>/dev/null || true)"
+  printf 'With the dates ignored it verifies the certificate %s presents, so it is an\n' "$host"
+  printf 'out-of-date copy of the right CA, or this machine'"'"'s clock is wrong.\n'
+  printf 'If the clock is wrong, correct it. If it is right, replace the file with the current CA:\n'
   return 0
 }
 
@@ -763,7 +905,7 @@ harbor_ca_fetch_hedge() {
 # copies of one predicate is the shape this repo keeps getting bitten by.)
 # Prints to stderr; returns the number of STALE anchors.
 ca_status_report() {
-  local stale=0 label file host port remedy rc _wire _adv
+  local stale=0 label file host port remedy who rc _wire _adv _hp _dates
 
   # ⚠️ WITHOUT openssl EVERY probe returns 5 and this reports "your CA is not usable" — the WRONG
   # cause, with a remedy that cannot help. MEASURED with PATH stripped. It matters because a bare
@@ -825,9 +967,24 @@ ca_status_report() {
     printf '%s|%s' "$h" "$p"
   }
 
+  # THE FIELD SEPARATOR IS THE UNIT SEPARATOR (0x1f), NOT `|`. A file path may hold a `|`, and
+  # with `|` between the fields HARBOR_CA_FILE=/tmp/x/a|b/ca.crt was read as file `/tmp/x/a`,
+  # host `b/ca.crt`: MEASURED, the message named a wrong file and a wrong command. Not a TAB
+  # either: TAB is IFS whitespace, so `read` would collapse an empty field and shift the rest.
+  # _ca_hostport still prints `host|port` (a test reads that form); it is split HERE on its LAST
+  # `|`, because the port is digits only.
+  # Fields: label, file, host, port, the make target that fetches it, who operates the endpoint.
+  # NOT HANDLED: a path holding a newline (one pair per line) or a 0x1f byte.
+  local _us=$'\x1f'
   local pairs=""
-  [ -n "${HARBOR_CA_FILE:-}" ]   && [ -n "${HARBOR_URL:-}" ]      && pairs="${pairs}Harbor CA|${HARBOR_CA_FILE}|$(_ca_hostport "$HARBOR_URL")|fetch-harbor-ca"$'\n'
-  [ -n "${VKS_CA_CERT_FILE:-}" ] && [ -n "${SUPERVISOR_HOST:-}" ] && pairs="${pairs}Supervisor CA|${VKS_CA_CERT_FILE}|$(_ca_hostport "$SUPERVISOR_HOST")|fetch-supervisor-ca"$'\n'
+  if [ -n "${HARBOR_CA_FILE:-}" ] && [ -n "${HARBOR_URL:-}" ]; then
+    _hp="$(_ca_hostport "$HARBOR_URL")"
+    pairs="${pairs}Harbor CA${_us}${HARBOR_CA_FILE}${_us}${_hp%|*}${_us}${_hp##*|}${_us}fetch-harbor-ca${_us}Harbor"$'\n'
+  fi
+  if [ -n "${VKS_CA_CERT_FILE:-}" ] && [ -n "${SUPERVISOR_HOST:-}" ]; then
+    _hp="$(_ca_hostport "$SUPERVISOR_HOST")"
+    pairs="${pairs}Supervisor CA${_us}${VKS_CA_CERT_FILE}${_us}${_hp%|*}${_us}${_hp##*|}${_us}fetch-supervisor-ca${_us}the Supervisor"$'\n'
+  fi
 
   # THE DENOMINATOR. Set for the caller, because "checked nothing" and "checked three and all were
   # fine" must not print the same sentence. The first version said "all CA certificates match their
@@ -844,7 +1001,7 @@ ca_status_report() {
 
   # A herestring, NOT `printf | while` — a pipe makes the loop a subshell and `stale` would be lost,
   # so the report would count correctly and then return 0.
-  while IFS='|' read -r label file host port remedy; do
+  while IFS="$_us" read -r label file host port remedy who; do
     [ -n "$label" ] || continue
 
     if [ ! -s "$file" ]; then
@@ -892,19 +1049,30 @@ ca_status_report() {
     case "$rc" in
       0) log_info "${label} (${file}) matches ${host}"
          CA_STATUS_MATCHED=$((CA_STATUS_MATCHED + 1)) ;;
-      1) # DATES FIRST, for Harbor. An expired or not-yet-valid certificate under the CORRECT CA
-         # also lands here (rc=1 is "connected, and not the name"). Calling that a leftover sends
-         # the reader to re-obtain a file they already hold. It still counts as a problem: the
-         # exit status is the same, only the sentence is true.
-         if [ "$remedy" = fetch-harbor-ca ] && ca_endpoint_dates_only "$host" "$port" "$file"; then
+      1) # DATES FIRST, for EVERY pair. An expired or not-yet-valid certificate under the CORRECT
+         # CA also lands here (rc=1 is "connected, and not the name"). Calling that a leftover
+         # sends the reader to re-obtain a file they already hold. It still counts as a problem:
+         # the exit status is the same, only the sentence is true.
+         # This asked for Harbor only at first, so the Supervisor's row called an expired
+         # certificate under the right CA a leftover and named `make fetch-supervisor-ca`.
+         _dates=0; ca_endpoint_dates_only "$host" "$port" "$file" || _dates=$?
+         if [ "$_dates" -eq 0 ]; then
            log_error "${label} (${file}) is the right CA for ${host}, but the certificate ${host} presents is outside its dates."
-           while IFS= read -r _adv; do log_error "  ${_adv}"; done <<< "$(harbor_cert_dates_advice "$host" "$port")"
+           while IFS= read -r _adv; do log_error "  ${_adv}"; done <<< "$(tls_cert_dates_advice "$who" "$host" "$port")"
            stale=$((stale + 1))
            continue
          fi
-         log_error "${label} (${file}) does NOT match ${host} — this is a leftover certificate."
-         log_error "  A rebuilt lab issues a NEW certificate at the SAME address, so the old file"
-         log_error "  still looks perfectly valid and is not."
+         if [ "$_dates" -eq 2 ]; then
+           # THE FILE is what is out of date. Not "leftover" (it is this server's CA, in an old
+           # copy) and not "do not replace it" (replacing it is the fix). The way to get the
+           # current one is the same as for a leftover, so it falls through to that below.
+           log_error "${label} (${file}) is itself outside its dates, so it cannot verify ${host}."
+           while IFS= read -r _adv; do log_error "  ${_adv}"; done <<< "$(tls_ca_file_dates_advice "$file" "$host")"
+         else
+           log_error "${label} (${file}) does NOT match ${host} — this is a leftover certificate."
+           log_error "  A rebuilt lab issues a NEW certificate at the SAME address, so the old file"
+           log_error "  still looks perfectly valid and is not."
+         fi
          # ASK WHAT THE SERVER SENDS BEFORE NAMING THE COMMAND. `make fetch-harbor-ca` takes the CA
          # off the connection, and a Harbor that sends one certificate signed by a CA it does not
          # send has no CA there to take: the command refuses and names two other routes. So on that

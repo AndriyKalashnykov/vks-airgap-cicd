@@ -35,6 +35,11 @@ __VKS_ARGOCD_SH_LOADED=1
 # because its callers source os.sh first. Do not read this line as "the class is closed".
 # shellcheck source=scripts/lib/os.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/os.sh"
+# lib/tls.sh for tls_bounded: argocd_cert_carries_name's handshake takes its bound through it, so
+# a CA_VERIFY_TIMEOUT of 0 cannot switch the bound off (`timeout 0` is no limit). A NEW source
+# line in this library, stated here on purpose; tls.sh has a load guard and no source-time effects.
+# shellcheck source=scripts/lib/tls.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tls.sh"
 
 # The in-cluster destination — "the cluster ArgoCD itself runs in". Correct ONLY when ArgoCD and the
 # workload share a cluster. When they do not, this means the SUPERVISOR.
@@ -1080,7 +1085,7 @@ argocd_name_resolves_to() {
 # 2: UNKNOWN -- no certificate was read, which is a connection fact, never a verdict.
 argocd_cert_carries_name() {
   local pem sans
-  pem="$(timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client -connect "$1:443" -servername "$2" \
+  pem="$(tls_bounded "" openssl s_client -connect "$1:443" -servername "$2" \
            </dev/null 2>/dev/null | openssl x509 2>/dev/null || true)"
   [ -n "$pem" ] || return 2
   # A cert WAS read. If the SAN read itself fails (an openssl without -ext), that is UNKNOWN, not "absent".

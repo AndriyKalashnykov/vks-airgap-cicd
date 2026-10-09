@@ -214,6 +214,15 @@ _ENVMK_ENV := $(call regen_overlay_mk,.env,secrets/.env.make)
 # a single quote (`bash -n` -> unexpected EOF) and silently ate a `$`. A command-line override still wins.
 export HARBOR_CA_SHA256
 export ARGOCD_CA_SHA256
+# CA_VERIFY_TIMEOUT bounds the two fetch targets' handshakes, and it has the same gap: set in .env
+# it was a MAKE variable only. MEASURED: with CA_VERIFY_TIMEOUT=3 in .env, `make fetch-harbor-ca`
+# against a server that stays silent printed "within 15 s". Exported for THOSE TWO TARGETS, not
+# globally: every other recipe's script reads .env itself (load_env), and a global export would
+# also hand an operator's .env value to the unit tests that `make` runs.
+# Precedence is unchanged: .env is read as `?=`, so an exported shell value beats it, and
+# `make fetch-harbor-ca CA_VERIFY_TIMEOUT=60` beats both. Unset everywhere it arrives EMPTY, which
+# the scripts read as "use the default". `:=`, so this line must stay BELOW the .env include.
+fetch-harbor-ca fetch-argocd-ca: export CA_VERIFY_TIMEOUT := $(CA_VERIFY_TIMEOUT)
 
 # BUILDER_IMAGE_TAG is `-include`d from .env like every other tunable, which makes it a MAKE
 # variable -- and make does NOT put make variables into a recipe's ENVIRONMENT. Three of the four

@@ -303,6 +303,19 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
 $(supervisor_dates_how "$SUPERVISOR_HOST" | sed 's/^/  /')
 
   Then re-run. Do NOT reach for VKS_INSECURE_SKIP_TLS_VERIFY: a credential is submitted over this connection." ;;
+        # 7 = the stored CA FILE is itself outside its dates (and, dates ignored, it verifies the
+        # endpoint). It answered 6 until it was measured, and 6's text ends "do NOT re-fetch or
+        # re-pin the CA: it is the right one" — the opposite of what an expired CA file needs.
+        # Nor is it the arm below: nothing here says the lab was rebuilt. Same remedy as that arm
+        # though (get the current CA and confirm its SHA-256), so it prints the same commands.
+        7) die "the CA at ${VKS_CA_CERT_FILE} is itself outside its dates, so it cannot verify the
+  certificate ${SUPERVISOR_HOST} presents.
+  No password was sent.
+
+$(tls_ca_file_dates_advice "$VKS_CA_CERT_FILE" "$SUPERVISOR_HOST" | sed 's/^/  /')
+$(supervisor_repin_how "$SUPERVISOR_HOST" "$VKS_CA_CERT_FILE" | sed 's/^/  /')
+
+  Do NOT reach for VKS_INSECURE_SKIP_TLS_VERIFY: a credential is submitted over this connection." ;;
         # The remedy is supervisor_repin_how (lib/os.sh): the commands, with this run's endpoint and
         # file in them. This arm used to end "Re-pin it from the lab that is actually running", which
         # names no command. The access report prints the SAME text, so the two cannot drift.

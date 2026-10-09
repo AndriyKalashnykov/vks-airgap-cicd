@@ -78,6 +78,11 @@ _route_degraded="$(mktemp "${TMPDIR:-/tmp}/.creds-route-degraded.XXXXXX" 2>/dev/
 
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# lib/tls.sh THIS EARLY for tls_port_accepts: the ingress probe below runs long before the block
+# of library sources further down. Side-effect-free to source, and it has a load guard, so the
+# later line that sources it again (kept, with its own reason) is a no-op.
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 
 # ── the Supervisor credential, decided ONCE and OFFLINE ──────────────────────────────────────────
 # `kube_token_expiry` (lib/os.sh) parses the kubeconfig's bearer token locally and never dials.
@@ -275,7 +280,10 @@ if [ -n "$_ing" ]; then
   # snapshotted: load_env's `set -a` can clobber it from the operator's .env.
   if [ "$_no_probe_snapshot" != "1" ]; then
     _ing_probed=1
-    timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" bash -c "exec 3<>/dev/tcp/${_ing}/${INGRESS_PROBE_PORT:-80}" 2>/dev/null || _ing_live=0
+    # tls_port_accepts (lib/tls.sh), NOT `bash -c "exec 3<>/dev/tcp/${_ing}/…"`: that form pasted
+    # the address into shell TEXT, and INGRESS_LB_IP comes from a state file or a cluster, so a
+    # value of `$(command)` ran the command. The helper hands it over as an argument.
+    tls_port_accepts "$_ing" "${INGRESS_PROBE_PORT:-80}" "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" || _ing_live=0
   fi
 fi
 # _ing_authority [addr] -> `host[:port]` for a URL, IPv6-safe. ONE builder, because there were TWO
@@ -1116,7 +1124,8 @@ fi
 
 _probe_tcp() {                    # <host> <port> -> 0 if something answers, non-zero otherwise
   [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
-  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null
+  # The address is an ARGUMENT here, never shell text: see tls_port_accepts (lib/tls.sh).
+  tls_port_accepts "$1" "$2" "${CREDS_PROBE_TIMEOUT_SECONDS:-2}"
 }
 _reach_harbor() {
   [ "${_no_probe_snapshot:-${CREDS_NO_PROBE:-0}}" = 1 ] && { printf 'not probed'; return; }
@@ -1349,7 +1358,8 @@ _sup_anchor_ca() {
   vks_ca_default >/dev/null 2>&1 || true
   printf '%s' "${VKS_CA_CERT_FILE:-}"
 }
-# _sup_anchor_probe <ca-file>: prints one of skip|verifies|stale|dates|silent.
+# _sup_anchor_probe <ca-file>: prints one of skip|verifies|stale|dates|cadates|silent.
+# dates = the SERVER certificate's dates; cadates = the stored CA FILE's own dates (verdict 7).
 _sup_anchor_probe() {
   local _ca="${1:-}" _rc=0
   if [ "$_no_probe_snapshot" = 1 ] || [ -z "${SUPERVISOR_HOST:-}" ] || [ -z "$_ca" ] || [ ! -s "$_ca" ] \
@@ -1363,6 +1373,7 @@ _sup_anchor_probe() {
     1) printf 'stale' ;;
     2) printf 'silent' ;;
     6) printf 'dates' ;;
+    7) printf 'cadates' ;;
     *) printf 'skip' ;;
   esac
 }
@@ -1398,11 +1409,19 @@ if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
     printf '     make creds-renew stops on that before it sends the password.\n'
     supervisor_dates_how "$SUPERVISOR_HOST" | sed 's/^/     /'
     printf '     Once the time is inside those two dates: make creds\n'
+  elif [ "$_sup_anchor" = cadates ]; then
+    # The stored CA FILE is what is out of date: replacing it IS the fix, so this arm re-pins.
+    printf '     RENEWING CANNOT WORK YET. The Supervisor %s answers, but the CA stored at\n' "$SUPERVISOR_HOST"
+    printf '     %s is itself outside its dates, so it cannot verify the certificate.\n' "$_sup_ca"
+    printf '     make creds-renew stops on that before it sends the password.\n'
+    tls_ca_file_dates_advice "$_sup_ca" "$SUPERVISOR_HOST" | sed 's/^/     /'
+    supervisor_repin_how "$SUPERVISOR_HOST" "$_sup_ca" | sed 's/^/     /'
+    printf '     After the login: make creds\n'
   fi
   # BEFORE the command, never after: it is the reason NOT to run it yet.
   # Not when the Supervisor answered (stale, dates, verifies): then the lab IS up, whatever the ingress did.
   _sup_answered=0
-  case "$_sup_anchor" in stale|dates|verifies) _sup_answered=1 ;; esac
+  case "$_sup_anchor" in stale|dates|cadates|verifies) _sup_answered=1 ;; esac
   if [ "$_sup_anchor" = silent ] && ! { [ "${_ing_probed:-0}" = 1 ] && [ "${_ing_live:-1}" != 1 ]; }; then
     printf '     FIRST: the Supervisor %s did not answer within %ss — check the lab is UP before spending\n' \
       "$SUPERVISOR_HOST" "${CREDS_PROBE_TIMEOUT_SECONDS:-2}"
@@ -1411,7 +1430,7 @@ if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
     printf '     FIRST: the recorded ingress did not answer either — check the lab is UP before spending\n'
     printf '     an SSO attempt — %s.\n' "$(sso_lockout_note)"
   fi
-  if [ "$_sup_anchor" != stale ] && [ "$_sup_anchor" != dates ]; then
+  if [ "$_sup_anchor" != stale ] && [ "$_sup_anchor" != dates ] && [ "$_sup_anchor" != cadates ]; then
   # ⚠️ TWO DEPENDENT STEPS, NUMBERED — NOT A LIST OF ALTERNATIVES. `make argocd-password` reads the
   # SAME Supervisor token this banner has just declared dead, so offering it alongside the renew
   # command read as "either of these". MEASURED 2026-09-10: the operator ran it and got
@@ -1670,7 +1689,7 @@ elif [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
   # top said so): that clause sent the reader to check a lab the same report shows is up. Only the
   # clause changes; `_sup_anchor` is `skip` unless the expired-token banner ran its check.
   case "${_sup_anchor:-skip}" in
-    stale|dates|verifies)
+    stale|dates|cadates|verifies)
   echo "      to debug your browser. The Supervisor answered on this run, so the lab is UP: settle the"
   echo "      item at the top of this report first, then re-run the ingress" ;;
     *)
@@ -3410,13 +3429,24 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
         # DATES FIRST: an expired or not-yet-valid certificate under the CORRECT CA is also rc=1.
         # "Re-fetch the CA" is false there. Same second check the Supervisor row uses, with this
         # report's own probe bound.
-        _h_wire=""
-        if CA_VERIFY_TIMEOUT="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" ca_endpoint_dates_only "$_h_host" "$_h_port" "$_ca_abs"; then
+        # A THIRD ANSWER (2): the CA FILE itself is outside its dates. Then replacing it IS the
+        # fix, so the file's own dates are shown and the routes below follow, as for a leftover.
+        _h_wire=""; _h_dates=0
+        CA_VERIFY_TIMEOUT="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" ca_endpoint_dates_only "$_h_host" "$_h_port" "$_ca_abs" || _h_dates=$?
+        if [ "$_h_dates" = 0 ]; then
           _h_wire=dates
         else
           _h_wire="$(tls_ca_on_the_wire "$_h_host" "$_h_port" "${CREDS_PROBE_TIMEOUT_SECONDS:-2}")"
         fi
-        if [ "$_h_wire" = dates ]; then
+        if [ "$_h_dates" = 2 ]; then
+          printf '    - Harbor: the CA at %s is itself outside its dates, so it cannot verify Harbor.\n' "$_ca_abs"
+          tls_ca_file_dates_advice "$_ca_abs" "$_h_host" | sed 's/^/      /'
+          if [ "$_h_wire" = leaf-only ] || [ "$_h_wire" = chain-incomplete ]; then
+            harbor_ca_not_on_wire_advice "$_ca_abs" "$_h_host" "$_h_wire" | sed 's/^/      /'
+          else
+            printf '      make fetch-harbor-ca\n'
+          fi
+        elif [ "$_h_wire" = dates ]; then
           printf '    - Harbor: the CA at %s is the right one; the certificate Harbor serves is outside its dates.\n' "$_ca_abs"
           harbor_cert_dates_advice "$_h_host" "$_h_port" "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" | sed 's/^/      /'
         elif [ "$_h_wire" = leaf-only ] || [ "$_h_wire" = chain-incomplete ]; then

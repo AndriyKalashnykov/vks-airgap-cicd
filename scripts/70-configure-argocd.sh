@@ -474,7 +474,7 @@ if [ "$MECH" = api ] && [ "$can_api" = unknown ]; then
       # operator to change something that works. lib/tls.sh's own gen_selfsigned_ca_cert mints
       # IP SANs, so this repo reaches that contradiction.
       if [ "$_cv" -ne 0 ]; then
-        _sans="$(printf '' | timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client \
+        _sans="$(printf '' | tls_bounded "" openssl s_client \
                    -connect "${_cv_h}:${_cv_p}" -servername "$_cv_h" 2>/dev/null \
                  | openssl x509 -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -s ' ' || true)"
         if [ -n "${_sans:-}" ]; then

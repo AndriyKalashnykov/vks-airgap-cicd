@@ -78,7 +78,7 @@ openssl x509 -in "$t" -noout >/dev/null 2>&1 || die "${ARGOCD_NAMESPACE}/${_src}
 
 # The served leaf, with the SNI chosen above.
 _wire_rc=0
-timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client -connect "${_host}:${_port}" -servername "$_sni" \
+tls_bounded "" openssl s_client -connect "${_host}:${_port}" -servername "$_sni" \
   </dev/null 2>/dev/null | openssl x509 > "$w" 2>/dev/null || _wire_rc=$?
 [ "$_wire_rc" -eq 0 ] && [ -s "$w" ] || die "${_host}:${_port} did not present a certificate, so the Secret's certificate could
   not be compared with it. That is a CONNECTION problem, not a verdict. '${OUT}' was NOT touched."
