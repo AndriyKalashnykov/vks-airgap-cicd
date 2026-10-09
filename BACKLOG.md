@@ -16,6 +16,30 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B749 — four things the Harbor CA advice change (2026-10-09) found and did not fix
+
+Found by the two diff reviews of the change that stopped `make ca-status`, `make env-validate` and
+`make creds` recommending `make fetch-harbor-ca` where the endpoint does not send its issuing CA.
+None is fixed. Grades are the reviewers'.
+
+1. **`fetch-ca.sh`'s own handshake has no time bound.** MEASURED: against a listener that accepts
+   and never answers it hangs until killed. `tls_presented_chain` in `scripts/lib/tls.sh` already
+   takes a timeout argument; the fetch does not pass one. Done when: the fetch passes
+   `CA_VERIFY_TIMEOUT`, its die path for a timeout says so, and a silent-listener case pins it.
+2. **`ca_status_report` builds its pair list with `|` as the delimiter.** MEASURED:
+   `HARBOR_CA_FILE=/tmp/x/a|b/ca.crt` is mis-parsed and the message names a wrong file and a wrong
+   command. Done when: the delimiter is one a path cannot hold, with a case for such a path.
+3. **`docs/scenario-1.md` Step 8's main flow installs the file before it compares the
+   fingerprint.** READ. It installs only after `openssl verify`, which proves consistency, not
+   authenticity. The messages now give the order fingerprint, confirm, save; the doc's main flow
+   does not. Done when: the block is reordered and re-walked.
+4. **The Supervisor row of `make ca-status` reports an expired certificate under the right CA as a
+   leftover CA.** READ. Harbor's three sites ask `ca_endpoint_dates_only` first since this change;
+   the Supervisor row does not. Done when: it asks the same function and prints the dates message.
+
+Also unproven from that change: the dates message has run only against local listeners, and
+`-no_check_time` was measured on OpenSSL 3.5.5 only.
+
 ## 🔴 B748 — `trivy-config` is the one gate that lost its PR path as a SIDE EFFECT, and a skipped job keeps `ci-pass` green
 
 ⚠️ **This row does NOT re-litigate the schedule-only decision.** `ci.yml:186-200` records it as the
