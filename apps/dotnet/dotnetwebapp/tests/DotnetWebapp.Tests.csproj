@@ -20,7 +20,7 @@
 
   <ItemGroup>
     <!-- renovate: the nuget manager tracks this PackageReference -->
-    <PackageReference Include="TUnit" Version="1.65.38" />
+    <PackageReference Include="TUnit" Version="1.73.19" />
   </ItemGroup>
 
   <ItemGroup>
