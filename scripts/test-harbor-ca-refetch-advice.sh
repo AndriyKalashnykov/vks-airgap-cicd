@@ -88,6 +88,13 @@ export TMPDIR="$T/tmp"; mkdir -p "$TMPDIR"
 # load_env ignore that fixture and every case would test an empty configuration. And a caller's
 # "already reported" list would hide the one line the time-limit cases look for.
 unset SKIP_DOTENV _VKS_BOUNDS_REPORTED
+# RUN FROM `make test-scripts`, THIS FILE INHERITS make'S OWN ENVIRONMENT, and it failed there
+# while passing by hand. The Makefile exports HARBOR_CA_SHA256 and ARGOCD_CA_SHA256 to every
+# recipe, EMPTY when nobody set them; an empty-but-defined variable is "set" to the `?=` lines a
+# sandbox .env is turned into, so the make cases below saw no pin at all, and a pin the operator
+# really has would have reached every fetch here. MAKEFLAGS and MAKELEVEL change how an inner
+# make prints and resolves. None of it belongs to these cases: each one states its own inputs.
+unset HARBOR_CA_SHA256 ARGOCD_CA_SHA256 CA_VERIFY_TIMEOUT _FETCH_CA_ENDPOINT MAKEFLAGS MAKELEVEL MFLAGS
 PIDS=""
 cleanup() {
   local p
@@ -567,7 +574,8 @@ if command -v make >/dev/null 2>&1; then
   printf 'CA_VERIFY_TIMEOUT=3\n' > "$MKS/with-env/.env"
   mk() {  # <sandbox> <target> [make args / VAR=value …] ; prints the stub's line
     local sb="$1" tgt="$2"; shift 2
-    env -u CA_VERIFY_TIMEOUT -u SKIP_DOTENV -u MAKEFLAGS -u MAKELEVEL -u MFLAGS ${MK_ENV:+"$MK_ENV"} \
+    env -u CA_VERIFY_TIMEOUT -u HARBOR_CA_SHA256 -u ARGOCD_CA_SHA256 -u HARBOR_URL -u ARGOCD_SERVER -u ARGOCD_LB_IP \
+        -u SKIP_DOTENV -u VKS_STATE_FILE -u MAKEFLAGS -u MAKELEVEL -u MFLAGS ${MK_ENV:+"$MK_ENV"} \
       make --no-print-directory -f "${REPO}/Makefile" -C "$MKS/$sb" "$tgt" SCRIPTS="$MKS/stub" \
         HARBOR_URL=h.example HARBOR_CA_FILE="$MKS/x.crt" ARGOCD_SERVER=a.example "$@" 2>&1 </dev/null | command grep -F 'bound=[' | head -1
   }
@@ -643,7 +651,13 @@ if command -v make >/dev/null 2>&1; then
   for path in /srv/other/ca.crt '/srv/my lab/ca.crt' '/srv/pa$$y/c$HOME.crt'; do
     adv="$(harbor_ca_not_on_wire_advice "$path" harbor.example)"
     cmd="$(line_after "$adv" "$ADMIN")"
-    recipe="$(bash -c "make --no-print-directory -C $(printf '%q' "$REPO") -n ${cmd#make }" 2>/dev/null | command grep -F '27-harbor-ca-from-cluster.sh' | head -1)"
+    # THE REAL Makefile, IN AN EMPTY SANDBOX DIRECTORY. `make -C "$REPO"` here read the checkout's
+    # own .env at make level (make includes it relative to where it runs), so on an operator's
+    # box this case parsed THEIR configuration. -f names the Makefile; -C gives it a directory
+    # with no .env, no state overlay and nothing else; SCRIPTS points back at the real scripts.
+    mkdir -p "$T/mk-n"
+    recipe="$(env -u SKIP_DOTENV -u MAKEFLAGS -u MAKELEVEL -u MFLAGS -u VKS_STATE_FILE \
+                bash -c "make --no-print-directory -f $(printf '%q' "$REPO/Makefile") -C $(printf '%q' "$T/mk-n") SCRIPTS=$(printf '%q' "$REPO/scripts") -n ${cmd#make }" 2>/dev/null | command grep -F '27-harbor-ca-from-cluster.sh' | head -1)"
     got="$(bash -c "printf '%s' ${recipe#*27-harbor-ca-from-cluster.sh }" 2>/dev/null)"
     if [ -n "$recipe" ] && [ "$got" = "$path" ]; then ok "advice: pasted, through make and the recipe's shell, the script receives ${path}"
     else bad "advice: the printed command does not deliver ${path} to the script" "printed '${cmd}'; recipe '${recipe}'; delivered '${got}'"; fi
@@ -918,6 +932,18 @@ if has "$c_inj" 'canary-ingress' && [ ! -e "$T/c-inj/canary-ingress" ] && [ ! -e
 else
   bad "creds: an address from the state was EXECUTED (or the fixture never reached the report)" \
       "value shown in the report: $(has "$c_inj" 'canary-ingress' && echo yes || echo no); created: $(find "$T/c-inj" -maxdepth 1 -name 'canary-*' 2>/dev/null | tr '\n' ' ')"
+fi
+
+# AN ADDRESS THAT CANNOT BE USED STOPS EVERY OTHER SCRIPT; THE REPORT GOES ON AND SAYS THE TRUTH.
+# `make creds` is what a reader runs to find out what is wrong, so it must still print, exit 0,
+# and say the variable is SET and not used — not that it is "not set" — without showing it.
+c_ref="$(CREDS_EXTRA_ENV="HARBOR_URL='admin:4411/SEKR@localhost'" creds_render "$T/c-ref" "localhost:$P_SS" "$T/ss.crt")"; c_ref_rc=$?
+if [ "$c_ref_rc" = 0 ] && has "$c_ref" 'NOTE: HARBOR_URL is SET in .env but NOT USED' && has "$c_ref" 'Context' \
+   && ! has "$c_ref" 'SEKR' && ! has "$c_ref" '4411' && ! command grep -qF -e 'SEKR' -e '4411' "$T/c-ref/stderr" \
+   && [ "$(command grep -c 'HARBOR_URL is set, and it cannot be used' "$T/c-ref/stderr")" = 1 ]; then
+  ok "creds: an unusable HARBOR_URL does not stop the report: exit 0, a NOTE says it is set and not used, the value is in neither stdout nor stderr"
+else
+  bad "creds: an unusable HARBOR_URL stopped the report, was called 'not set' with no note, or was printed" "rc=${c_ref_rc}; note: $(has "$c_ref" 'NOT USED' && echo yes || echo no); leaked: $( { has "$c_ref" 'SEKR' || command grep -qF 'SEKR' "$T/c-ref/stderr"; } && echo YES || echo no)"
 fi
 
 # THE REPORT'S OWN TIME LIMITS. CREDS_PROBE_TIMEOUT_SECONDS=0 used to reach `timeout` as 0 (no

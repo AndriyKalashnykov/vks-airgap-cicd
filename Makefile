@@ -171,7 +171,8 @@ _ENVMK_KIND := $(call regen_overlay_mk,.env.kind,secrets/.env.kind.make)
 # `state_set` writes exactly the SELECTOR class here — KUBECONFIG, HARBOR_URL, HARBOR_CA_FILE,
 # VKS_CONTEXT, INGRESS_CONTROLLER, ARGOCD_KUBECONFIG. MEASURED against this structure before the fix:
 #     export HARBOR_URL=harbor.OPERATOR-CHOSE-THIS   ->   HARBOR_URL=[harbor.from-STATE]
-# and it is not theoretical: `fetch-harbor-ca` passes $(HARBOR_URL)/$(HARBOR_CA_FILE) as ARGV to
+# and it is not theoretical: `fetch-harbor-ca` hands $(HARBOR_URL) (in the environment, as
+# _FETCH_CA_ENDPOINT) and $(HARBOR_CA_FILE) (as an argument) to
 # fetch-ca.sh, which deliberately does NOT call load_env — so load_env's selector snapshot cannot
 # rescue it, and the operator fetches a CA from the overlay's Harbor while believing they named
 # another. `make <target> VAR=value` still wins over both, as it should.

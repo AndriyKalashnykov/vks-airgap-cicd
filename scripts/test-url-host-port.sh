@@ -51,6 +51,9 @@ export TMPDIR="$T/tmp"; mkdir -p "$TMPDIR"
 # The load_env cases give it a sandbox REPO_ROOT whose .env is the fixture: a caller's
 # SKIP_DOTENV=1 would make it ignore that file.
 unset SKIP_DOTENV _VKS_BOUNDS_REPORTED
+# Run from `make test-scripts` this file inherits make's own environment: the pins the Makefile
+# exports to every recipe (empty when unset), MAKEFLAGS, MAKELEVEL. Each case states its inputs.
+unset HARBOR_CA_SHA256 ARGOCD_CA_SHA256 CA_VERIFY_TIMEOUT _FETCH_CA_ENDPOINT MAKEFLAGS MAKELEVEL MFLAGS
 has() { command grep -qF -- "$2" <<< "$1"; }
 SECRET='s3cr3t-must-not-appear'
 
@@ -120,8 +123,12 @@ h.example/r?u=https://u:p@evil.example|h.example/r?u=https://u:p@evil.example
 ROWS
 # A LOGIN THAT CANNOT BE READ OUT IS REFUSED, NOT HALF-STRIPPED. A password with a `/` or a `://`
 # in it leaves the `@` behind the first `/`, where it is not a login any more by the rule above:
-# the "host" is then the user name, and the password stays in the value. Such a value must be
-# told apart from an image reference with a digest, which also has an `@` after a `/`.
+# the "host" is then the user name, and the password stays in the value.
+# THE RULE HAS NO EXEMPTION: any `@` left after the strip refuses the value. The first version
+# let a "plain host[:port]" front through, to spare `host:8443/img@sha256:…`, and
+# `admin:4411/SEKR@harbor.example` has exactly that front: MEASURED, the password stayed and
+# `admin:4411` was dialled. These two variables hold a host, never an image reference, so a
+# digest reference put there is refused as well.
 while IFS='|' read -r in want what; do
   [ -n "$what" ] || continue
   if url_login_unreadable "$in"; then got=refused; else got=readable; fi
@@ -131,11 +138,15 @@ done <<'ROWS'
 u:s3cr3t/must-not-appear@h.example|refused|a password with a / in it
 u:s3cr3t://must-not-appear@h.example|refused|a password with :// in it
 https://u:s3cr3t/must-not-appear@h.example/v2/|refused|the same behind a scheme
+admin:4411/SEKR@harbor.example|refused|a password that starts with digits and a / (the front looks like host:port)
+ad:be/SEKR@harbor.example|refused|a password whose front looks like hex
+admin:SEKR@4411/x@harbor.example|refused|a password with @ and / in it (a strip would leave a piece of it)
+harbor.example/proj/img@sha256:0123abcd|refused|an image reference with a digest (not a host: refused too)
+harbor.example:8443/proj/img@sha256:0123abcd|refused|the same with a port
 h.example/r?u=https://evil.example|readable|a URL in the query, no @ at all
-harbor.example/proj/img@sha256:0123abcd|readable|an image reference with a digest (control)
-harbor.example:8443/proj/img@sha256:0123abcd|readable|the same with a port (control)
-[::1]:8443/proj/img@sha256:0123abcd|readable|the same at a bracketed IPv6 address (control)
 user:s3cr3t-must-not-appear@harbor.example:8443|readable|an ordinary login (it is stripped, not refused)
+admin:SE@KR@harbor.example:8443|readable|a password with an @ in it and no / (stripped at the LAST @)
+https://admin:SEKR@[::1]:8443/x|readable|a login before a bracketed IPv6 address
 harbor.example:8443|readable|a plain address
 ROWS
 # load_env: the variable every script reads no longer holds the login, and the one line that
@@ -153,22 +164,84 @@ else bad "load_env: the login is still in the variable (or the value was damaged
 if [ "$(command grep -c 'held a login' "$T/le.err")" = 2 ] && command grep -q "HARBOR_URL held a login" "$T/le.err" \
    && command grep -q "read as 'harbor.example:8443'" "$T/le.err" && ! command grep -qF -- "$SECRET" "$T/le.err" && ! command grep -qF 'admin:' "$T/le.err"; then
   ok "load_env: says so once per variable, shows the value it now uses, and prints no part of the login"
-else bad "load_env: the notice is missing, repeated, or prints the login" "$(command grep -c 'held a login' "$T/le.err") notice(s); secret printed: $(command grep -qF -- "$SECRET" "$T/le.err" && echo YES || echo no)"; fi
-# The three shapes that cannot be read: the variable is EMPTIED (nothing can print or dial it),
-# and the line that says so prints neither the value nor any part of it.
-for bad_url in 'u:s3cr3t/must-not-appear@h.example' 'u:s3cr3t://must-not-appear@h.example'; do
-  printf "HARBOR_URL='%s'\n" "$bad_url" > "$LE/.env"
+else
+  _printed=no; if command grep -qF -- "$SECRET" "$T/le.err"; then _printed=YES; fi
+  _n="$(command grep 'held a login' "$T/le.err" | wc -l)"
+  bad "load_env: the notice is missing, repeated, or prints the login" "${_n} notice(s); secret printed: ${_printed}"
+fi
+# THROUGH THE REAL load_env. A value that cannot be read STOPS THE SCRIPT there (it used to carry
+# on with the variable emptied, and installers then took their "not set, skipped" arms and
+# returned 0). One line says so, and neither the value nor any piece of it is printed.
+le() {  # <value for HARBOR_URL> ; sets LE_OUT (stdout), LE_RC ; stderr in $T/le.err
+  printf "HARBOR_URL='%s'\n" "$1" > "$LE/.env"
+  # The child expands its own variables (SC2016 is deliberate).
   # shellcheck disable=SC2016
-  le_out="$(env -u HARBOR_URL -u ARGOCD_SERVER -u KUBECONFIG REPO_ROOT="$LE" VKS_STATE_FILE="$LE/.env.state" \
-              bash -c '. "$1"; load_env; printf "H=[%s]\n" "$HARBOR_URL"' _ "$LIB_OS" 2>"$T/le.err")"
-  if [ "$le_out" = 'H=[]' ] && [ "$(command grep -c 'HARBOR_URL is not used' "$T/le.err")" = 1 ] \
-     && command grep -q 'A login must not be in the address' "$T/le.err" \
-     && ! command grep -qF -e 's3cr3t' -e 'must-not-appear' -e 'h.example' -e 'u:' "$T/le.err"; then
-    ok "load_env: ${bad_url//s3cr3t*must-not-appear/…} is refused: the variable is emptied, one line says so, and no part of the value is printed"
+  LE_OUT="$(env -u HARBOR_URL -u ARGOCD_SERVER -u KUBECONFIG -u _LOAD_ENV_ON_REFUSED_ADDRESS REPO_ROOT="$LE" VKS_STATE_FILE="$LE/.env.state" \
+              bash -c '. "$1"; load_env; printf "REACHED H=[%s]\n" "$HARBOR_URL"' _ "$LIB_OS" 2>"$T/le.err")"; LE_RC=$?
+}
+for bad_url in 'u:s3cr3t/must-not-appear@h.example' 'u:s3cr3t://must-not-appear@h.example' 'admin:4411/SEKR@harbor.example' \
+               'ad:be/SEKR@harbor.example' 'admin:SEKR@4411/x@harbor.example' 'harbor.example/proj/img@sha256:0123abcd' \
+               'admin:SEKR@' 'https://admin:SEKR@' 'https://admin:SEKR@/v2/'; do
+  le "$bad_url"
+  shown="${bad_url//s3cr3t*must-not-appear/…}"; shown="${shown//SEKR/…}"
+  if [ "$LE_RC" = 1 ] && [ -z "$LE_OUT" ] && [ "$(command grep -c 'HARBOR_URL is set, and it cannot be used' "$T/le.err")" = 1 ] \
+     && command grep -q 'takes a host and an optional port' "$T/le.err" \
+     && ! command grep -qF -e 's3cr3t' -e 'must-not-appear' -e 'SEKR' -e '4411' -e 'h.example' -e 'harbor.example' -e 'sha256' -e 'admin' "$T/le.err"; then
+    ok "load_env: ${shown} STOPS the script (rc 1, nothing after load_env runs), one line says why, and no part of the value is printed"
   else
-    bad "load_env: an unreadable login was kept, half-stripped or printed" "variable: '${le_out//s3cr3t/<THE SECRET>}'; notices: $(command grep -c 'is not used' "$T/le.err"); value printed: $(command grep -qF -e 's3cr3t' -e 'must-not-appear' "$T/le.err" && echo YES || echo no)"
+    _leaked=no; if command grep -qF -e 's3cr3t' -e 'SEKR' -e '4411' "$T/le.err"; then _leaked=YES; fi
+    _n="$(command grep 'cannot be used' "$T/le.err" | wc -l)"
+    bad "load_env: an address that cannot be used did not stop the script, or the value was printed" "rc=${LE_RC} reached='${LE_OUT//SEKR/<S>}' notices=${_n} leaked=${_leaked}"
   fi
 done
+# A line in .env must not be able to turn the stop into "report and go on": the two settings
+# load_env reads from the environment are read-only inside it, so such a line fails loudly.
+for planted in '_refused_mode=report' '_bounds_reported_in=x'; do
+  printf "%s\nHARBOR_URL='admin:4411/SEKR@harbor.example'\n" "$planted" > "$LE/.env"
+  # shellcheck disable=SC2016
+  LE_OUT="$(env -u HARBOR_URL -u ARGOCD_SERVER -u KUBECONFIG -u _LOAD_ENV_ON_REFUSED_ADDRESS REPO_ROOT="$LE" VKS_STATE_FILE="$LE/.env.state" \
+              bash -c '. "$1"; load_env; printf "REACHED H=[%s]\n" "$HARBOR_URL"' _ "$LIB_OS" 2>"$T/le.err")"; LE_RC=$?
+  if [ "$LE_RC" != 0 ] && [ -z "$LE_OUT" ] && command grep -q "${planted%%=*}: readonly variable" "$T/le.err" && ! command grep -qF 'SEKR' "$T/le.err"; then
+    ok "load_env: a .env line '${planted}' cannot switch the stop off: rc ${LE_RC}, bash names the read-only variable, nothing after load_env runs"
+  else
+    _leaked=no; if command grep -qF 'SEKR' "$T/le.err"; then _leaked=YES; fi
+    bad "load_env: a .env line '${planted}' was accepted" "rc=${LE_RC} reached='${LE_OUT//SEKR/<S>}' leaked=${_leaked}; $(tail -n 2 "$T/le.err" | tr '\n' ' ')"
+  fi
+done
+# What MUST still pass: an ordinary login is taken out (at the LAST @ before the first /), and the
+# notice prints nothing that came from before that @.
+while IFS='|' read -r in want; do
+  [ -n "$want" ] || continue
+  le "$in"
+  if [ "$LE_RC" = 0 ] && [ "$LE_OUT" = "REACHED H=[${want}]" ] && [ "$(command grep -c 'HARBOR_URL held a login' "$T/le.err")" = 1 ] \
+     && ! command grep -qF -e 'SEKR' -e 'SE@' -e 'KR@' -e 'admin' "$T/le.err"; then
+    ok "load_env: ${in//SEKR/…} -> ${want}, one notice, nothing from before the @ printed"
+  else
+    bad "load_env: an ordinary login was not stripped cleanly" "rc=${LE_RC} out='${LE_OUT//SEKR/<S>}' leaked=$(command grep -qF -e 'SEKR' -e 'admin' "$T/le.err" && echo YES || echo no)"
+  fi
+done <<'ROWS'
+admin:SEKR@h.example|h.example
+admin:SE@KR@h.example:8443|h.example:8443
+https://admin:SEKR@[::1]:8443/x|https://[::1]:8443/x
+ROWS
+# AN INSTALLER DIES BEFORE IT DOES ANYTHING. 40-install-gitea.sh used to take "HARBOR_URL is not
+# set" arms on an emptied variable. kubectl and helm here are stand-ins that only record a call.
+INS="$T/ins"; mkdir -p "$INS/bin" "$INS/root"
+cp "${REPO}/.env.example" "$INS/root/.env.example"
+printf "HARBOR_URL='admin:4411/SEKR@harbor.example'\n" > "$INS/root/.env"
+for tool in kubectl helm; do
+  # The stub's own "$*" is written literally (SC2016 is deliberate).
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >> "%s"\nexit 1\n' "$tool" "$INS/calls.log" > "$INS/bin/$tool"; chmod +x "$INS/bin/$tool"
+done
+: > "$INS/calls.log"
+ins_out="$(env -u HARBOR_URL -u KUBECONFIG -u _LOAD_ENV_ON_REFUSED_ADDRESS PATH="$INS/bin:$PATH" REPO_ROOT="$INS/root" VKS_STATE_FILE="$INS/root/.env.state" \
+             timeout 60 bash "${REPO}/scripts/40-install-gitea.sh" 2>&1 </dev/null)"; ins_rc=$?
+if [ "$ins_rc" != 0 ] && has "$ins_out" 'HARBOR_URL is set, and it cannot be used' && [ ! -s "$INS/calls.log" ] && ! has "$ins_out" 'SEKR' && ! has "$ins_out" '4411'; then
+  ok "an installer (40-install-gitea.sh) with an unusable HARBOR_URL stops inside load_env: rc ${ins_rc}, no kubectl or helm call, the value not printed"
+else
+  bad "an installer carried on (or printed the value) with an address that cannot be used" "rc=${ins_rc}; cluster calls made: $(wc -l < "$INS/calls.log"); $(printf '%s' "${ins_out//SEKR/<S>}" | tail -1 | cut -c1-160)"
+fi
 # `h.example/r?u=https://evil.example`: nothing to strip, nothing to refuse, and the host is h.example.
 printf "HARBOR_URL='h.example/r?u=https://evil.example'\n" > "$LE/.env"
 # shellcheck disable=SC2016
@@ -226,9 +299,13 @@ else bad "fetch-ca.sh: the login broke the fetch or was printed" "$(printf '%s' 
 # The fetch refuses the unreadable shapes too (it takes its address as an argument, not from
 # load_env), before it dials anything, and prints no part of the value.
 f_out="$(timeout -k 2 20 bash "${REPO}/scripts/fetch-ca.sh" 'u:s3cr3t/must-not-appear@localhost' "$T/out-unreadable.crt" harbor </dev/null 2>&1)"; f_rc=$?
-if [ "$f_rc" = 1 ] && has "$f_out" 'the harbor address is not used' && ! has "$f_out" 's3cr3t' && ! has "$f_out" 'must-not-appear' && ! has "$f_out" 'fetching the' && [ ! -e "$T/out-unreadable.crt" ]; then
+if [ "$f_rc" = 1 ] && has "$f_out" 'the harbor address cannot be used' && ! has "$f_out" 's3cr3t' && ! has "$f_out" 'must-not-appear' && ! has "$f_out" 'fetching the' && [ ! -e "$T/out-unreadable.crt" ]; then
   ok "fetch-ca.sh: an address whose login cannot be read out is refused before any dial, and no part of it is printed"
 else bad "fetch-ca.sh: an unreadable login was dialled or printed" "rc=${f_rc}: $(printf '%s' "${f_out//s3cr3t/<THE SECRET>}" | head -2 | cut -c1-160)"; fi
+f_out="$(timeout -k 2 20 bash "${REPO}/scripts/fetch-ca.sh" 'admin:4411/SEKR@localhost' "$T/out-unreadable2.crt" harbor </dev/null 2>&1)"; f_rc=$?
+if [ "$f_rc" = 1 ] && has "$f_out" 'the harbor address cannot be used' && ! has "$f_out" 'SEKR' && ! has "$f_out" '4411' && ! has "$f_out" 'fetching the' && [ ! -e "$T/out-unreadable2.crt" ]; then
+  ok "fetch-ca.sh: admin:4411/…@host (a front that looks like host:port) is refused before any dial, nothing of it printed"
+else bad "fetch-ca.sh: a login with a host:port-looking front was dialled or printed" "rc=${f_rc}: $(printf '%s' "${f_out//SEKR/<S>}" | head -2 | cut -c1-160)"; fi
 
 # THE ADDRESS NEVER RIDES ON A COMMAND LINE THROUGH make. The two fetch recipes pasted it into the
 # recipe (`fetch-ca.sh "$(HARBOR_URL)" …`), so it was in the argv of the recipe's shell and of the

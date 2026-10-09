@@ -47,9 +47,9 @@ unset _FETCH_CA_ENDPOINT
 # A login in the address that cannot be read out cleanly (a password with a `/` or `://` in it):
 # refuse, and print no part of the value. lib/os.sh url_login_unreadable has the shapes.
 if url_login_unreadable "$EP"; then
-  die "the ${LABEL} address is not used: it holds an @ that cannot be read as a plain login before the
-  host, so it is not dialled and not printed. A login must not be in the address: give only the
-  host (and port)."
+  die "the ${LABEL} address cannot be used: after the host it still holds an @, which is what a login
+  with a / or :// in its password looks like (or an image reference with a digest). It is not
+  printed and not dialled. Give a host and an optional port, nothing else."
 fi
 # This script does not call load_env, so the one check of the time limit it uses is made here, in
 # its main shell: an unusable CA_VERIFY_TIMEOUT is reported once, on this script's own stderr.

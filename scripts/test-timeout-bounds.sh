@@ -29,6 +29,18 @@
 #      three runner lines; every variable named at a runner is one bounds_normalize knows; and no
 #      marker-file path is left in the tree. Derived by grep, with a planted control and floors.
 #
+# WHAT THE GATE (6) CATCHES, AND ITS NAMED BLIND SPOTS. It catches the literal command word
+# `timeout` whose duration operand holds a `$`: quoted or bare, after any of timeout's own flags,
+# inside `$( )`, a `( )` subshell or an array, and with the operand on a continuation line.
+# It does NOT catch, and nothing else does either:
+#   * another spelling of the program: `gtimeout "$X" …`, `"timeout" "$X" …`, `command timeout`
+#     is caught but `\timeout` is not;
+#   * the program held in a variable: `T=timeout; $T "$X" …`;
+#   * a duration that reaches timeout through a function argument the scan cannot follow
+#     (`mywrap "$X" …` where mywrap runs `timeout "$1"`: it would flag the `"$1"` line, not the caller);
+#   * anything built by eval.
+# So a green here means "no line of that shape", not "no variable can reach timeout".
+#
 # DOES NOT PROVE: that a bound is the right LENGTH for any command; that `--foreground` is safe
 # for a command nobody has listed as child-free (the rule is in the runners' header in lib/os.sh);
 # or anything under a decimal-comma locale (no such locale is installed here: the `LC_ALL=C` on
@@ -146,6 +158,58 @@ got="$(LIB="$LIB_OS" CHILD="$T/child.sh" CERR="$T/child.err" fresh 'export B_T=0
 if [ "$got" = 4 ] && [ "$(command grep -c 'B_T=' "$T/err")" = 1 ] && [ ! -s "$T/child.err" ]; then
   ok "bounds_normalize: a child script normalises the same raw value again and prints nothing (the parent already said it)"
 else bad "bounds_normalize: the child repeated the warning, or did not normalise" "child printed '${got}', child stderr: $(head -1 "$T/child.err" 2>/dev/null | cut -c1-100)"; fi
+# IFS IS THE CALLER'S BUSINESS, NOT THE REGISTRY'S. Under IFS=$'\n' the registry used to arrive
+# as ONE word per line ("CA_VERIFY_TIMEOUT 15") and bash died on "invalid variable name" inside
+# load_env; under `set -e` that ended the script.
+# shellcheck disable=SC2016
+got="$(CREDS_K8S_TIMEOUT=0 CA_VERIFY_TIMEOUT=1m fresh 'set -e; IFS=$'"'"'\n'"'"'; bounds_normalize; printf "%s|%s" "$CREDS_K8S_TIMEOUT" "$CA_VERIFY_TIMEOUT"')"; got_rc=$?
+if [ "$got_rc" = 0 ] && [ "$got" = '10|60' ] && ! command grep -q 'invalid variable name' "$T/err"; then
+  ok "bounds_normalize: works under the caller's IFS=\$'\\n' and set -e (it splits its registry itself)"
+else bad "bounds_normalize: the caller's IFS broke it" "rc=${got_rc} got '${got}': $(command grep -m1 -E 'invalid|line' "$T/err" | cut -c1-120)"; fi
+# THE "ALREADY REPORTED" LIST CANNOT BE FORGED. It is believed only from this process or an
+# ancestor (it carries the reporter's pid), so a value some other shell left exported, or one
+# with a made-up pid, silences nothing.
+# shellcheck disable=SC2016
+got="$(_VKS_BOUNDS_REPORTED='999999 B_T' fresh 'B_T=0; bounds_normalize B_T 4; printf "%s" "$B_T"')"
+if [ "$got" = 4 ] && [ "$(command grep -c 'B_T=' "$T/err")" = 1 ]; then ok "bounds_normalize: a reported-list naming a pid that is not an ancestor is ignored (the warning is printed)"
+else bad "bounds_normalize: a forged reported-list silenced the warning" "$(command grep -c 'B_T=' "$T/err") line(s)"; fi
+# shellcheck disable=SC2016
+got="$(_VKS_BOUNDS_REPORTED='B_T' fresh 'B_T=0; bounds_normalize B_T 4; printf "%s" "$B_T"')"
+if [ "$got" = 4 ] && [ "$(command grep -c 'B_T=' "$T/err")" = 1 ]; then ok "bounds_normalize: a reported-list with no pid at all is ignored"
+else bad "bounds_normalize: a pid-less reported-list silenced the warning" "$(command grep -c 'B_T=' "$T/err") line(s)"; fi
+# ...and NOT FROM A FILE, even one that names a REAL ancestor. The pid written into the two files
+# below is THIS test's own, which IS an ancestor of the script that then calls load_env, so the
+# pid check alone would believe it: what stops it is that load_env puts back what the environment
+# held before it sourced any file. (A made-up pid, or pid 1, is already refused by the pid check;
+# a case with those would pass with the put-back removed and prove nothing about it.)
+LF="$T/forge"; mkdir -p "$LF"
+cp "${REPO}/.env.example" "$LF/.env.example"
+printf '_VKS_BOUNDS_REPORTED="%s CREDS_K8S_TIMEOUT CA_VERIFY_TIMEOUT"\nCREDS_K8S_TIMEOUT=0\n' "$$" > "$LF/.env"
+printf '_VKS_BOUNDS_REPORTED="%s CREDS_K8S_TIMEOUT CA_VERIFY_TIMEOUT"\nCA_VERIFY_TIMEOUT=never\n' "$$" > "$LF/.env.state"
+# shellcheck disable=SC2016
+got="$(env -u CREDS_K8S_TIMEOUT -u CA_VERIFY_TIMEOUT -u KUBECONFIG -u _VKS_BOUNDS_REPORTED REPO_ROOT="$LF" VKS_STATE_FILE="$LF/.env.state" \
+         bash -c '. "$1"; load_env; printf "%s|%s" "$CREDS_K8S_TIMEOUT" "$CA_VERIFY_TIMEOUT"' _ "$LIB_OS" 2>"$T/err")"
+if [ "$got" = '10|15' ] && [ "$(command grep -c "CREDS_K8S_TIMEOUT='0' is not a usable time limit" "$T/err")" = 1 ] \
+   && [ "$(command grep -c "CA_VERIFY_TIMEOUT='never' is not a usable time limit" "$T/err")" = 1 ]; then
+  ok "load_env: the reported-list planted in .env and in the state overlay silences nothing (both warnings are printed)"
+else bad "load_env: a reported-list written into a file switched the warning off" "values '${got}'; warnings: $(command grep -c 'usable time limit' "$T/err")"; fi
+
+# AN ATTEMPT COUNT IS NOT A DURATION. ARGOCD_REPO_TIMEOUT_SECONDS is validated by its consumer as a
+# positive integer ("must be a positive integer"); when it was in the registry, load_env rewrote
+# 0 and abc to 180 before that guard could refuse them. It must come through load_env UNTOUCHED.
+printf 'ARGOCD_REPO_TIMEOUT_SECONDS=0\n' > "$LF/.env"; : > "$LF/.env.state"
+# shellcheck disable=SC2016
+got="$(env -u ARGOCD_REPO_TIMEOUT_SECONDS -u KUBECONFIG REPO_ROOT="$LF" VKS_STATE_FILE="$LF/.env.state" \
+         bash -c '. "$1"; load_env; printf "%s" "$ARGOCD_REPO_TIMEOUT_SECONDS"' _ "$LIB_OS" 2>"$T/err")"
+if [ "$got" = 0 ] && ! command grep -q 'ARGOCD_REPO_TIMEOUT_SECONDS' "$T/err" && ! command grep -q '^ARGOCD_REPO_TIMEOUT_SECONDS ' <<< "$BOUND_VARIABLES"; then
+  ok "load_env: ARGOCD_REPO_TIMEOUT_SECONDS (an attempt count with its own strict check) is not in the registry and arrives untouched"
+else bad "load_env: an integer knob was rewritten by the duration registry" "arrived as '${got}'"; fi
+# Under `set -u` with nothing reported yet (the list unset): every script that calls load_env
+# runs that way, and the first version of the pid check read the unset variable and died.
+# shellcheck disable=SC2016
+got="$(env -u _VKS_BOUNDS_REPORTED B_T=0 bash -c 'set -euo pipefail; . "$1"; bounds_normalize B_T 4; printf "%s" "$B_T"' _ "$LIB_OS" 2>"$T/err")"; got_rc=$?
+if [ "$got_rc" = 0 ] && [ "$got" = 4 ] && ! command grep -q 'unbound variable' "$T/err"; then ok "bounds_normalize: works under set -euo pipefail with nothing reported yet"
+else bad "bounds_normalize: dies under set -u" "rc=${got_rc}: $(command grep -m1 'unbound' "$T/err" | cut -c1-120)"; fi
 # With no arguments it takes the registry: every operator-settable limit, each to its own default.
 # shellcheck disable=SC2016
 got="$(CA_VERIFY_TIMEOUT=0 CREDS_PROBE_TIMEOUT_SECONDS=1m CREDS_K8S_TIMEOUT=never fresh 'bounds_normalize; printf "%s|%s|%s|%s" "$CA_VERIFY_TIMEOUT" "$CREDS_PROBE_TIMEOUT_SECONDS" "$CREDS_K8S_TIMEOUT" "${CREDS_KUBE_TIMEOUT_SECONDS-UNSET}"')"
@@ -249,6 +313,7 @@ MARK='# bounded-runner'
 scan() {  # <dir> ; prints file:line:text for every offending line
   find "$1" -name '*.sh' ! -name 'test-*.sh' -print0 | xargs -0 awk -v mark="$MARK" '
     function check(rest,    n, tok, i, flag) {
+      sub(/^[[:space:]]+/, "", rest)
       n = split(rest, tok, /[[:space:]]+/); i = 1
       while (i <= n && tok[i] ~ /^-/) {
         flag = tok[i]; i++
@@ -256,20 +321,32 @@ scan() {  # <dir> ; prints file:line:text for every offending line
       }
       return (i <= n && tok[i] ~ /\$/)
     }
-    FNR == 1 { lineno = 0 }
-    { lineno++ }
-    /^[[:space:]]*#/ { next }
-    index($0, mark) { next }
-    {
-      s = $0
-      while (match(s, /(^|[^-A-Za-z0-9_.])timeout[[:space:]]+/)) {
+    # quotes(s): how many double quotes are in s. An odd number means "inside a string".
+    function quotes(s,    t) { t = s; return gsub(/"/, "", t) }
+    function judge(text, first,    s, pre, rest, prose) {
+      if (text ~ /^[[:space:]]*#/) return
+      if (index(text, mark)) return
+      s = text
+      while (match(s, /(^|[^-A-Za-z0-9_.])timeout([[:space:]]+|$)/)) {
         pre = substr(s, 1, RSTART + RLENGTH - 1); rest = substr(s, RSTART + RLENGTH)
-        sub(/timeout[[:space:]]+$/, "", pre)
-        prose = (pre ~ /(^|[^$=])\($/)
-        if (!prose && check(rest)) { printf "%s:%d:%s\n", FILENAME, lineno, $0; break }
+        sub(/timeout[[:space:]]*$/, "", pre)
+        # `(timeout` is a word in a SENTENCE only when it sits inside a quoted string and is not a
+        # command substitution: "waiting (timeout ${X}s)". `$(timeout`, `=(timeout` and a bare
+        # `(timeout "$X" cmd)` subshell are code.
+        prose = (pre ~ /\($/ && pre !~ /[$=]\($/ && quotes(pre) % 2 == 1)
+        if (!prose && check(rest)) { printf "%s:%d:%s\n", FILENAME, first, text; return }
         s = rest
       }
-    }'
+    }
+    FNR == 1 { if (buf != "") judge(buf, start); buf = ""; }
+    {
+      # A line ending in a backslash continues: the duration may be on the NEXT line.
+      if (buf == "") start = FNR
+      line = $0
+      if (line ~ /\\$/) { sub(/\\$/, " ", line); buf = buf line; next }
+      buf = buf line; judge(buf, start); buf = ""
+    }
+    END { if (buf != "") judge(buf, start) }'
 }
 hits="$(scan "${REPO}/scripts")"
 n_files="$(find "${REPO}/scripts" -name '*.sh' ! -name 'test-*.sh' | wc -l | tr -d ' ')"
@@ -295,13 +372,17 @@ mkdir -p "$T/plant"
   printf 'timeout "${SOME_TIMEOUT:-3}" kubectl get ns\n'
   printf 'x="$(timeout "$SOME_TIMEOUT" getent hosts h)"\n'
   printf 'timeout $SOME_TIMEOUT true\n'
-  printf 'timeout -k 2 "${A:-${B:-10}}" \\\n'
+  printf 'timeout -k 2 "${A:-${B:-10}}" kubectl get ns\n'
   printf 'KUBECONFIG="$kc" timeout --foreground "${SOME_TIMEOUT}" kubectl version\n'
   printf 'timeout -s KILL "$SOME_TIMEOUT" kubectl get ns\n'
   printf 'timeout ${SOME_TIMEOUT}s kubectl get ns\n'
   printf 'timeout $((SOME_TIMEOUT)) kubectl get ns\n'
   printf 't=(timeout "$SOME_TIMEOUT"); "${t[@]}" kubectl get ns\n'
   printf 'timeout --signal KILL --kill-after 2 "$SOME_TIMEOUT" true\n'
+  printf '(timeout "$SOME_TIMEOUT" kubectl get ns)\n'
+  printf '( cd /tmp && timeout "$SOME_TIMEOUT" kubectl get ns ) || true\n'
+  printf 'out="$(timeout \\\n'
+  printf '         "${SOME_TIMEOUT:-3}" kubectl get ns)"\n'
 } > "$T/plant/caught.sh"
 # shellcheck disable=SC2016
 {
@@ -309,6 +390,9 @@ mkdir -p "$T/plant"
   printf 'timeout -s KILL 15 openssl s_client -connect "$h"\n'
   printf 'helm upgrade --wait --timeout "${READY_TIMEOUT_SECONDS}s"\n'
   printf 'log_info "waiting (timeout ${READY_TIMEOUT_SECONDS}s)"\n'
+  printf 'echo "it took too long (timeout $LIMIT reached), giving up"\n'
+  printf 'log_info "a long line \\\n'
+  printf '          (timeout ${X}s)"\n'
   printf 'curl --connect-timeout "${X:-5}" https://h\n'
   printf '_sup_timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl get ns\n'
   printf '  # timeout "$X" would be wrong here\n'
@@ -317,9 +401,9 @@ mkdir -p "$T/plant"
 } > "$T/plant/clean.sh"
 n_caught="$(scan "$T/plant" | command grep -c 'caught.sh' || true)"
 n_clean="$(scan "$T/plant" | command grep -c 'clean.sh' || true)"
-if [ "$n_caught" = 10 ] && [ "$n_clean" = 0 ]; then
-  ok "gate control: all 10 planted raw forms are caught (quoted, bare, -s KILL, \${X}s, \$((X)), an array) and none of the 9 legitimate lines is"
-else bad "gate control: the scan is wrong" "caught ${n_caught} of 10 raw forms; flagged ${n_clean} of 9 legitimate lines: $(scan "$T/plant" | sed "s#$T/plant/##" | cut -c1-70 | tr '\n' ';')"; fi
+if [ "$n_caught" = 13 ] && [ "$n_clean" = 0 ]; then
+  ok "gate control: all 13 planted raw forms are caught (quoted, bare, -s KILL, \${X}s, \$((X)), an array, a ( ) subshell, the operand on a continuation line) and none of the 11 legitimate lines is"
+else bad "gate control: the scan is wrong" "caught ${n_caught} of 13 raw forms; flagged ${n_clean} of 11 legitimate lines: $(scan "$T/plant" | sed "s#$T/plant/##" | cut -c1-70 | tr '\n' ';')"; fi
 
 # EVERY VARIABLE NAMED AT A RUNNER IS ONE bounds_normalize KNOWS. A new knob that is handed to a
 # runner but missing from the registry would be clamped in silence: the defect this file is about.

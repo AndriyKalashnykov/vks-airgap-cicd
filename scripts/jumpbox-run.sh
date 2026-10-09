@@ -302,8 +302,15 @@ if [ -n "${VCF_CLI_SRC_DIR:-}" ] && [ -d "${VCF_CLI_SRC_DIR}" ] && [ -n "$(ls -A
   export PATH="${HOME}/.local/bin:${PATH}"; hash -r
   echo "installed lab CLIs:"
   argocd version --client 2>&1 | head -1
-  vcf version 2>&1 | head -1
-  vcf plugin list 2>&1 | tail -6
+  # `vcf` THROUGH load_env, in a subshell: this script does not call load_env itself, and every
+  # vcf command first tries to install its "essentials" plugin group. Which group is a setting
+  # in .env.example (VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION) that only load_env exports; run
+  # bare, a v9.1.1 CLI asked for v9.0.2 and printed a failed telemetry-plugin download here.
+  ( # shellcheck source=scripts/lib/os.sh
+    . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/os.sh"
+    load_env
+    vcf version 2>&1 | head -1
+    vcf plugin list 2>&1 | tail -6 )
 else
   echo "### 4/4 VCF lab CLIs SKIPPED (no VCF_CLI_SRC_DIR mounted — set JUMPBOX_VCF_SRC) ###"
 fi

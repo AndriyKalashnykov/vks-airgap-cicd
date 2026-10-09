@@ -473,6 +473,7 @@ printf 'stand-in anchor\n' > "$L/anchor.crt"
 cat > "$L/bin/vcf" <<STUB
 #!/bin/sh
 printf 'vcf %s\n' "\$*" >> "$L/vcf.log"
+printf 'group=%s\n' "\${VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION-UNSET}" >> "$L/vcf.group"
 case "\$1 \$2" in "context delete") exit 0 ;; "context create") echo "Logged in successfully." >&2; exit 0 ;; esac
 exit 1
 STUB
@@ -515,7 +516,16 @@ login() {  # login <s_client transcript> <anchor subject> <endpoint issuer> [tra
 }
 # CONTROL first: with an anchor that verifies, the login goes on to `vcf context create`. Without
 # this, "vcf was never called" below would also be true of a script that died for any other reason.
+: > "$L/vcf.group"
 out="$(login "$SC_OK" 'CN=CA' 'CN=CA')"; rc=$?
+# EVERY vcf THE LOGIN RUNS IS TOLD WHICH ESSENTIALS PLUGIN GROUP TO USE (.env.example's value,
+# exported by load_env; the harness passes a clean environment, so nothing else can supply it).
+# Left to itself a v9.1.1 CLI asks for a group whose telemetry plugin is not published, and
+# every login printed a failed download.
+_grp_want="group=$(command grep -E '^VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION=' "$L/repo/.env.example" | head -1 | cut -d= -f2-)"
+if [ -s "$L/vcf.group" ] && [ "$_grp_want" != 'group=' ] && [ "$(sort -u "$L/vcf.group")" = "$_grp_want" ]; then
+  ok "login: every vcf command it ran ($(command grep -c . "$L/vcf.group")) had VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION set to .env.example's value"
+else bad "login: a vcf command ran without the essentials plugin group set (wanted '${_grp_want}', saw: $(sort -u "$L/vcf.group" 2>/dev/null | tr '\n' ' '))"; fi
 if command grep -q '^vcf context create ' "$L/vcf.log" && ! has "$out" 'does NOT verify'; then ok "login control: an anchor that verifies -> the login proceeds to vcf context create (rc=$rc)"
 else bad "login control: with a verifying anchor the stand-in login did not reach vcf context create (rc=$rc) — the cases below are vacuous"; fi
 

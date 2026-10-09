@@ -94,10 +94,19 @@ if [ "${n_keys:-0}" -eq 0 ]; then
   bad "found NO commented timing keys — the predicate has gone blind; do not read the ok's below as coverage"
 else
   ok "probing $n_keys commented timing key(s)"
+  # THE OVERRIDE VALUE MUST BE ONE EVERY KEY ACCEPTS. It was 99999 for all of them. load_env now
+  # also CHECKS the keys that are time limits handed to `timeout` (bounds_normalize, lib/os.sh):
+  # more than a day is refused there and replaced by the key's default, so 99999 read back as
+  # '15' / '3' / '10' and this test called a refusal a clobber. That is the instrument, not the
+  # property: 77 is a usable value for every key (seconds, a count, an interval alike).
+  # IT MUST ALSO DIFFER FROM THE KEY'S OWN DEFAULT, or "it survived" and "it was reset to the
+  # default" look the same. Derived per key from the commented line; 78 where the default is 77.
   while IFS= read -r k; do
     [ -n "$k" ] || continue
-    got="$(effective "$k" 99999)"
-    [ "$got" = 99999 ] && continue
+    ov=77
+    if grep -qE "^#[[:space:]]*${k}=77([^0-9]|\$)" "$ENV_EXAMPLE"; then ov=78; fi
+    got="$(effective "$k" "$ov")"
+    [ "$got" = "$ov" ] && continue
     bad "\$$k override was CLOBBERED -> '$got' (uncommented in .env.example?)"
   done <<< "$keys"
   [ "$FAIL" -eq 0 ] && ok "all $n_keys survived a command-line override"

@@ -119,7 +119,14 @@ _sup_timeout() {
 # Silence the internal state-stamp warning for this report only: it names .env.state and its
 # "stamp", which is maintainer vocabulary, and the Context block below already states the same
 # fact in plain English. Every other caller of load_env still gets the warning.
-load_env 2> >(grep -v "does not record which cluster it belongs to" >&2)
+# _LOAD_ENV_ON_REFUSED_ADDRESS=report: an address in .env that cannot be used (a login typed into
+# HARBOR_URL that cannot be taken out) STOPS every other script inside load_env. This one is the
+# read-only report a reader runs to find out what is wrong, so it goes on, and says below that
+# the variable is set and not used — never that it is "not set".
+_LOAD_ENV_ON_REFUSED_ADDRESS=report load_env 2> >(grep -v "does not record which cluster it belongs to" >&2)
+for _refused in ${_ENV_REFUSED_ADDRESSES:-}; do
+  printf 'NOTE: %s is SET in .env but NOT USED: it holds an @ after the host (a login with a / or :// in its password looks like that). It is not shown here. Rows below that depend on it read as if it were not set; every other command stops on it until it is corrected.\n' "$_refused"
+done
 # THE TIME LIMITS THIS REPORT IS BUILT ON ARE CHECKED BY load_env ITSELF now (bounds_normalize,
 # lib/os.sh, its last step): the three lines that did it here moved there, so every script gets
 # the same check in its own main shell. What they did, and still happens above:
