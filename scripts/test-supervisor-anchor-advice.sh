@@ -340,15 +340,20 @@ if hasflat "$b" "The Supervisor ${HOST} answers, and the CA stored at ./secrets/
    && hasflat "$b" "the certificate has expired (or is not valid yet), or this machine's clock is wrong"; then
   ok "dates: says the stored CA is the right one and the certificate's dates are not valid on this machine"
 else bad "dates: the banner does not name the cause (right CA, dates not valid here: expired or wrong clock)"; fi
-if hasline "$b" '       date -u' \
-   && hasline "$b" "       openssl s_client -connect ${HOST}:443 -servername ${HOST} </dev/null 2>/dev/null | openssl x509 -noout -dates"; then
-  ok "dates: prints the two commands to compare, with the real endpoint"
-else bad "dates: the two commands (date -u, and s_client | openssl x509 -noout -dates) are missing"; fi
+# ONE WORDING for this situation since supervisor_dates_how became tls_cert_dates_advice for the
+# Supervisor (lib/tls.sh). These two assertions used to pin a text of its own: two commands for
+# the reader to run and compare, ending "Do NOT re-fetch or re-pin the CA". The shared text READS
+# the dates itself and shows them with this machine's clock; the pins are turned to it on purpose.
+if hasflat "$b" "The CA file is the right one: with the dates ignored, it verifies the certificate ${HOST} presents." \
+   && has "$b" 'valid from:' && has "$b" 'valid until:' && has "$b" "this machine's clock (date -u):" \
+   && hasflat "$b" 'whoever operates the Supervisor has to renew it.'; then
+  ok "dates: the shared dates text, for the Supervisor: the certificate's two dates, this machine's clock, who renews"
+else bad "dates: the shared dates text (valid from / valid until / this machine's clock / who renews) is missing"; fi
 if has "$b" "$RENEW" || has "$b" 'fetch-supervisor-ca' || has "$b" 'DIFFERENT Supervisor' || has "$b" "$LAB_UP"; then
   bad "dates: offers a renew, a re-pin, 'different Supervisor' or '$LAB_UP' for a clock/expiry problem"
 else ok "dates: no renew command, no re-pin, no 'different Supervisor', no '$LAB_UP'"; fi
-if hasflat "$b" 'Do NOT re-fetch or re-pin the CA: it is the right one.'; then ok "dates: says not to re-fetch or re-pin the CA"
-else bad "dates: does not say the CA must NOT be re-fetched or re-pinned"; fi
+if hasflat "$b" 'Do NOT replace the CA file.' && ! hasflat "$b" 'whoever operates Harbor'; then ok "dates: says not to replace the CA file, and it is the Supervisor's text, not Harbor's"
+else bad "dates: does not say the CA file must NOT be replaced (or it is Harbor's text)"; fi
 # One `<` is legitimate here, and only here: the `</dev/null` redirect inside the pasteable command.
 if command grep -q '[<>]' <<< "${b//<\/dev\/null 2>\/dev\/null/}"; then bad "dates: a <placeholder> is printed in the banner"
 else ok "dates: no <placeholder> in the banner"; fi
@@ -468,6 +473,7 @@ printf 'stand-in anchor\n' > "$L/anchor.crt"
 cat > "$L/bin/vcf" <<STUB
 #!/bin/sh
 printf 'vcf %s\n' "\$*" >> "$L/vcf.log"
+printf 'group=%s\n' "\${VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION-UNSET}" >> "$L/vcf.group"
 case "\$1 \$2" in "context delete") exit 0 ;; "context create") echo "Logged in successfully." >&2; exit 0 ;; esac
 exit 1
 STUB
@@ -510,7 +516,16 @@ login() {  # login <s_client transcript> <anchor subject> <endpoint issuer> [tra
 }
 # CONTROL first: with an anchor that verifies, the login goes on to `vcf context create`. Without
 # this, "vcf was never called" below would also be true of a script that died for any other reason.
+: > "$L/vcf.group"
 out="$(login "$SC_OK" 'CN=CA' 'CN=CA')"; rc=$?
+# EVERY vcf THE LOGIN RUNS IS TOLD WHICH ESSENTIALS PLUGIN GROUP TO USE (.env.example's value,
+# exported by load_env; the harness passes a clean environment, so nothing else can supply it).
+# Left to itself a v9.1.1 CLI asks for a group whose telemetry plugin is not published, and
+# every login printed a failed download.
+_grp_want="group=$(command grep -E '^VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION=' "$L/repo/.env.example" | head -1 | cut -d= -f2-)"
+if [ -s "$L/vcf.group" ] && [ "$_grp_want" != 'group=' ] && [ "$(sort -u "$L/vcf.group")" = "$_grp_want" ]; then
+  ok "login: every vcf command it ran ($(command grep -c . "$L/vcf.group")) had VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION set to .env.example's value"
+else bad "login: a vcf command ran without the essentials plugin group set (wanted '${_grp_want}', saw: $(sort -u "$L/vcf.group" 2>/dev/null | tr '\n' ' '))"; fi
 if command grep -q '^vcf context create ' "$L/vcf.log" && ! has "$out" 'does NOT verify'; then ok "login control: an anchor that verifies -> the login proceeds to vcf context create (rc=$rc)"
 else bad "login control: with a verifying anchor the stand-in login did not reach vcf context create (rc=$rc) — the cases below are vacuous"; fi
 
@@ -556,10 +571,11 @@ if [ "$rc" != 0 ] && hasflat "$out" "is the RIGHT anchor for ${HOST}, but the ce
 else bad "login dates: an expired certificate under the right anchor must stop with the dates message (rc=$rc)"; fi
 if [ ! -s "$L/vcf.log" ] && has "$out" 'No password was sent.'; then ok "login dates: vcf was never run, and the message says no password was sent"
 else bad "login dates: vcf ran before the refusal, or the message does not say no password was sent"; fi
-if hasline "$out" '    date -u' \
-   && hasline "$out" "    openssl s_client -connect ${HOST}:443 -servername ${HOST} </dev/null 2>/dev/null | openssl x509 -noout -dates"; then
-  ok "login dates: prints the two commands to compare, with the real endpoint"
-else bad "login dates: the two commands are missing from the refusal"; fi
+if hasflat "$out" "The CA file is the right one: with the dates ignored, it verifies the certificate ${HOST} presents." \
+   && has "$out" 'valid from:' && has "$out" "this machine's clock (date -u):" \
+   && hasflat "$out" 'whoever operates the Supervisor has to renew it. Do NOT replace the CA file.'; then
+  ok "login dates: the shared dates text, for the Supervisor (the same one the report prints)"
+else bad "login dates: the shared dates text is missing from the refusal"; fi
 if has "$out" 'does NOT verify' || has "$out" 'fetch-supervisor-ca' || has "$out" 'DESTROYED and rebuilt'; then
   bad "login dates: blames a different Supervisor / offers a re-pin for a clock or expiry problem"
 else ok "login dates: no 'different Supervisor', no re-pin"; fi
@@ -605,7 +621,8 @@ for f in scripts/30-vks-login.sh scripts/creds.sh; do
 done
 if [ "$(command grep -c '^supervisor_anchor_verdict() {' scripts/lib/tls.sh)" = 1 ] \
    && [ "$(command grep -c '^supervisor_repin_how() {' scripts/lib/os.sh)" = 1 ] \
-   && [ "$(command grep -c '^supervisor_dates_how() {' scripts/lib/os.sh)" = 1 ]; then
+   && [ "$(command grep -c '^supervisor_dates_how() {' scripts/lib/tls.sh)" = 1 ] \
+   && [ "$(command grep -c '^supervisor_dates_how() {' scripts/lib/os.sh)" = 0 ]; then
   ok "shared: each helper is defined exactly once"
 else bad "shared: supervisor_anchor_verdict / supervisor_repin_how / supervisor_dates_how is not defined exactly once"; fi
 

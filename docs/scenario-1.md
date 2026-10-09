@@ -779,6 +779,7 @@ unauthenticated endpoint, so no login is needed.
 | `HARBOR_URL` | `harbor.env1.lab.test` | Step 4 |
 
 ```bash
+rm -f ./secrets/harbor-ca.download.crt
 set -a; . ./.env; set +a
 tmp=$(mktemp -d)
 code=$(curl -sk --max-time 20 -o "$tmp/ca.crt" -w '%{http_code}' \
@@ -788,8 +789,6 @@ if [ "${code:-000}" = 000 ]; then
 elif [ "$code" != 200 ]; then
   echo "Harbor answered (HTTP ${code}) but does not publish its CA there — use an alternative below"
 else
-  # HARBOR_URL is a BARE host (Step 4 says so), and `s_client -connect` needs host:PORT —
-  # given a bare host it silently tries port 4433 and stalls until the kernel gives up (~2 min).
   hostport="$HARBOR_URL"; case "$hostport" in *:*) ;; *) hostport="${hostport}:443" ;; esac
   timeout 15 openssl s_client -connect "$hostport" -servername "${HARBOR_URL%%:*}" </dev/null 2>/dev/null \
     | openssl x509 > "$tmp/harbor.crt" 2>/dev/null
@@ -800,7 +799,7 @@ else
     echo "    env | grep -i _proxy"
     echo "or a stray '/' or space in HARBOR_URL."
   elif openssl verify -CAfile "$tmp/ca.crt" "$tmp/harbor.crt"; then
-    install -m0644 "$tmp/ca.crt" ./secrets/harbor-ca.crt
+    install -m0644 "$tmp/ca.crt" ./secrets/harbor-ca.download.crt
   else
     echo "that file does not vouch for ${HARBOR_URL} — nothing was saved; use an alternative below"
   fi
@@ -809,14 +808,21 @@ rm -rf "$tmp"
 ```
 
 **Expect:** one line ending `harbor.crt: OK` — that is `openssl` confirming the downloaded file
-really does vouch for this Harbor, and the CA is now saved. Any other message means **nothing was
-saved**, and each one names which problem it hit. *(<1 min)*
+really does vouch for this Harbor. Any other message means **nothing was saved**, and each one names
+which problem it hit. *(<1 min)*
+
+The download is now kept as `./secrets/harbor-ca.download.crt`. Nothing trusts that file yet: the
+jump box and the cluster read `./secrets/harbor-ca.crt`, which this step has not touched.
 
 If it prints *"nothing answered at"*, fix the A record before continuing. If it prints *"could not
 read"*, Harbor answered but its certificate did not arrive — the message lists what to check. If it
 prints *"that file does not vouch for"*, use one of the alternatives below.
 
-Two details in there are load-bearing:
+Three details in there are load-bearing:
+
+- Its first line removes a download kept by an **earlier** attempt. Without it, a run that fails
+  here would leave the old file in place, and the next command would print the fingerprint of
+  that one.
 
 - It downloads to a scratch file, **not** straight to `./secrets/harbor-ca.crt`. If Harbor answers
   with an empty body, `curl` still succeeds, and writing directly would leave you a **zero-byte**
@@ -827,20 +833,38 @@ Two details in there are load-bearing:
   file. It looks right, and then image pulls fail with `certificate signed by unknown authority`
   long after this step.
 
-Then **check it against a fingerprint you got from whoever runs Harbor**, over some other channel —
-`-k` above means you fetched it over a connection you could not yet verify:
+One more thing the block does quietly: it adds `:443` to `HARBOR_URL` before it asks for the
+certificate. `HARBOR_URL` is a bare host (Step 4 says so) and `openssl s_client -connect` needs
+host:port; given a bare host it tries port 4433 and stalls until the kernel gives up, about two
+minutes.
+
+That check proves the file belongs to whatever answered at this address. It does not prove the
+answer came from your Harbor: `-k` above means you fetched it over a connection you could not yet
+verify. So print the fingerprint of the **download**, before anything trusts it:
 
 ```bash
-openssl x509 -in ./secrets/harbor-ca.crt -noout -fingerprint -sha256
+openssl x509 -in ./secrets/harbor-ca.download.crt -noout -fingerprint -sha256
 ```
 
 **Expect:** one line containing `Fingerprint=` and then 32 two-character groups separated by
-colons. Compare it with the certificate fingerprint your platform team gave you; they must match.
-*(<1 min)*
+colons. *(<1 min)*
+
+**Compare it with the certificate fingerprint you got from whoever runs Harbor**, over some other
+channel than this connection; they must match. If they do not, stop here: delete
+`./secrets/harbor-ca.download.crt` and ask them.
 
 This is the certificate's SHA-256 fingerprint, the same value `make fetch-harbor-ca` and
 `make harbor-ca-from-cluster` print. `sha256sum` of the file gives a **different** number that
 never matches it, so make sure both sides are comparing the fingerprint.
+
+Only once it matches, save it where the jump box and the cluster read it:
+
+```bash
+install -m0644 ./secrets/harbor-ca.download.crt ./secrets/harbor-ca.crt
+rm -f ./secrets/harbor-ca.download.crt
+```
+
+**Expect:** it prints nothing. *(<1 min)*
 
 The fingerprint proves it is the file Harbor's operator meant you to have. One more check proves it is the
 right file for **this** Harbor — a certificate left over from an earlier lab is still a perfectly

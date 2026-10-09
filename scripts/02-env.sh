@@ -635,12 +635,7 @@ env_validate() {
           # ⚠️ Strip an IPv6 bracket form BEFORE splitting on ':', or `%%:*` cuts "[fd00" out of
           # "[fd00::1]:443" and ca_verifies_endpoint returns 2 ("could not reach") — a wrong cause
           # for a perfectly good anchor.
-          _h="${HARBOR_URL%%/*}"
-          case "$_h" in
-            \[*\]:*) _p="${_h##*]:}"; _h="${_h%%]*}"; _h="${_h#\[}" ;;
-            \[*\])   _p=443;          _h="${_h%%]*}"; _h="${_h#\[}" ;;
-            *)       _p="${_h##*:}"; [ "$_p" = "$_h" ] && _p=443;  _h="${_h%%:*}" ;;
-          esac
+          url_host_port "$HARBOR_URL"; _h="$URL_HOST"; _p="$URL_PORT"   # lib/os.sh: the one splitter
           ca_verifies_endpoint "$_h" "$_p" "$HARBOR_CA_FILE" >/dev/null 2>&1 || _ca_verdict=$?
         else
           _ca_verdict=9   # not set at all — the original message IS the right one

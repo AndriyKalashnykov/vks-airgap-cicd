@@ -196,13 +196,21 @@ if is_placeholder "$_hu" || [ "$_hu" = harbor.vks.local ]; then
   log_warn "  corporate root, or a CA left over from a destroyed lab, has the same shape. Set"
   log_warn "  HARBOR_URL and re-run to have it verified against the live endpoint."
 else
-  _vhost="${_hu%%:*}"
-  case "$_hu" in *:*) _vport="${_hu##*:}" ;; *) _vport=443 ;; esac
+  url_host_port "$_hu"; _vhost="$URL_HOST"; _vport="$URL_PORT"   # lib/os.sh: the one splitter
   _vrc=0
   ca_verifies_endpoint "$_vhost" "$_vport" "$t" || _vrc=$?
   case "$_vrc" in
     0) log_info "  vouches for: ${_vhost}:${_vport}" ;;
-    1) die "this CA does NOT verify ${_vhost}:${_vport}'s certificate — it is the wrong CA, or a
+    1) # DATES FIRST: an expired or not-yet-valid Harbor certificate under THIS CA is also a 1,
+       # and then the CA just read from the cluster is the right one. (The other dates answer,
+       # "the CA file itself is out of date", is not asked for here on purpose: that text tells
+       # the reader to replace THEIR file, and this one was read from the cluster a moment ago.)
+       if ca_endpoint_dates_only "$_vhost" "$_vport" "$t"; then
+         die "this CA is the right one for $(host_port_join "$_vhost" "$_vport"), but the certificate it presents is outside its dates.
+$(tls_cert_dates_advice Harbor "$_vhost" "$_vport" | sed 's/^/  /')
+  '$OUT' was NOT touched."
+       fi
+       die "this CA does NOT verify ${_vhost}:${_vport}'s certificate — it is the wrong CA, or a
   STALE one from a rebuilt lab. '$OUT' was NOT touched." ;;
     2) die "${_vhost}:${_vport} did not answer, so the anchor could not be verified. That is a
   CONNECTION problem, NOT a verdict about the CA. '$OUT' was NOT touched." ;;

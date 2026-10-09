@@ -435,8 +435,18 @@ else
   echo "  MEASURED: ${_shown} verifies against ${ARGOCD_CA_FILE} (chain AND name)."
   else
   case "$_vrc" in
-    1) echo "  ⚠️  ARGOCD_CA_FILE (${ARGOCD_CA_FILE}) does NOT verify ${_shown}: it is not this instance's anchor"
-       echo "      (a re-cut lab regenerates it). Fetch it again: make argocd-ca-from-cluster, or make fetch-argocd-ca." ;;
+    1) # DATES FIRST: an expired or not-yet-valid certificate under the RIGHT anchor is also a 1,
+       # and so is an anchor FILE that is itself out of date. Neither is "a re-cut lab".
+       _vd=0; ca_endpoint_dates_only "$_shown" 443 "$_caf" || _vd=$?
+       case "$_vd" in
+         0) echo "  ⚠️  ARGOCD_CA_FILE (${ARGOCD_CA_FILE}) is the right CA for ${_shown}, but the certificate ${_shown} presents is outside its dates."
+            tls_cert_dates_advice ArgoCD "$_shown" 443 | sed 's/^/      /' ;;
+         2) echo "  ⚠️  ARGOCD_CA_FILE (${ARGOCD_CA_FILE}) is itself outside its dates, so it cannot verify ${_shown}."
+            tls_ca_file_dates_advice "$_caf" "$_shown" | sed 's/^/      /'
+            echo "      make argocd-ca-from-cluster, or make fetch-argocd-ca." ;;
+         *) echo "  ⚠️  ARGOCD_CA_FILE (${ARGOCD_CA_FILE}) does NOT verify ${_shown}: it is not this instance's anchor"
+            echo "      (a re-cut lab regenerates it). Fetch it again: make argocd-ca-from-cluster, or make fetch-argocd-ca." ;;
+       esac ;;
     3) echo "  ⚠️  ARGOCD_CA_FILE verifies the chain but not the name ${_shown}." ;;
     2|4) echo "  ⚠️  could not complete a TLS check against ${_shown}:443 with ARGOCD_CA_FILE — nothing was verified." ;;
   esac

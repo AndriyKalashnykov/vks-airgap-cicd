@@ -46,6 +46,13 @@ command -v timeout >/dev/null 2>&1 || inconclusive "timeout is not installed"
 REAL_OPENSSL="$(command -v openssl)"
 
 T="$(mktemp -d)"
+# The scripts under test make temp files of their own: keep them in this test's directory.
+export TMPDIR="$T/tmp"; mkdir -p "$TMPDIR"
+# A caller's "already reported" list would hide the one line a case below looks for.
+unset _VKS_BOUNDS_REPORTED
+# Run from `make test-scripts` this file inherits make's own environment (see
+# test-harbor-ca-refetch-advice.sh): a pin exported there would change what every fetch here does.
+unset HARBOR_CA_SHA256 ARGOCD_CA_SHA256 _FETCH_CA_ENDPOINT MAKEFLAGS MAKELEVEL MFLAGS
 PIDS=""
 # shellcheck disable=SC2329  # invoked by the EXIT trap below
 cleanup() {

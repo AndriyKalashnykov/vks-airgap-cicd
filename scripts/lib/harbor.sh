@@ -4,6 +4,12 @@
 # helper (creds via a curl -K config file, never argv), project creation, and robot creation.
 # Depends on lib/os.sh (log_info/log_warn/die) + lib/tls.sh (ca_bundle_with_system). The caller
 # sets HARBOR_URL/HARBOR_USERNAME/HARBOR_PASSWORD (via load_env) and passes a writable tmpdir.
+#
+# lib/os.sh IS SOURCED HERE as of the one-splitter change: harbor_url_host and the resolver probe
+# now call url_host_port and run_bounded, and a caller that sourced only this file would get
+# "command not found" where an answer was meant. os.sh has a load guard.
+# shellcheck source=scripts/lib/os.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/os.sh"
 
 # harbor_setup <tmpdir> — establish TLS trust + auth for Harbor REST/crane calls. Sets globals:
 #   HARBOR_TLS_VERIFY (true|false), SCHEME (https|http), CURL_CACERT (array),
@@ -582,13 +588,8 @@ _harbor_serving_code() {
 # harbor_url_host — the HOST of HARBOR_URL: path, port and IPv6 brackets removed. `%%:*` alone cut
 # "[fd00::1]:443" to "[fd00" (the same parse 02-env.sh does inline for its CA check).
 harbor_url_host() {
-  local h="${HARBOR_URL%%/*}"
-  case "$h" in
-    \[*\]*) h="${h%%]*}"; h="${h#\[}" ;;
-    *:*:*)   : ;;                       # a bare IPv6 literal carries no port
-    *)       h="${h%%:*}" ;;
-  esac
-  printf '%s' "$h"
+  url_host_port "${HARBOR_URL:-}"       # lib/os.sh: the one splitter (scheme, login, path, brackets)
+  printf '%s' "$URL_HOST"
 }
 
 # harbor_url_is_literal <host> — rc 0 for an IP literal (v4 or v6). Such a HARBOR_URL has no A record,
@@ -618,7 +619,7 @@ _harbor_resolve() {
   # A literal needs no resolver at all -- and on macOS `getent` is a repo shim over dscacheutil, so
   # not calling it for a literal removes a whole platform variable (implementation round, 2026-09-26).
   if harbor_url_is_literal "$1"; then printf '%s' "$1"; return 0; fi
-  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent ahosts "$1" 2>/dev/null | awk 'NR == 1 { print $1 }' || true
+  run_bounded CREDS_PROBE_TIMEOUT_SECONDS 2 getent ahosts "$1" 2>/dev/null | awk 'NR == 1 { print $1 }' || true
 }
 
 # harbor_reachable_state — THREE states, because a wait loop that cannot tell them apart hides the

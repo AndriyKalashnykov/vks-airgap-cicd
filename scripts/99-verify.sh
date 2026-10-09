@@ -277,7 +277,7 @@ verify_app() {
   # worst case (no CLI session) is still faster than doing nothing.
   if [ "$_refresh_rc" -ne 0 ] && have argocd; then
     local _api_rc=0
-    timeout "${ARGOCD_REFRESH_TIMEOUT_SECONDS:-30}" \
+    run_bounded_group ARGOCD_REFRESH_TIMEOUT_SECONDS 30 \
       argocd app get "$app" --refresh -o json >/dev/null 2>>"$_refresh_err" || _api_rc=$?
     if [ "$_api_rc" -eq 0 ]; then
       log_info "[${app}] kubectl annotate was rejected — refreshed through the ArgoCD API instead"

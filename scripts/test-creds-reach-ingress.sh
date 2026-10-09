@@ -38,6 +38,9 @@ _extract() {  # _extract <fn-name> -> its source, or die
 }
 _helpers="$(_extract _ing_authority)"
 _fn="$(_extract _reach_ingress)"
+# The extracted function takes its time bound through run_bounded (lib/os.sh). creds.sh sources
+# that library; a function lifted out of it has to be given it, in every shell that evals it.
+_os_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/os.sh"
 case "$_fn" in
   *"printf 'serving'"*) : ;;
   *) echo "FATAL: _reach_ingress extracted but does not contain \`printf 'serving'\` — reshaped."
@@ -47,7 +50,8 @@ case "$_helpers" in
   *'INGRESS_PROBE_PORT'*) : ;;
   *) echo "FATAL: _ing_authority extracted but does not read INGRESS_PROBE_PORT — reshaped."; exit 1 ;;
 esac
-_fn="${_helpers}
+_fn=". $(printf '%q' "$_os_lib")
+${_helpers}
 ${_fn}"
 
 # ⚠️ AND A GUARD FOR THE *NEXT* ONE. The per-extraction non-empty checks above catch a RENAME; they

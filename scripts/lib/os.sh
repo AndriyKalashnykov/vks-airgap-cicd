@@ -608,6 +608,203 @@ pkg_install() {
 # ---------------------------------------------------------------------------
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# ---------------------------------------------------------------------------
+# Time bounds: ONE clamp and ONE runner for every `timeout` in scripts/.
+# ---------------------------------------------------------------------------
+# WHY. `timeout 0 <cmd>` is NO time limit, and `timeout abc <cmd>` fails before the command runs.
+# Every site that handed an operator-settable variable straight to `timeout` therefore had two
+# quiet failure modes: a 0 switched its bound off, and a typo turned the bounded command into an
+# error read as "unreachable". And a clamp that silently swaps in a default is its own trap:
+# MEASURED, `CA_VERIFY_TIMEOUT=2s` (which `timeout` itself accepts) became 15 s with no word.
+#
+# THE SHAPE, AND WHY THE WARNING IS NOT IN THE RUNNERS. A value that IS set and cannot be used is
+# reported ONCE, by bounds_normalize, in the script's MAIN shell (load_env ends with it), where
+# stderr is the script's own. The runners never print anything. The first version warned from
+# inside the runner, and that was wrong at nearly every real call site: they redirect stderr
+# (`2>/dev/null`, or `2>"$file"` to classify the command's error afterwards), so the warning was
+# either never seen while "once" was spent on it, or it landed IN the capture file and was read
+# back as the command's own error. MEASURED: argocd-password.sh then skipped its "no answer
+# within Ns" line on a timeout, and 99-verify.sh classified our own WARN line.
+# test-timeout-bounds.sh greps scripts/ and fails on a variable that reaches `timeout` any other
+# way, and on a variable handed to a runner that bounds_normalize does not know.
+
+# The longest bound accepted, in seconds (one day). Above it a value is refused as unusable: no
+# wait in this repo is meant to last longer, and a number that large is a typo or a unit slip.
+BOUND_MAX_SECONDS=86400
+
+# duration_seconds <value> — prints the value as plain seconds and returns 0 when it is a usable
+# duration in `timeout`'s own syntax: digits with an optional fraction, and an optional unit
+# suffix s, m, h or d (2, 2.5, 30s, 2m). Returns 1, printing nothing, for anything else: empty,
+# 0, 0.0, a negative, a word, a trailing space, or more than BOUND_MAX_SECONDS.
+# Seconds, not the original spelling, because callers print "within N s" and do arithmetic on it:
+#   * a whole number is printed as plain digits, never with an exponent (99999999999d used to
+#     come out as 8.64e+15, and a caller read the leading 8), and without leading zeros (007 -> 7);
+#   * a fraction keeps at most three places (2.5 stays 2.5);
+#   * less than one second is ROUNDED UP TO 1: 0.0001 was accepted as given, and every command
+#     then came back 124.
+# LC_ALL=C for awk: under a decimal-comma locale some awks print "2,5", which timeout refuses.
+duration_seconds() {
+  local v="${1:-}" n u mult=1 out
+  [[ "$v" =~ ^([0-9]+\.?[0-9]*|\.[0-9]+)([smhd]?)$ ]] || return 1
+  n="${BASH_REMATCH[1]}"; u="${BASH_REMATCH[2]}"
+  [[ "$n" =~ [1-9] ]] || return 1
+  case "$u" in m) mult=60 ;; h) mult=3600 ;; d) mult=86400 ;; esac
+  out="$(LC_ALL=C awk -v n="$n" -v m="$mult" -v max="$BOUND_MAX_SECONDS" 'BEGIN {
+           s = n * m
+           if (s <= 0 || s > max) exit 1
+           if (s < 1) s = 1
+           if (s == int(s)) printf "%d", s; else printf "%.3f", s
+         }')" || return 1
+  case "$out" in *.*) while [ "${out%0}" != "$out" ]; do out="${out%0}"; done; out="${out%.}" ;; esac
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+# bound_seconds <value> <default-seconds> — prints the bound to use, in seconds: the value when
+# duration_seconds accepts it, else the default. It prints NOTHING else, ever: it runs inside
+# command substitutions and under redirected stderr (see the header). Reporting an unusable
+# value is bounds_normalize's job.
+bound_seconds() {
+  local out
+  if out="$(duration_seconds "${1:-}")"; then printf '%s' "$out"; return 0; fi
+  printf '%s' "${2:?bound_seconds: a default is required}"
+}
+
+# THE TIME LIMITS AN OPERATOR CAN SET, each with the default used when it is set and unusable.
+# `NAME default` pairs. A variable handed to run_bounded / run_bounded_group BY NAME must be
+# here (test-timeout-bounds.sh derives the names from the call sites and compares).
+# ⚠️ ONLY A VARIABLE WHOSE EVERY CONSUMER TAKES A DURATION BELONGS HERE: this rewrites the value
+# (2m -> 120, 0 -> the default), and a consumer that wants a whole number of attempts, or does
+# integer arithmetic on it, then meets a value it did not validate. ARGOCD_REPO_TIMEOUT_SECONDS was
+# here and is NOT any more: argocd_await_revision uses it as an ATTEMPT COUNT behind its own
+# "must be a positive integer" die, and this registry had turned 0 and abc into 180 before that
+# guard could refuse them, while letting 2.5 through to die there. What each of these is used for
+# (READ in the scripts): every one reaches `timeout`; CREDS_PROBE_TIMEOUT_SECONDS also reaches
+# curl --max-time (fractions accepted) and stands in for CA_VERIFY_TIMEOUT in the access report;
+# all are printed in sentences; none is counted, compared or used in arithmetic except by
+# fetch-ca.sh, which takes the whole seconds of CA_VERIFY_TIMEOUT to suggest a longer one.
+BOUND_VARIABLES="CA_VERIFY_TIMEOUT 15
+CREDS_PROBE_TIMEOUT_SECONDS 2
+CREDS_KUBE_TIMEOUT_SECONDS 3
+CREDS_K8S_TIMEOUT 10
+HEADLAMP_READBACK_TIMEOUT_SECONDS 10
+SUPERVISOR_TLS_TIMEOUT_SECONDS 10
+ARGOCD_REFRESH_TIMEOUT_SECONDS 30
+TOOL_VERSION_TIMEOUT_SECONDS 5"
+
+# bounds_normalize [NAME default …] — CALL IT IN THE SCRIPT'S MAIN SHELL, with stderr still the
+# script's own. With no arguments it takes every pair in BOUND_VARIABLES; load_env ends with that
+# call, so a script that calls load_env needs nothing more. A script that does not (fetch-ca.sh)
+# calls it itself.
+# For each variable that is SET: a usable value is rewritten to plain seconds (2s -> 2, 1m -> 60),
+# so every later reader — a runner, curl, a sentence that prints it — sees the same number; an
+# unusable one is replaced by the default and reported in ONE line on stderr. An unset variable
+# is left unset: unset is the normal case, and some defaults differ by caller.
+# "Once" spans child scripts too: the names already reported travel in an exported variable
+# (_VKS_BOUNDS_REPORTED: a leading underscore, because nobody sets it and it is no knob), so
+# a script this one starts (with its stderr captured, often) re-reads .env, re-normalises, and
+# says nothing a second time. That variable is believed only from an ancestor process, and
+# never from a file: see the two notes inside.
+bounds_normalize() {
+  # The registry is split into words HERE, so the caller's IFS must not decide how: a script that
+  # runs with IFS=$'\n' (a common hardening line) made this read `NAME default` as ONE word and
+  # die on "invalid variable name" inside load_env.
+  local IFS=$' \t\n'
+  local name def v out reporter="" reported=""
+  if [ $# -eq 0 ]; then
+    # shellcheck disable=SC2046  # the registry is NAME/default words, split on purpose
+    set -- $(printf '%s\n' "$BOUND_VARIABLES")
+  fi
+  # WHO ALREADY REPORTED WHAT: "<pid> NAME NAME…", believed only when <pid> is this process or
+  # one of its ANCESTORS. A value left exported by some other shell is then ignored. A value
+  # written into .env or the state overlay never gets this far: load_env puts back what it held
+  # BEFORE it sourced any file (a file must not be able to switch the report off).
+  local seen="${_VKS_BOUNDS_REPORTED:-}"        # may be unset, and callers run under `set -u`
+  reporter="${seen%% *}"
+  if [ -n "$seen" ] && [ "$seen" != "$reporter" ] && _pid_is_self_or_ancestor "$reporter"; then
+    reported=" ${seen#* } "
+  fi
+  while [ $# -ge 2 ]; do
+    name="$1"; def="$2"; shift 2
+    v="${!name:-}"
+    [ -n "$v" ] || continue
+    # `export "NAME=value"`, NOT `printf -v "$name"`: a DYNAMIC assignment target makes shellcheck
+    # assume any variable, `$!` included, may be written, and it then flags every script that
+    # sources this file (MEASURED: SC2031 on `& SRV=$!` in a test this file never mentions; see
+    # _pin_get below for the first time this was paid for). Exporting is also what is wanted:
+    # a script started from here must read the same number.
+    if out="$(duration_seconds "$v")"; then
+      export "${name}=${out}"
+      continue
+    fi
+    export "${name}=${def}"
+    case "$reported" in *" ${name} "*) continue ;; esac
+    reported="${reported:- }${name} "
+    _VKS_BOUNDS_REPORTED="$$ ${reported# }"; _VKS_BOUNDS_REPORTED="${_VKS_BOUNDS_REPORTED% }"; export _VKS_BOUNDS_REPORTED
+    log_warn "${name}='${v}' is not a usable time limit, so ${def} s is used instead. Give a number of seconds from 1 to ${BOUND_MAX_SECONDS} (one day): 2, 2.5, or with a unit, 30s, 2m, 1h. Less than a second counts as 1. 0 is refused on purpose: to timeout it means no limit."
+  done
+}
+
+# _pid_is_self_or_ancestor <pid> — rc 0 when <pid> is this script's process or one above it.
+# /proc where there is one, `ps` where there is not; anything it cannot establish is rc 1 (the
+# cost of a wrong "no" is one repeated warning, of a wrong "yes" a silenced one).
+_pid_is_self_or_ancestor() {
+  local want="${1:-}" p="$$" n=0 next
+  case "$want" in ''|*[!0-9]*) return 1 ;; esac
+  while [ "${p:-0}" -gt 1 ] && [ "$n" -lt 64 ]; do
+    [ "$p" = "$want" ] && return 0
+    if [ -r "/proc/${p}/stat" ]; then
+      next="$(sed -e 's/^.*) //' "/proc/${p}/stat" 2>/dev/null | cut -d' ' -f2 || true)"
+    else
+      next="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ' || true)"
+    fi
+    case "$next" in ''|*[!0-9]*) return 1 ;; esac
+    p="$next"; n=$((n + 1))
+  done
+  return 1
+}
+
+# _bounded_secs <VARIABLE | =value> <default> — the bound for the two runners below. A bare word
+# is the NAME of a variable; `=<value>` is a value the caller already holds (a computed budget).
+# Silent either way.
+_bounded_secs() {
+  case "$1" in
+    =*) bound_seconds "${1#=}" "$2" ;;
+    *)  bound_seconds "${!1:-}" "$2" ;;
+  esac
+}
+
+# run_bounded <VARIABLE | =value> <default-seconds> <command> [args…]
+#   The command under `timeout`, bound clamped, with `--foreground` when this timeout has it.
+#   FOR A COMMAND WITH NO CHILDREN OF ITS OWN (openssl s_client, getent, one bash connect).
+#   Without `--foreground`, timeout moves the command into its own process group and a Ctrl-C
+#   typed at the terminal never reaches it (MEASURED through a pty: the fetch ran on to its bound).
+#   What the flag gives up is the kill of the command's children at the bound — hence the rule.
+#   The flag is PROBED, not assumed: a timeout that refuses it would fail every bounded command.
+# run_bounded_group <VARIABLE | =value> <default-seconds> <command> [args…]
+#   The same clamp, PLAIN `timeout`: the command and everything it starts are killed at the
+#   bound. FOR A COMMAND THAT STARTS CHILDREN: kubectl (a kubeconfig `exec` credential plugin),
+#   the argocd CLI, another script, an arbitrary tool behind a version-manager shim.
+# Both return the command's own status; 124 means the bound was reached.
+_BOUND_FOREGROUND=""
+run_bounded() {
+  local _rb_t
+  _rb_t="$(_bounded_secs "$1" "$2")"; shift 2
+  if [ -z "${_BOUND_FOREGROUND:-}" ]; then
+    if timeout --foreground 5 true >/dev/null 2>&1; then _BOUND_FOREGROUND=yes; else _BOUND_FOREGROUND=no; fi
+  fi
+  if [ "$_BOUND_FOREGROUND" = yes ]; then
+    timeout --foreground "$_rb_t" "$@"   # bounded-runner: the clamp is two lines up
+  else
+    timeout "$_rb_t" "$@"                # bounded-runner
+  fi
+}
+run_bounded_group() {
+  local _rb_t
+  _rb_t="$(_bounded_secs "$1" "$2")"; shift 2
+  timeout "$_rb_t" "$@"                  # bounded-runner
+}
+
 # container_engine — the OCI engine to use. podman is the DEFAULT; docker is only a fallback.
 # Override with CONTAINER_ENGINE. Prints the engine name (podman|docker) or dies.
 container_engine() {
@@ -736,6 +933,13 @@ EOF_PIN
 
 load_env() {
   local example="${REPO_ROOT}/.env.example" override="${REPO_ROOT}/.env"
+  # What the ENVIRONMENT held for the "already reported" list, before any file is sourced. It is
+  # put back at the end: a line in .env or in the state overlay must not be able to plant it and
+  # switch the unusable-time-limit report off (bounds_normalize).
+  local -r _bounds_reported_in="${_VKS_BOUNDS_REPORTED:-}"
+  # Likewise read from the environment BEFORE the files: what to do with an address that cannot
+  # be used (drop_userinfo_from reads this local). Only a caller can ask to go on; .env cannot.
+  local -r _refused_mode="${_LOAD_ENV_ON_REFUSED_ADDRESS:-die}"
   local legacy="${REPO_ROOT}/.env.kind"          # read-only back-compat; nothing writes it any more
   local state; state="$(state_file)"
   [ -f "$example" ] || die ".env.example missing at $example (it is the committed source of truth)"
@@ -1077,6 +1281,18 @@ EOF
   # (which exists NOWHERE in this repo) and missed the one that does the work. Only bites on a real lab,
   # where a kubeconfig carries more than one context.
   export VKS_CONTEXT="${VKS_CONTEXT:-vks-workload}"
+
+  # A login typed into an address (`user:password@harbor…`) must not reach a report line. LAST,
+  # after every file has been sourced and the caller's selectors restored: this is the value
+  # every script below will read.
+  drop_userinfo_from HARBOR_URL
+  drop_userinfo_from ARGOCD_SERVER
+
+  # The operator-settable time limits, checked HERE: this is the script's main shell and its own
+  # stderr, the one place a "this value cannot be used" line is certain to be seen (see
+  # bounds_normalize). Every bounded command below then reads a usable number of seconds.
+  if [ -n "$_bounds_reported_in" ]; then export _VKS_BOUNDS_REPORTED="$_bounds_reported_in"; else unset _VKS_BOUNDS_REPORTED; fi
+  bounds_normalize
 }
 
 # kubeconfig_ready — the PRESENCE gate for a script about to run kubectl. load_env DEFAULTS KUBECONFIG
@@ -2567,17 +2783,130 @@ vks_package_namespace() {
 # Default port 443: both sides get the same default, so it cancels in a comparison, and callers
 # that only want the host can strip it.
 registry_hostport() {
-  local u="${1:-}" h p
-  h="${u#http://}"; h="${h#https://}"     # a scheme is a documented .env mistake, not a crash
-  h="${h%%/*}"; h="${h%/}"                # drop any path, then a trailing slash
+  url_host_port "${1:-}"
+  printf '%s' "$(host_port_join "$URL_HOST" "$URL_PORT")"
+}
+
+# url_host_port <address-or-url> — THE host/port splitter. Sets URL_HOST and URL_PORT.
+# There were five hand-typed copies of this (here, lib/tls.sh, lib/harbor.sh, 02-env.sh,
+# 70-configure-argocd.sh) plus three `${x%%:*}` one-liners, and they disagreed on the same input:
+# `[::1]:8443` was host `[` to some, `[::1]` to others and `::1` to a third.
+#   scheme     `https://` (any `xxx://`) is dropped: a documented .env mistake, not a crash
+#   path       everything from the first `/` is dropped
+#   userinfo   `user:password@` is dropped (and so never reaches a message or a dial)
+#   [v6]:port  host is the address WITHOUT brackets, port as given
+#   [v6]       the same, port 443
+#   v6 bare    two or more colons and no brackets: the WHOLE string is the address, port 443.
+#              A bare IPv6 literal cannot carry a port: `::1:8443` is itself a valid address, so
+#              nothing can tell a port from the last group. To give a port, write `[::1]:8443`.
+#   host:port  split at the colon;  host alone: port 443
+# A port that is not all digits becomes 443 (the default the callers had).
+# URL_HOST never carries brackets; host_port_join puts them back where a tool needs `[v6]:port`.
+# Globals, not output: every caller wants both values and most run where a subshell is costly.
+URL_HOST=""; URL_PORT=""
+# _url_scheme_len <value> — prints how many leading characters are a scheme (`https://` -> 8), or
+# 0. ANCHORED at the start and made of scheme characters only: `*://*` anywhere in the value also
+# matched `h.example/r?u=https://evil` (host came out as `evil`) and `u:a://b@h.example`.
+_url_scheme_len() {
+  if [[ "${1:-}" =~ ^[A-Za-z][A-Za-z0-9+.-]*:// ]]; then printf '%s' "${#BASH_REMATCH[0]}"; else printf 0; fi
+}
+url_host_port() {
+  local h="${1:-}" p=443 n
+  n="$(_url_scheme_len "$h")"; h="${h:$n}"
+  h="${h%%/*}"
+  case "$h" in *@*) h="${h##*@}" ;; esac
   case "$h" in
-    \[*\]:*) p="${h##*:}"; h="${h%:*}" ;;   # [v6]:port
-    \[*\])   p=443 ;;                       # [v6]
-    *:*)     p="${h##*:}"; h="${h%:*}" ;;   # host:port
-    *)       p=443 ;;
+    \[*\]:*) p="${h##*]:}"; h="${h%%]*}"; h="${h#\[}" ;;
+    \[*\])   h="${h%%]*}"; h="${h#\[}" ;;
+    *:*:*)   : ;;
+    *:*)     p="${h##*:}"; h="${h%:*}" ;;
   esac
   case "$p" in ''|*[!0-9]*) p=443 ;; esac
-  printf '%s:%s' "$h" "$p"
+  URL_HOST="$h"; URL_PORT="$p"
+}
+
+# host_port_join <host> <port> — `host:port`, with the brackets an IPv6 literal needs there
+# (`[::1]:8443`): what `openssl s_client -connect`, curl and a reader all expect.
+host_port_join() {
+  case "$1" in
+    *:*) printf '[%s]:%s' "$1" "$2" ;;
+    *)   printf '%s:%s' "$1" "$2" ;;
+  esac
+}
+
+# url_without_userinfo <address-or-url> — the value with any `user:password@` removed from its
+# authority part (between an optional scheme and the first `/`), everything else untouched. A
+# login does not belong in HARBOR_URL or ARGOCD_SERVER, and one that is there must not reach a
+# report line. An `@` AFTER the first `/` is not a login (`host/proj/img@sha256:…`) and stays.
+url_without_userinfo() {
+  local u="${1:-}" scheme="" rest auth n
+  n="$(_url_scheme_len "$u")"; scheme="${u:0:$n}"; u="${u:$n}"
+  auth="${u%%/*}"; rest="${u#"$auth"}"
+  case "$auth" in *@*) auth="${auth##*@}" ;; esac
+  printf '%s%s%s' "$scheme" "$auth" "$rest"
+}
+
+# url_login_unreadable <address-or-url> — rc 0 when an `@` is STILL in the value after
+# url_without_userinfo took out what it could. For a variable that holds a HOST, that is always
+# a login that could not be read out: a password with a `/` or a `://` in it puts the `@` behind
+# the first `/`, where it no longer looks like one.
+#     admin:4411/SEKR@harbor.example      "host" admin, "port" 4411, the rest holds the @
+#     admin:SEKR@4411/x@harbor.example    stripped to 4411/x@harbor.example: a piece of the password
+# ⚠️ NO "but the front looks like a plain host" EXEMPTION. The first version had one, to let
+# `host:8443/proj/img@sha256:…` through, and `user:digits/…@host` matched it exactly: MEASURED,
+# the password stayed in the variable and `admin:4411` was dialled. HARBOR_URL and ARGOCD_SERVER
+# hold a host and never an image reference, so an image reference with a digest put there is
+# refused too, and the message says so.
+url_login_unreadable() {
+  case "$(url_without_userinfo "${1:-}")" in *@*) return 0 ;; esac
+  return 1
+}
+
+# drop_userinfo_from <VARIABLE> — if the variable's value carries `user:password@`, take it out of
+# the variable (so nothing below can print or dial it) and say so once, WITHOUT printing it.
+# load_env calls this for HARBOR_URL and ARGOCD_SERVER: both were printed verbatim in report
+# lines, so a password typed into the address ended up in a terminal and in pasted output.
+#
+# A value whose login cannot be read out (url_login_unreadable) STOPS THE RUN. It is an address
+# the operator typed that cannot be used, and carrying on with the variable emptied turned that
+# into the wrong thing twice over: MEASURED, installers took their "HARBOR_URL is not set,
+# skipped" arms and returned 0, and `make ca-status` said "set HARBOR_URL" about a variable that
+# WAS set. The message prints neither the value nor any part of it.
+# ONE CALLER MAY ASK TO GO ON: a read-only report that must still print what it can
+# (_LOAD_ENV_ON_REFUSED_ADDRESS=report in its ENVIRONMENT, set by creds.sh; load_env reads it
+# before it sources any file and holds it read-only, so a line in .env cannot ask for it: such a
+# line stops the run with bash's own "readonly variable"). Then the variable is emptied, the same
+# line goes to stderr as an error, and the names are left in _ENV_REFUSED_ADDRESSES for the
+# report to say, truthfully, "set but not used" instead of "not set".
+_ENV_REFUSED_ADDRESSES=""
+drop_userinfo_from() {
+  local name="$1" v clean host msg
+  v="${!name:-}"
+  [ -n "$v" ] || return 0
+  msg=""
+  if url_login_unreadable "$v"; then
+    msg="${name} is set, and it cannot be used: after the host it still holds an @, which is what a login with a / or :// in its password looks like (or an image reference with a digest, which does not belong here either). It is not printed and not dialled. ${name} takes a host and an optional port, nothing else: put that in .env, and the login in its own variables."
+  else
+    clean="$(url_without_userinfo "$v")"
+    # A login with NO host after it ('user:pw@', 'https://user:pw@') strips to nothing. Carrying
+    # on with an empty address is the silent skip this function exists to stop, so it is refused.
+    host="${clean#*://}"; host="${host%%/*}"
+    if [ "$clean" != "$v" ] && [ -z "$host" ]; then
+      msg="${name} is set, and it cannot be used: it holds a login (the part before the @) and no host after it. It is not printed and not dialled. ${name} takes a host and an optional port, nothing else: put that in .env, and the login in its own variables."
+    fi
+  fi
+  if [ -n "$msg" ]; then
+    export "${name}="                    # not `printf -v`: see bounds_normalize for why
+    if [ "${_refused_mode:-die}" = report ]; then
+      _ENV_REFUSED_ADDRESSES="${_ENV_REFUSED_ADDRESSES}${_ENV_REFUSED_ADDRESSES:+ }${name}"
+      log_error "$msg"
+      return 0
+    fi
+    die "$msg"
+  fi
+  [ "$clean" != "$v" ] || return 0
+  export "${name}=${clean}"
+  log_warn "${name} held a login (the part before the @). It has been left out: nothing here prints it or uses it, and ${name} is read as '${clean}'. This repo takes logins from their own variables in .env; remove it from ${name}."
 }
 
 # kube_is_notfound <errfile> [resource-token]
@@ -2757,22 +3086,8 @@ vSphere Namespace,"
   printf '  VKS_AUTH_METHOD=vcf make vks-login\n'
 }
 
-# ── supervisor_dates_how <supervisor-host> — what to do when the stored anchor IS the right one and
-# the certificate's validity dates are the only thing that fails (supervisor_anchor_verdict's 6).
-# Shared by the login and the access report, like supervisor_repin_how, and for the same reason.
-# Two commands, both credential-free, both with the caller's real endpoint: this machine's time, and
-# the certificate's notBefore/notAfter. No re-pin (the anchor is correct), no renew (the login stops
-# on this before the password is sent), and nothing that skips verification.
-supervisor_dates_how() {
-  local _host="${1:?supervisor_dates_how: the Supervisor endpoint is required}"
-  printf 'Compare the two. Neither command sends a password:\n'
-  printf '  date -u\n'
-  printf '  openssl s_client -connect %s:443 -servername %s </dev/null 2>/dev/null | openssl x509 -noout -dates\n' "$_host" "$_host"
-  printf "The first prints this machine's time in UTC; the second prints the certificate's notBefore and\n"
-  printf 'notAfter, also in UTC. If the time is outside those two, and the time is wrong, correct this\n'
-  printf "machine's clock. If the time is right, the certificate has expired (or is not valid yet): ask\n"
-  printf 'whoever runs the lab to renew it. Do NOT re-fetch or re-pin the CA: it is the right one.\n'
-}
+# (supervisor_dates_how lives in lib/tls.sh now: it is tls_cert_dates_advice for the Supervisor,
+# so the expired-certificate situation has ONE wording across Harbor, ArgoCD and the Supervisor.)
 
 # ── jwt_exp_seconds <jwt> — the `exp` claim in SECONDS, or EMPTY. Never guesses. ─────────────────
 # ONE parser, because there were TWO and they diverged: the headlamp decoder in creds.sh kept a

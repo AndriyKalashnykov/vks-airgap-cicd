@@ -56,7 +56,7 @@ fi
 # that is the platform's convention, not ours to assume — and a kubeconfig with NO current-context is
 # exactly what makes kubectl fall back to localhost:8080 with no target, which is how the original
 # failure presented ("kubectl had NO TARGET").
-CTX="$(timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl --kubeconfig "$KC" config current-context </dev/null 2>/dev/null || true)"
+CTX="$(run_bounded_group CREDS_K8S_TIMEOUT 10 kubectl --kubeconfig "$KC" config current-context </dev/null 2>/dev/null || true)"
 [ -n "$CTX" ] || die "${KC} sets no current-context.
   kubectl would silently fall back to localhost:8080 and every later step would fail with an error
   naming neither this file nor this cluster. Re-fetch it with: make vks-cluster-status"

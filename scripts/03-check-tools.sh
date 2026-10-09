@@ -109,7 +109,7 @@ tool_version() {
     *)       cmd=("$t" --version) ;;
   esac
   if have timeout; then
-    timeout "${TOOL_VERSION_TIMEOUT_SECONDS:-5}" "${cmd[@]}" 2>/dev/null | head -1 || true
+    run_bounded_group TOOL_VERSION_TIMEOUT_SECONDS 5 "${cmd[@]}" 2>/dev/null | head -1 || true
   else
     "${cmd[@]}" 2>/dev/null | head -1 || true
   fi
