@@ -45,8 +45,8 @@ min_version = "2026.9.2"
 #
 # node STAYS below: it is INFRA (npx markdownlint for docs-lint, npx renovate), not an app toolchain.
 kubectl  = "1.37.1"
-helm     = "4.2.4"
-kustomize = "5.8.1"
+helm     = "4.3.0"
+kustomize = "5.8.2"
 # kind — the local KinD stand-in cluster (scripts/05-kind-up.sh `require_cmd kind`).
 # It USED to be installed by nothing at all: the README promised `make deps  # kind, ...`
 # while neither this file nor 00-install-prereqs.sh provided it, so `make e2e-kind` — the
@@ -54,7 +54,7 @@ kustomize = "5.8.1"
 # to already have kind (the CI smoke curled its own copy to work around it). Pinning it here
 # makes `make deps` deliver what the docs claim, and single-sources the version (CI's
 # mise-action reads this file) so it cannot drift from a second pin in a workflow.
-kind     = "0.32.0"
+kind     = "0.33.0"
 jq       = "1.8.2"
 yq       = "4"
 # crane (google/go-containerregistry) — the image-mirror engine. Replaces skopeo, which
@@ -68,9 +68,9 @@ yq       = "4"
 # with GODEBUG=x509sslcertoverrideplatform=1 honours SSL_CERT_FILE and pushes. lib/tls.sh
 # crane_trust_env sets that GODEBUG on darwin.
 # KEEP THE TWO crane VERSIONS EQUAL — check-toolchain-alignment asserts it.
-crane    = { version = "0.21.9", os = ["linux"] }
+crane    = { version = "0.22.1", os = ["linux"] }
 go       = { version = "1.27.1", os = ["macos"] }
-"go:github.com/google/go-containerregistry/cmd/crane" = { version = "0.21.9", os = ["macos"] }
+"go:github.com/google/go-containerregistry/cmd/crane" = { version = "0.22.1", os = ["macos"] }
 # node is only for `make renovate-validate` (renovate requires node ^24.11).
 node     = "24"        # INFRA, not an app toolchain: npx markdownlint (docs-lint) + npx renovate (renovate-validate)
 # go — the gowebapp toolchain. Without it, CI (which gets its toolchain from THIS file via
@@ -92,7 +92,7 @@ node     = "24"        # INFRA, not an app toolchain: npx markdownlint (docs-lin
 # Security-scan gates (make sec / static-check) — internet/CI side only, never
 # needed for the air-gap install flow. Provided cross-distro via mise so local
 # `make static-check` mirrors the CI static-check job (which runs mise-action).
-trivy    = "0.74.0"
+trivy    = "0.75.0"
 gitleaks = "8.30.1"
 # shellcheck — the lint gate's shell linter. Pinned via mise (not the OS package)
 # so local `make lint` uses the SAME version as CI; an unpinned system shellcheck
@@ -117,7 +117,7 @@ yamllint    = "1.38.0"
 # to install yamllint. Without it on PATH mise errors `pipx may be required but was
 # not found` (verified). Pinning it here means the yamllint install does not depend
 # on whatever pipx/python the runner (or the operator's box) happens to ship.
-uv       = "0.12.5"
+uv       = "0.12.23"
 
 [settings]
 # Reproducible: never auto-bump; pin via this file + Renovate.
