@@ -94,36 +94,26 @@ _b561_kind_provenance
 log_info "fetching the ${LABEL} CA from ${host}:${port}"
 
 # -showcerts prints the WHOLE chain the server sends. Keep it all; we choose from it deliberately.
-openssl s_client -connect "${host}:${port}" -servername "$host" -showcerts </dev/null 2>/dev/null \
-  > "${tmp}/chain.txt" \
+# The handshake, the split into one file per certificate (leaf first) and the "one certificate, is
+# it its own issuer" test are tls_presented_chain / tls_presented_shape in lib/tls.sh. They were
+# inline here until the messages that RECOMMEND this script needed the same answer before naming
+# it; a second copy there could disagree with this one about the same server. No time bound is
+# passed, so the handshake behaves exactly as it did inline.
+tls_presented_chain "$host" "$port" "$tmp" \
   || die "could not connect to ${host}:${port} — is ${LABEL} reachable over HTTPS?"
+tls_presented_shape "$tmp"
 
-# Split the chain into one file per certificate, in the order the server sent them (leaf first).
-# ⚠️ `inc` is LOAD-BEARING — without it this splitter DESTROYS the certificate it just wrote.
-# In awk, `print > f` holds the stream open, but after `close(f)` a later `> f` REOPENS IT
-# TRUNCATED. The old catch-all `n && f { print > f }` kept matching the session text that
-# s_client prints AFTER the last -----END CERTIFICATE-----, so each of those ~22 lines wiped
-# and rewrote cert-NN.pem. MEASURED 2026-08-04: cert-01.pem ended up containing
-# "--- / Server certificate / subject=… / issuer=…" and ZERO PEM, so `openssl x509` failed —
-# and because line 58 assigns it in `$( )`, `set -e` killed the script with NO message at all,
-# never reaching the informative die below. Gate printing on being INSIDE a certificate.
-awk -v d="$tmp" '
-  /-----BEGIN CERTIFICATE-----/ { n++; f = sprintf("%s/cert-%02d.pem", d, n); inc = 1 }
-  inc { print > f }
-  /-----END CERTIFICATE-----/   { close(f); inc = 0 }
-' "${tmp}/chain.txt"
-
-n="$(find "$tmp" -maxdepth 1 -name 'cert-*.pem' | wc -l | tr -d ' ')"
+n="$TLS_PRESENTED_N"
 [ "$n" -ge 1 ] || die "${host}:${port} presented NO certificate (is it really serving TLS?)"
 
 leaf="${tmp}/cert-01.pem"
-last="$(find "$tmp" -maxdepth 1 -name 'cert-*.pem' | sort | tail -1)"
+last="$TLS_PRESENTED_LAST"
 
-# `|| true` is REQUIRED, not defensive noise: under `set -euo pipefail` a failing `openssl x509`
-# makes the ASSIGNMENT non-zero and kills the script SILENTLY — no message, just rc=1 — so every
-# actionable die below becomes unreachable exactly when it is needed. MEASURED 2026-08-04.
-subj="$(openssl x509 -in "$last" -noout -subject 2>/dev/null | sed 's/^subject=//' || true)"
-issu="$(openssl x509 -in "$last" -noout -issuer  2>/dev/null | sed 's/^issuer=//' || true)"
+# tls_presented_shape reads these with `|| true`: under `set -euo pipefail` a failing `openssl x509`
+# would otherwise make the ASSIGNMENT non-zero and kill the script SILENTLY — no message, just rc=1 —
+# so every actionable die below would be unreachable exactly when it is needed. MEASURED 2026-08-04.
+subj="$TLS_PRESENTED_SUBJ"
+issu="$TLS_PRESENTED_ISSU"
 [ -n "$subj" ] && [ -n "$issu" ] || die "could not parse the certificate ${host}:${port} presented.
   This is usually a DEFECT IN THIS SCRIPT (the chain splitter), not in the server — check that
   ${last} contains a PEM block. Re-check with: openssl s_client -connect ${host}:${port} -showcerts"
@@ -131,7 +121,7 @@ issu="$(openssl x509 -in "$last" -noout -issuer  2>/dev/null | sed 's/^issuer=//
 if [ "$n" -eq 1 ]; then
   # A single cert. It is a legitimate trust anchor ONLY if it is self-signed (subject == issuer);
   # otherwise the server is not sending its issuer and we cannot derive the CA from the wire at all.
-  if [ "$subj" != "$issu" ]; then
+  if [ "$TLS_PRESENTED_SHAPE" = leaf-only ]; then
     # ⚠️ THIS die IS SHARED. Makefile calls this script for BOTH harbor and argocd, and there is one
     # die here — so any Harbor-specific recipe printed below would also print on an ArgoCD CA failure,
     # naming a Harbor UI page that has nothing to do with what just failed. The die stays GENERIC and

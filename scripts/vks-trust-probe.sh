@@ -36,6 +36,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/psa.sh"
 # shellcheck source=scripts/lib/podimages.sh
 . "${SCRIPT_DIR}/lib/podimages.sh"
+# harbor_ca_fetch_hedge (the wording for "try make fetch-harbor-ca"). Function definitions only:
+# tls.sh has a load guard and does nothing when sourced.
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 load_env
 
 : "${KUBECONFIG:?set KUBECONFIG (or run: make vks-login) - this probe reads a cluster}"
@@ -66,7 +70,8 @@ echo "  1. Is OUR Harbor CA present inside the cluster?"
 _local_fp=""
 if [ -s "$HARBOR_CA_FILE" ]; then _local_fp="$(_fp < "$HARBOR_CA_FILE")"; fi
 if [ -z "$_local_fp" ]; then
-  echo "     SKIP - no local CA at ${HARBOR_CA_FILE} to compare against (run: make fetch-harbor-ca)"
+  echo "     SKIP - no local CA at ${HARBOR_CA_FILE} to compare against."
+  harbor_ca_fetch_hedge | sed 's/^/            /'
 else
   echo "     ours (${HARBOR_CA_FILE}): ${_local_fp}"
   _found=0

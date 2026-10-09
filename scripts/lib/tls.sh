@@ -405,9 +405,24 @@ vks_ca_default() {
 # of those, and the verdict stays 1: the older, coarser answer, never a false 6.
 supervisor_anchor_verdict() {
   local host="${1:?supervisor_anchor_verdict: host required}" ca="${2:-}" port="${3:-443}"
-  local rc=0 out="" namearg
+  local rc=0
   ca_verifies_endpoint "$host" "$port" "$ca" || rc=$?
   [ "$rc" -eq 1 ] || return "$rc"
+  if ca_endpoint_dates_only "$host" "$port" "$ca"; then return 6; fi
+  return 1
+}
+
+# ca_endpoint_dates_only <host> <port> <ca-file> — ask it ONLY after ca_verifies_endpoint said 1.
+# rc 0 = the anchor is RIGHT and the certificate's validity DATES are the only thing wrong on this
+# machine (it has expired, it is not valid yet, or this machine's clock is off); rc 1 = anything
+# else, including an openssl that does not know `-no_check_time` (the coarser answer, never a
+# false "dates"). One more handshake, no credential, bounded by CA_VERIFY_TIMEOUT.
+# It is the second half of supervisor_anchor_verdict, split out so the Harbor messages can ask the
+# same question: a "this CA is a leftover, get it again" printed over an expired certificate sends
+# the reader to replace a correct anchor, and on a Harbor that does not send its CA that is a long
+# detour for nothing.
+ca_endpoint_dates_only() {
+  local host="$1" port="${2:-443}" ca="$3" out="" namearg
   case "$(ca_addr_kind "$host")" in
     name) namearg="-verify_hostname" ;;
     *)    namearg="-verify_ip" ;;
@@ -419,7 +434,7 @@ supervisor_anchor_verdict() {
   if command grep -q 'CONNECTED(' <<< "$out" \
      && command grep -q 'Verify return code: 0 (ok)' <<< "$out" \
      && ! command grep -q 'no peer certificate available' <<< "$out"; then
-    return 6
+    return 0
   fi
   return 1
 }
@@ -495,6 +510,247 @@ ca_anchor_reject_reason() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────
+# WHAT DOES THE SERVER SEND? — one implementation, two kinds of caller.
+#
+# fetch-ca.sh (make fetch-harbor-ca / fetch-argocd-ca) takes a CA off the connection, and it can do
+# that only when the issuing certificate is IN what the server sends. Every message that tells a
+# reader to "get the CA again" has to know the same thing BEFORE it names that command. MEASURED on
+# a rebuilt lab: lab-preflight said "Get it again: make fetch-harbor-ca" about a Harbor that sends
+# one certificate signed by a CA it does not send, and the command it named then refused, correctly,
+# and named the two routes that do work. The reader lost a step to a message that could have asked.
+#
+# So the split of the chain and the "one certificate, is it its own issuer" test live HERE, and
+# fetch-ca.sh calls them instead of carrying them. A second copy for the advice would be free to
+# disagree with the fetch about which Harbor is which.
+#
+# These send NO credential: one TLS handshake, nothing after it.
+
+# tls_presented_chain <host> <port> <dir> [timeout-seconds]
+# Saves what the server sends as <dir>/chain.txt and one <dir>/cert-NN.pem per certificate, in the
+# order sent (so <dir>/cert-01.pem is the server's own certificate). rc 0 = the handshake ran (there may still be NO
+# certificate: count the files); rc 2 = no connection, or the time ran out.
+# With no 4th argument the handshake is NOT time-bounded: that is fetch-ca.sh's behaviour and this
+# keeps it. Callers that only want to choose a sentence pass a bound.
+tls_presented_chain() {
+  local host="$1" port="$2" d="$3" t="${4:-}" rc=0
+  if [ -n "$t" ]; then
+    timeout "$t" openssl s_client -connect "${host}:${port}" -servername "$host" -showcerts \
+      </dev/null 2>/dev/null > "${d}/chain.txt" || rc=$?
+  else
+    openssl s_client -connect "${host}:${port}" -servername "$host" -showcerts \
+      </dev/null 2>/dev/null > "${d}/chain.txt" || rc=$?
+  fi
+  [ "$rc" -eq 0 ] || return 2
+  # ⚠️ `inc` is LOAD-BEARING — without it this splitter DESTROYS the certificate it just wrote.
+  # In awk, `print > f` holds the stream open, but after `close(f)` a later `> f` REOPENS IT
+  # TRUNCATED. A catch-all `n && f { print > f }` kept matching the session text that s_client
+  # prints AFTER the last -----END CERTIFICATE-----, so each of those ~22 lines wiped and rewrote
+  # cert-NN.pem. MEASURED 2026-08-04: cert-01.pem ended up containing "--- / Server certificate /
+  # subject=… / issuer=…" and ZERO PEM. Gate printing on being INSIDE a certificate.
+  awk -v d="$d" '
+    /-----BEGIN CERTIFICATE-----/ { n++; f = sprintf("%s/cert-%02d.pem", d, n); inc = 1 }
+    inc { print > f }
+    /-----END CERTIFICATE-----/   { close(f); inc = 0 }
+  ' "${d}/chain.txt"
+  return 0
+}
+
+# tls_presented_shape <dir> — classify what tls_presented_chain saved. Sets, for the caller:
+#   TLS_PRESENTED_N      how many certificates
+#   TLS_PRESENTED_LAST   the last file (what fetch-ca.sh takes as the CA)
+#   TLS_PRESENTED_SUBJ / TLS_PRESENTED_ISSU   subject and issuer of the LAST one ('' if unparseable)
+#   TLS_PRESENTED_SHAPE  none | unparsed | self-signed | leaf-only | chain | chain-incomplete
+# `chain` and `chain-incomplete` are both "more than one certificate". They differ in the one thing
+# fetch-ca.sh then checks: does the LAST certificate, alone, verify the server's own
+# (`openssl verify -CAfile <last> <first>`, the same command fetch-ca.sh runs on its candidate)?
+# It does when the last one directly issued the server's certificate. It does not when another
+# certificate sits in between, or when the last one sent is itself an intermediate: MEASURED,
+# fetch-ca.sh refuses those with "the certificate we extracted does NOT verify ... leaf" and
+# writes nothing. The first version of this function called every multi-certificate answer
+# `chain`, so the messages named `make fetch-harbor-ca` unhedged on a server it refuses.
+# "self-signed" here is subject == issuer on a single certificate, the test fetch-ca.sh has always
+# used; "leaf-only" is a single certificate whose issuer is something else, which is the shape whose
+# CA cannot be taken off the connection. Always returns 0: the answer is in the variables.
+#
+# `|| true` on the two reads is REQUIRED: under `set -euo pipefail` a failing `openssl x509` makes
+# the ASSIGNMENT non-zero and kills the caller SILENTLY, before it can say anything. MEASURED 2026-08-04.
+tls_presented_shape() {
+  local d="$1" n
+  n="$(find "$d" -maxdepth 1 -name 'cert-*.pem' | wc -l | tr -d ' ')"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  # Read by the CALLER (fetch-ca.sh), not in this file, which is all SC2034 can see.
+  # shellcheck disable=SC2034
+  TLS_PRESENTED_N="$n"
+  TLS_PRESENTED_LAST=""; TLS_PRESENTED_SUBJ=""; TLS_PRESENTED_ISSU=""
+  if [ "$n" -lt 1 ]; then TLS_PRESENTED_SHAPE=none; return 0; fi
+  TLS_PRESENTED_LAST="$(find "$d" -maxdepth 1 -name 'cert-*.pem' | sort | tail -1)"
+  TLS_PRESENTED_SUBJ="$(openssl x509 -in "$TLS_PRESENTED_LAST" -noout -subject 2>/dev/null | sed 's/^subject=//' || true)"
+  TLS_PRESENTED_ISSU="$(openssl x509 -in "$TLS_PRESENTED_LAST" -noout -issuer  2>/dev/null | sed 's/^issuer=//' || true)"
+  if [ -z "$TLS_PRESENTED_SUBJ" ] || [ -z "$TLS_PRESENTED_ISSU" ]; then
+    TLS_PRESENTED_SHAPE=unparsed
+  elif [ "$n" -gt 1 ]; then
+    if openssl verify -CAfile "$TLS_PRESENTED_LAST" "${d}/cert-01.pem" >/dev/null 2>&1; then
+      TLS_PRESENTED_SHAPE=chain
+    else
+      TLS_PRESENTED_SHAPE=chain-incomplete
+    fi
+  elif [ "$TLS_PRESENTED_SUBJ" = "$TLS_PRESENTED_ISSU" ]; then
+    TLS_PRESENTED_SHAPE=self-signed
+  else
+    TLS_PRESENTED_SHAPE=leaf-only
+  fi
+  return 0
+}
+
+# _tls_positive_number <value> — rc 0 for digits with an optional fraction and at least one non-zero digit.
+_tls_positive_number() {
+  [[ "${1:-}" =~ ^[0-9]*\.?[0-9]+$ ]] && [[ "$1" =~ [1-9] ]]
+}
+
+# tls_ca_on_the_wire <host> <port> [timeout-seconds] — prints ONE word, for a message to branch on:
+#   self-signed   one certificate that is its own issuer: taking it off the connection works
+#   chain         more than one certificate, and the last one verifies the server's own by
+#                 itself: taking the last one is what fetch-ca.sh does, and it works
+#   chain-incomplete  more than one certificate, and the last one does NOT verify the server's
+#                 own by itself: fetch-ca.sh takes it, finds that out and refuses
+#   leaf-only     one certificate issued by something the server does NOT send: it cannot be taken
+#                 off the connection, and fetch-ca.sh refuses
+#   unknown       no openssl, no answer in time, no certificate, or one that did not parse
+# `unknown` is NOT a verdict. A caller that gets it keeps the sentence it had and adds no claim.
+# Bounded by the 3rd argument, else CA_VERIFY_TIMEOUT (the bound ca_verifies_endpoint uses).
+# Always returns 0, so `x="$(tls_ca_on_the_wire …)"` is safe under `set -e`.
+# ⚠️ THE BOUND IS CLAMPED. `timeout 0` means NO time limit, so a caller's 0 (or a negative, or a
+# word) would turn this into an unbounded dial inside a report. Anything that is not a positive
+# number falls back to CA_VERIFY_TIMEOUT, and if that is not one either, to its default.
+tls_ca_on_the_wire() {
+  local host="${1:-}" port="${2:-443}" t="${3:-}" d
+  _tls_positive_number "$t" || t="${CA_VERIFY_TIMEOUT:-}"
+  _tls_positive_number "$t" || t=15
+  if [ -z "$host" ] || ! command -v openssl >/dev/null 2>&1; then printf 'unknown'; return 0; fi
+  d="$(mktemp -d 2>/dev/null)" || { printf 'unknown'; return 0; }
+  if tls_presented_chain "$host" "$port" "$d" "$t"; then
+    tls_presented_shape "$d"
+  else
+    TLS_PRESENTED_SHAPE=none
+  fi
+  rm -rf "$d"
+  case "$TLS_PRESENTED_SHAPE" in
+    self-signed|chain|chain-incomplete|leaf-only) printf '%s' "$TLS_PRESENTED_SHAPE" ;;
+    *) printf 'unknown' ;;
+  esac
+  return 0
+}
+
+# harbor_ca_not_on_wire_advice <ca-file> <harbor-host> — the lines to print INSTEAD of
+# "make fetch-harbor-ca" when tls_ca_on_the_wire said `leaf-only`. One wording, three callers
+# (make ca-status / lab-preflight, make env-validate, make creds), each of which adds its own
+# indent. The two routes are in the order fetch-ca.sh gives them, and for its reason: the first
+# needs a Harbor login and nothing else; the second reads a Secret that also holds that CA's
+# private key, which is an admin-level grant.
+#
+# THE ORDER INSIDE THE UI ROUTE IS LOAD-BEARING: fingerprint the DOWNLOADED file, confirm it, and
+# only then save it as <ca-file>. <ca-file> is the LIVE anchor, so from the moment something is
+# saved there every consumer trusts it. The first version of this text said "Save it as <ca-file>"
+# and then "confirm its SHA-256", which is trust first and check second.
+# The fingerprint command therefore names a DOWNLOAD path, never <ca-file>. `~/Downloads/ca.crt`
+# is an example and the text says so in words (no <placeholder>: a pasted `<` is a shell redirect).
+#
+# THE DIGEST IS THE CERTIFICATE FINGERPRINT (`openssl x509 -fingerprint -sha256`), the same one
+# fetch-ca.sh and 27-harbor-ca-from-cluster.sh print. `sha256sum` of the PEM file is a DIFFERENT
+# number and never matches it; one kind of digest everywhere, or two people compare unlike things.
+#
+# GRADE of "Repositories tab, Registry Certificate": READ (Harbor's documentation and its issue
+# tracker), NOT SEEN on the Harbor version this lab runs. Hence the "if the button is not there"
+# clause: the sentence must stay true where the button is absent.
+#
+# THE CLUSTER ROUTE ALWAYS NAMES THE FILE. `make harbor-ca-from-cluster` writes to make's
+# HARBOR_CA_FILE (the .env value, else ./secrets/harbor-ca.crt). A caller judging a per-run
+# override (`make ca-status HARBOR_CA_FILE=x`) would otherwise be told about one file and handed a
+# command that writes another. An earlier version left the argument off for the default path,
+# which is wrong when .env names another file and the override IS the default path. READ in the
+# Makefile: the recipe passes "$(HARBOR_CA_FILE)" to the script, and a command-line variable wins.
+#
+# ⚠️ THE VALUE CROSSES THREE PARSERS: the shell it is pasted into, make, and the recipe's shell
+# (inside double quotes there). A `$` therefore has to arrive at make as `\$$`: make turns `$$`
+# into `$`, and the recipe's shell reads `\$` inside its double quotes as a literal `$`. `%q` then
+# quotes the whole value for the first shell. The test runs the printed line through `make -n` and
+# then through a shell, and requires the script to receive the original path.
+# NOT HANDLED: a path holding a double quote, a backtick or a backslash (the recipe's own double
+# quotes are the limit there).
+#
+# THE THIRD ARGUMENT IS WHAT tls_ca_on_the_wire SAID: `leaf-only` (the default) or
+# `chain-incomplete`. Only the first sentence differs: both are "the CA cannot be taken off this
+# connection", for different reasons, and the routes are the same.
+harbor_ca_not_on_wire_advice() {
+  local file="$1" host="$2" shape="${3:-leaf-only}" mkfile
+  mkfile="${file//\$/\\\$\$}"
+  if [ "$shape" = chain-incomplete ]; then
+    printf 'make fetch-harbor-ca cannot get the new one: the last certificate %s sends\n' "$host"
+    printf 'does not verify its own certificate by itself (another one sits in between, or\n'
+    printf 'the top one is not sent), and that command refuses it. Get the CA file one of these ways:\n'
+  else
+    printf 'make fetch-harbor-ca cannot get the new one: %s sends only its own\n' "$host"
+    printf 'certificate, not the CA that issued it. Get the CA file one of these ways:\n'
+  fi
+  printf '  - from the Harbor UI: your project, Repositories tab, Registry Certificate\n'
+  printf '    (if the button is not there, use the next route). Then, in this order:\n'
+  printf '      1. print the fingerprint of the file you just downloaded (~/Downloads/ca.crt\n'
+  printf '         stands for wherever your browser saved it):\n'
+  printf '           openssl x509 -in ~/Downloads/ca.crt -noout -fingerprint -sha256\n'
+  printf '      2. confirm that SHA-256 with whoever operates Harbor, over another channel\n'
+  printf '      3. only then save the file as:\n'
+  printf '           %s\n' "$file"
+  printf '    More detail: docs/scenario-1.md Step 8.\n'
+  printf '  - or ask whoever operates Harbor to send you the CA file, then do steps 1 to 3\n'
+  printf '    with the file they send (confirm the SHA-256 by a channel other than the one\n'
+  printf '    the file came by).\n'
+  printf '  - or, if you are the lab admin (it needs an admin-level grant):\n'
+  printf '      make harbor-ca-from-cluster HARBOR_CA_FILE=%q\n' "$mkfile"
+  printf '    It prints the SHA-256 of what it wrote: confirm that one the same way.\n'
+  printf 'Then check it:  make ca-status\n'
+  return 0
+}
+
+# harbor_cert_dates_advice <host> <port> [timeout-seconds] — the lines to print when
+# ca_endpoint_dates_only said yes: the CA file is right, and the certificate Harbor serves is
+# outside its validity dates AS THIS MACHINE'S CLOCK SEES THEM. Either side can be the wrong one,
+# so both are shown: the certificate's two dates (read off one more bounded handshake) and this
+# machine's UTC time. Nothing here says to replace the CA file, and the last line says not to.
+harbor_cert_dates_advice() {
+  local host="$1" port="${2:-443}" t="${3:-}" d nb="" na=""
+  _tls_positive_number "$t" || t="${CA_VERIFY_TIMEOUT:-}"
+  _tls_positive_number "$t" || t=15
+  if d="$(mktemp -d 2>/dev/null)"; then
+    if tls_presented_chain "$host" "$port" "$d" "$t" && [ -s "${d}/cert-01.pem" ]; then
+      nb="$(openssl x509 -in "${d}/cert-01.pem" -noout -startdate 2>/dev/null | sed 's/^notBefore=//' || true)"
+      na="$(openssl x509 -in "${d}/cert-01.pem" -noout -enddate   2>/dev/null | sed 's/^notAfter=//' || true)"
+    fi
+    rm -rf "$d"
+  fi
+  printf 'The CA file is the right one: with the dates ignored, it verifies the certificate\n'
+  printf '%s presents. What fails is that certificate'"'"'s validity period on this machine:\n' "$host"
+  printf '    valid from:  %s\n' "${nb:-could not be read}"
+  printf '    valid until: %s\n' "${na:-could not be read}"
+  printf '    this machine'"'"'s clock (date -u):  %s\n' "$(date -u 2>/dev/null || true)"
+  printf 'If the clock is wrong, correct it. If it is right, the certificate has expired or is not\n'
+  printf 'valid yet, and whoever operates Harbor has to renew it. Do NOT replace the CA file.\n'
+  return 0
+}
+
+# harbor_ca_fetch_hedge — three short lines for every message that has NOT asked what Harbor sends (no CA
+# file yet, an unreadable one, an empty one) and so cannot know whether `make fetch-harbor-ca`
+# will work. They name it as an ATTEMPT and name what to do when it refuses. No dial happens
+# here ON PURPOSE: these callers run with probing switched off, with Harbor not answering, or
+# before any connection is made, so the tls_ca_on_the_wire question is not theirs to ask.
+# The first line is the sentence ca_status_report already prints for a MISSING file.
+harbor_ca_fetch_hedge() {
+  printf 'Try  make fetch-harbor-ca  — it works only when the issuing CA is sent by the server.\n'
+  printf 'If it says the CA is not sent: see docs/scenario-1.md Step 8, or as the lab admin\n'
+  printf '  make harbor-ca-from-cluster\n'
+  return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
 # ca_status_report lives HERE, beside ca_verifies_endpoint whose return codes it interprets.
 # It used to live in the executable 29-ca-status.sh, which 24-lab-preflight.sh SOURCED — so the
 # preflight re-ran `set -euo pipefail`, re-sourced os.sh and tls.sh, reassigned SCRIPT_DIR and
@@ -507,7 +763,7 @@ ca_anchor_reject_reason() {
 # copies of one predicate is the shape this repo keeps getting bitten by.)
 # Prints to stderr; returns the number of STALE anchors.
 ca_status_report() {
-  local stale=0 label file host port remedy rc
+  local stale=0 label file host port remedy rc _wire _adv
 
   # ⚠️ WITHOUT openssl EVERY probe returns 5 and this reports "your CA is not usable" — the WRONG
   # cause, with a remedy that cannot help. MEASURED with PATH stripped. It matters because a bare
@@ -636,10 +892,31 @@ ca_status_report() {
     case "$rc" in
       0) log_info "${label} (${file}) matches ${host}"
          CA_STATUS_MATCHED=$((CA_STATUS_MATCHED + 1)) ;;
-      1) log_error "${label} (${file}) does NOT match ${host} — this is a leftover certificate."
+      1) # DATES FIRST, for Harbor. An expired or not-yet-valid certificate under the CORRECT CA
+         # also lands here (rc=1 is "connected, and not the name"). Calling that a leftover sends
+         # the reader to re-obtain a file they already hold. It still counts as a problem: the
+         # exit status is the same, only the sentence is true.
+         if [ "$remedy" = fetch-harbor-ca ] && ca_endpoint_dates_only "$host" "$port" "$file"; then
+           log_error "${label} (${file}) is the right CA for ${host}, but the certificate ${host} presents is outside its dates."
+           while IFS= read -r _adv; do log_error "  ${_adv}"; done <<< "$(harbor_cert_dates_advice "$host" "$port")"
+           stale=$((stale + 1))
+           continue
+         fi
+         log_error "${label} (${file}) does NOT match ${host} — this is a leftover certificate."
          log_error "  A rebuilt lab issues a NEW certificate at the SAME address, so the old file"
          log_error "  still looks perfectly valid and is not."
-         log_error "  Get it again — this overwrites in place and cannot lose anything:  make ${remedy}"
+         # ASK WHAT THE SERVER SENDS BEFORE NAMING THE COMMAND. `make fetch-harbor-ca` takes the CA
+         # off the connection, and a Harbor that sends one certificate signed by a CA it does not
+         # send has no CA there to take: the command refuses and names two other routes. So on that
+         # shape print those routes here. Any other answer, including "could not tell", keeps the
+         # sentence below unchanged. Harbor's pair only: the routes are Harbor's.
+         _wire=unknown
+         if [ "$remedy" = fetch-harbor-ca ]; then _wire="$(tls_ca_on_the_wire "$host" "$port")"; fi
+         if [ "$_wire" = leaf-only ] || [ "$_wire" = chain-incomplete ]; then
+           while IFS= read -r _adv; do log_error "  ${_adv}"; done <<< "$(harbor_ca_not_on_wire_advice "$file" "$host" "$_wire")"
+         else
+           log_error "  Get it again — this overwrites in place and cannot lose anything:  make ${remedy}"
+         fi
          stale=$((stale + 1)) ;;
       2) # ABSTAIN. Without this arm, every certificate reads as wrong whenever the lab is powered
          # off, and the first person to see that rightly deletes the check. rc=1 and rc=2 being
@@ -655,7 +932,14 @@ ca_status_report() {
       4) log_error "${label}: ${host} answered, but did not present a certificate at all."
          log_error "  Something other than ${label} is listening there, or it is serving plain HTTP."
          stale=$((stale + 1)) ;;
-      5) log_error "${label} (${file}) is not a usable CA certificate — run: make ${remedy}"
+      5) # No dial has been made on this arm (ca_verifies_endpoint returns 5 before it connects),
+         # so for Harbor the fetch is named as an ATTEMPT, with what to do when it refuses.
+         if [ "$remedy" = fetch-harbor-ca ]; then
+           log_error "${label} (${file}) is not a usable CA certificate."
+           while IFS= read -r _adv; do log_error "  ${_adv}"; done <<< "$(harbor_ca_fetch_hedge)"
+         else
+           log_error "${label} (${file}) is not a usable CA certificate — run: make ${remedy}"
+         fi
          stale=$((stale + 1)) ;;
       *) log_error "${label}: unrecognised result ${rc} checking ${host} — treat as unchecked."
          stale=$((stale + 1)) ;;

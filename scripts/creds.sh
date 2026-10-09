@@ -3402,15 +3402,42 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
       if [ "$_h_ca_rc" = 0 ]; then
         :
       elif [ "$_h_ca_rc" = 1 ]; then
-        printf '    - Harbor: the CA at %s does NOT verify it — re-fetch it:\n' "$_ca_abs"
-        printf '      make fetch-harbor-ca\n'
-        printf '      if make fetch-harbor-ca succeeds and it still fails, the certificate Harbor serves is the problem.\n'
+        # WHICH command gets the new one depends on what Harbor SENDS: `make fetch-harbor-ca` takes
+        # the CA off the connection, and a Harbor that sends one certificate signed by a CA it does
+        # not send has none there (the command refuses). tls_ca_on_the_wire is the same test
+        # fetch-ca.sh makes, with this report's own probe bound. Only a definite `leaf-only`
+        # changes the text; "could not tell" keeps the lines this always printed.
+        # DATES FIRST: an expired or not-yet-valid certificate under the CORRECT CA is also rc=1.
+        # "Re-fetch the CA" is false there. Same second check the Supervisor row uses, with this
+        # report's own probe bound.
+        _h_wire=""
+        if CA_VERIFY_TIMEOUT="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" ca_endpoint_dates_only "$_h_host" "$_h_port" "$_ca_abs"; then
+          _h_wire=dates
+        else
+          _h_wire="$(tls_ca_on_the_wire "$_h_host" "$_h_port" "${CREDS_PROBE_TIMEOUT_SECONDS:-2}")"
+        fi
+        if [ "$_h_wire" = dates ]; then
+          printf '    - Harbor: the CA at %s is the right one; the certificate Harbor serves is outside its dates.\n' "$_ca_abs"
+          harbor_cert_dates_advice "$_h_host" "$_h_port" "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" | sed 's/^/      /'
+        elif [ "$_h_wire" = leaf-only ] || [ "$_h_wire" = chain-incomplete ]; then
+          printf '    - Harbor: the CA at %s does NOT verify it.\n' "$_ca_abs"
+          harbor_ca_not_on_wire_advice "$_ca_abs" "$_h_host" "$_h_wire" | sed 's/^/      /'
+        else
+          printf '    - Harbor: the CA at %s does NOT verify it — re-fetch it:\n' "$_ca_abs"
+          printf '      make fetch-harbor-ca\n'
+          printf '      if make fetch-harbor-ca succeeds and it still fails, the certificate Harbor serves is the problem.\n'
+        fi
       elif [ "$_h_ca_rc" = 3 ]; then
+        # NOT "make fetch-harbor-ca lists them": on a Harbor that sends one certificate signed by
+        # a CA it does not send, fetch-ca.sh stops at that check BEFORE it reads any name, so the
+        # sentence was false there. This line needs no login and reads the names off the handshake.
         printf '    - Harbor: the CA is right, but %s is not a name its cert carries —\n' "$HARBOR_URL"
-        printf '      set HARBOR_URL to a name it carries; make fetch-harbor-ca lists them.\n'
+        printf '      set HARBOR_URL to a name it carries. This lists them:\n'
+        printf '      openssl s_client -connect %s:%s -servername %s </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName\n' \
+          "$_h_host" "$_h_port" "$_h_host"
       elif [ "$_h_ca_rc" = 5 ]; then
         printf '    - Harbor: the CA at %s is not a readable certificate — get one:\n' "$_ca_abs"
-        printf '      make fetch-harbor-ca\n'
+        harbor_ca_fetch_hedge | sed 's/^/      /'
       else
         printf '    - Harbor%s: if that CA is the one that signed it, this verifies —\n      curl --cacert %s %s://%s\n' "$_h_when" \
           "$_ca_abs" "$harbor_scheme" "${HARBOR_URL}"
@@ -3422,8 +3449,10 @@ if [ "${_tls_note_needed:-0}" = 1 ] && [ "${_pre_off:-0}" != 1 ]; then
       # Shape now matches its siblings: label, command alone, then the diagnostic. The path is
       # kept (an earlier bug reported "not on disk" for a CA that WAS there, because the relative
       # path resolved against the CWD) but it is a diagnostic, not part of the instruction.
+      # No probe here (this branch also runs with probing off and with Harbor not answering),
+      # so the fetch is named as an attempt, with what to do when it refuses.
       printf '    - Harbor: no readable CA — get one, then re-run this report:\n'
-      printf '      make fetch-harbor-ca\n'
+      harbor_ca_fetch_hedge | sed 's/^/      /'
       printf '      (looked for it at %s)\n' "${_ca_abs:-<HARBOR_CA_FILE unset>}"
     fi
   elif [ "${_harbor_marked:-0}" = 1 ]; then

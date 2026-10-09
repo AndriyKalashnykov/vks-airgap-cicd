@@ -18,6 +18,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/engine.sh
 . "${SCRIPT_DIR}/lib/engine.sh"
+# harbor_ca_fetch_hedge (the wording for "try make fetch-harbor-ca"). Function definitions only:
+# tls.sh has a load guard and does nothing when sourced.
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 load_env
 
 # macOS (B735): this installs Harbor's CA for the ENGINE and proves it with a login. MEASURED on the Mac (podman 6.1.2, a REMOTE client): `pull` and `push` take
@@ -45,7 +49,8 @@ if [ "${HARBOR_INSECURE:-0}" = "1" ]; then
   CERT_ARGS=(--tls-verify=false)
 else
   CA_METHOD="$(engine_trust_ca "$ENGINE" "$HARBOR_URL" "$CA")" \
-    || die "could not wire the CA. Is HARBOR_CA_FILE set? ('make fetch-harbor-ca' re-fetches it)"
+    || die "could not wire the CA. Is HARBOR_CA_FILE set, and is the file there?
+$(harbor_ca_fetch_hedge | sed 's/^/  /')"
   log_info "CA method: ${CA_METHOD}"
   if [ "$ENGINE" = podman ]; then
     # podman takes the CA per COMMAND — nothing was installed, so build the dir the caller will pass.
