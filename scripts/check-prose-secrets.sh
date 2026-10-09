@@ -4,7 +4,7 @@
 # gitleaks (already run by `make secrets`) is tuned for MACHINE-shaped secrets:
 # `KEY=value` assignments, known token prefixes (ghp_/AKIA…/xox…), high-entropy
 # base64/hex blobs, PEM blocks. It does NOT reliably catch a credential written
-# in prose in a markdown runbook (e.g. "use admin / uS$yQqHN4YMCpB1K@eO@").
+# in prose in a markdown runbook (e.g. "use admin / EXAMPLE-not-a-real-password").
 # This gate is the COMPLEMENT: a case-insensitive grep for credential-shaped
 # prose over *.md, minus a narrow, commented allowlist of legitimate non-secrets.
 # See ~/projects/claude-config/rules/common/security.md
