@@ -16,6 +16,32 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B753 — what the 2026-10-10 Renovate batch (#1358, #1361, #1362, #1363) left open 🔴 open
+
+Landed and measured on KinD (cold `make e2e-kind E2E_FRESH=1`, then `make e2e-kind-istio-existing`, both
+rc=0): Istio 1.31.1 + Gateway API v1.6.0, Gitea 28.1.0, kaniko with go-containerregistry v0.22.1,
+maven 3.10 / rust 1.99 builders, traefik v3.7.14, mise-action v5. Open:
+
+1. **Renovate extracts `jdx/mise` twice** — once through the `github-actions` manager (branch
+   `renovate/github-actions`) and once through the workflow `version:` regex manager (branch
+   `renovate/jdx-mise-2026.x`). Each bump opens two PRs with the same edit; the loser is left
+   conflicting (#1370 merged, #1371 closed by hand). Source: Dependency Dashboard issue #14, read
+   by the review round, not re-checked. Disable one extraction; `check-mise-pins` reads its pattern
+   from the regex manager, so that is the one to keep.
+2. **`make e2e-sneakernet` was not run** on these versions. The bundle now carries Istio 1.31.1 charts
+   from `blob.istio.io` and `gateway-api-v1.6.0.yaml`; a bundle cut earlier must be re-cut.
+3. **Nothing here ran on the lab.** Unmeasured there: Istio 1.31 (client v1.6.0) against the
+   VKS-managed Gateway API CRDs; the internet box's proxy allowlist needing `blob.istio.io` and
+   `istio-release.r2.istio.io`; a guest SERVICE CIDR outside 10/8, 172.16/12, 192.168/16, 100.64/10
+   (Gitea 28's `private` webhook allow-list would refuse the EventListener); the Gitea 1.27 -> 28
+   database migration on a warm PVC, which is one-way.
+4. **Gitea logs one WARN at start** — `[security] ALLOWED_HOST_LIST only restricts private hosts in
+   the default lax mode`. Deliveries work (12/12 PipelineRuns carried the EventListener label).
+   Whether to set `EGRESS_MODE` is undecided.
+5. **CI skipped the heavy `static-check` job on #1358 and #1362** although both changed `scripts/` or
+   `k8s/`. Run locally instead for #1358 (rc=0). Likely the same class as [[B748]]; not investigated.
+6. `scripts/check-mise-pins.sh:154` still prints `# v4` in its FAIL example.
+
 ## 🔴 B751 — a `ci-tier: fast` unit test could reach the lab it ran beside: ONE fence now, and a run-time guard 🔴 open (four items left)
 
 **The class.** A test that runs a real script from `scripts/` inherits everything that script

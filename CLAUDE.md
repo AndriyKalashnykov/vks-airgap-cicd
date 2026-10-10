@@ -1062,50 +1062,42 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-10-01 — Supervisor-token awareness in `vks-login` / `creds` (#1340)
+## ▶️ HANDOFF 2026-10-10 — the Renovate batch: Istio 1.31, Gitea 28, kaniko ggcr v0.22.1, mise-action v5
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### What landed (#1340)
+### What landed (#1358, #1361, #1362, #1363; #1371 closed as superseded)
 
-- **Plain `make vks-login` renews NOTHING** on `VKS_AUTH_METHOD=kubeconfig` (what scenario-1 Step 6
-  leaves in `.env`). It now ends with one offline line: the Supervisor token's file, context and
-  expiry, "NOT renewed by this run", plus `make creds-renew` when expired or inside
-  `SUPERVISOR_TOKEN_WARN_HOURS` (new, default 2). `make creds` warns only inside that window.
-  Silent for a tenant (no Supervisor kubeconfig) and in the KinD flow.
-- **`vcf` login path:**
-  - dies when `vcf context use` leaves another context current;
-  - RENEWED/UNCHANGED compare the token of the user entry the NEW context uses. The lab's
-    `secrets/supervisor.kubeconfig` holds TWO users (`argocd-supervisor:…`, `vks-cicd:…`);
-  - `VCF_CLI_VSPHERE_PASSWORD` is unset after `load_env` and reaches only `vcf context create/use`,
-    never empty.
-- Live-verified on the lab, including the after-Step-14 state (the ArgoCD context current).
+- **Istio 1.31.1 + Gateway API v1.6.0.** The charts moved: 1.31+ is published only at
+  `blob.istio.io/istio-release/charts`. `ISTIO_CHART_REPO` now defaults there at every site.
+- **Gitea 28.1.0.** `GITEA__webhook__ALLOWED_HOST_LIST="*"` is dropped at startup by v28 while
+  Gitea stays healthy; it is now `GITEA__security__ALLOWED_HOST_LIST=private`.
+- **kaniko** is `v1.25.19-gcr0.22.1-debug`. The tag and `k8s/tekton/tasks/kaniko-build.yaml` are
+  hand-edited on every `go_get` bump; Renovate moves only column 8.
+- **`renovate.json`:** Istio is grouped with gateway-api by its real dep names, an Istio MINOR no
+  longer automerges, the gateway-api cap is `<v1.6.1`, Gitea and Traefik majors need dashboard
+  approval, and the busybox tag in `49-install-headlamp.sh` is tracked.
 
-### State (MEASURED 2026-10-01 ~01:45Z)
+### State (MEASURED 2026-10-10 ~07:30Z)
 
-- **Lab:** up, `make creds` 12/12 serving. Supervisor token valid to **2026-10-01T11:27Z**.
-- **Restart at 23:26Z:** owner-approved `make lab-restart` by the nested-vsphere-lab session, not a
-  fault. The guest nodes rebooted at 23:44Z; that is where the restart counts and the transient
-  Headlamp "Unhealthy" warnings come from.
-- The orphaned `vks-walkbox-ubuntu` VM was removed (`walkbox-vm-down` in nested-vsphere-lab).
-  Only `esxi01` runs.
+- KinD: torn down. `.env.state` restored to the lab overlay it held before the runs.
+- Lab: `esxi01` running; not touched by this session.
+- Another session has `fix/b750-b751-followups` in flight (worktree `~/.cache/vks-wt/b750`).
 
 ### 🔴 DISTRUST FIRST
 
 | instrument | what it did |
 |---|---|
-| **Headlamp "Unhealthy"/"BackOff" events** | show the last hour, so they outlive a lab restart that has already healed. Check restart time and readiness before diagnosing. |
-| **a probe that pipes a JSON body through `--jq` inside `bash -c "..."`** | the escaped quotes broke, and the poll printed CI counts with an empty merge state. Read `mergeStateStatus` on its own. |
-| **`make static-check` duration** | ~13 min locally now (183 tests), not the ~77 s quoted elsewhere. Do not foreground it under a 10-min tool timeout. |
+| **a green Renovate PR** | CI skipped the heavy `static-check` job on #1358 and #1362, and no offline gate sees a chart host move or a Gitea setting that is silently dropped. Both needed the KinD e2e. |
+| **`gh pr ready` before a push is confirmed** | a stale `--force-with-lease` failed, the PR was marked ready anyway, and for some minutes #1362 sat green and mergeable WITHOUT its fix. Read the push result first. |
+| **`e2e-kind-istio-existing` dying with no message** | it was the injection probe racing the injector webhook; it now retries and prints the error. |
 
 ### NOT done — next work, ranked
 
-1. **B746 / B747 / B748** (filed 2026-09-30, open): unauthenticated Gitea/headlamp creds rows;
-   `make deps` never raises a too-old mise; `trivy-config` lost its PR path.
-2. **B486** — walk the *Verify TLS* block on the lab; then F6 (VIP stability).
-3. **B745** — §5's `argocd-auth-check: OK` after `update-password` reads the OLD password.
-4. **B740** (Mac-only), **B743**, **B744**, **B724** — unchanged from the previous handoff.
+1. **[[B753]]** — the open items from this batch (duplicate `jdx/mise` tracking first: the next
+   duplicate PR is due when 2026.10.4 clears its 3-day wait).
+2. **B746 / B747 / B748**, **B486**, **B745**, **B740**, **B743**, **B744**, **B724** — unchanged.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
