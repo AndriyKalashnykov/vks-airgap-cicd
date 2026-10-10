@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26
+# syntax=docker/dockerfile:1.28
 # pythonwebapp — THE INTERPRETED case, and the reason it is worth having among the six.
 #
 # AIR-GAP: Java/Go/Rust compile their dependencies away; Python cannot. Its deps must be present at

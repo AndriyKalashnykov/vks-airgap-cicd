@@ -1,10 +1,10 @@
-# syntax=docker/dockerfile:1.26
+# syntax=docker/dockerfile:1.28
 # Builder image for AIR-GAPPED CI: bakes this app's full cargo registry + git cache so the
 # in-cluster build needs NO crates.io. Build on the INTERNET-connected jump box, push to Harbor.
 #
 # Rebuild whenever Cargo.toml / Cargo.lock change. scripts/14-builder-build.sh resolves the base
 # image and the ARG NAME below PER APP via lib/apps.sh.
-ARG RUST_IMAGE=rust:1.98-alpine
+ARG RUST_IMAGE=rust:1.99-alpine
 # RUST_IMAGE default is explicitly tagged; DL3006 can't see through the ARG.
 # hadolint ignore=DL3006
 FROM ${RUST_IMAGE}

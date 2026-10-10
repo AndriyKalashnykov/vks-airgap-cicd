@@ -23,7 +23,7 @@ eclipse-temurin:25.0.4_7-jre-jammy
 
 # ---- Maven (dependency resolution + test/package in the pipeline) ----
 # renovate: datasource=docker depName=maven
-maven:3.9-eclipse-temurin-25
+maven:3.10-eclipse-temurin-25
 
 # ---- Go toolchain (gowebapp: `go vet` + `go test` + `go build`, and its BUILDER base) ----
 # gowebapp is no longer stdlib-only: it depends on chi, so its offline build DOES need a warm
@@ -48,21 +48,21 @@ alpine/git:v2.54.0
 
 # ---- yq (deterministic image-tag edit in the write-back task) ----
 # renovate: datasource=docker depName=mikefarah/yq
-mikefarah/yq:4.53.6
+mikefarah/yq:4.54.1
 
 # ---- Gitea (self-hosted Git server; single image, SQLite backend for the demo) ----
 # renovate: datasource=docker depName=gitea/gitea
-gitea/gitea:1.27.2-rootless
+gitea/gitea:1.27.3-rootless
 
 # ---- Traefik (single ingress controller fronting the UIs at *.vks.local) ----
 # renovate: datasource=docker depName=traefik
-traefik:v3.7.11
+traefik:v3.7.14
 
 # ---- Istio (default ingress: control plane + ingress gateway; air-gap hub=Harbor) ----
 # renovate: datasource=docker depName=istio/pilot
-istio/pilot:1.30.3
+istio/pilot:1.31.1
 # renovate: datasource=docker depName=istio/proxyv2
-istio/proxyv2:1.30.3
+istio/proxyv2:1.31.1
 
 # ---- Node.js toolchain (nodejswebapp: builder base + runtime base) ----
 # node 24 is the current LTS line ("Krypton"); 26 is Current (lts=no), which is why the pin is 24.
@@ -73,7 +73,7 @@ node:24-alpine
 # The runtime is distroless/static (already pinned above for Go) -- a CGO-free Rust binary needs
 # nothing else, so Rust adds a BUILD image only.
 # renovate: datasource=docker depName=rust
-rust:1.98-alpine
+rust:1.99-alpine
 
 # ---- Python toolchain (pythonwebapp: builder base) ----
 # renovate: datasource=docker depName=python
@@ -112,4 +112,4 @@ ghcr.io/headlamp-k8s/headlamp:v0.45.0
 # PINNED, not `:latest` -- images.txt forbids a moving tag, and upstream's default IS a moving tag.
 # The install must pass BOTH config.nodeShellImage and config.podDebugImage at the Harbor ref.
 # renovate: datasource=docker depName=busybox
-docker.io/library/busybox:1.37.0
+docker.io/library/busybox:1.38.0

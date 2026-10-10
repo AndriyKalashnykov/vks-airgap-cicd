@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26
+# syntax=docker/dockerfile:1.28
 # Builder image for AIR-GAPPED CI: bakes this app's full Go MODULE cache so the in-cluster build
 # (kaniko) and the Tekton go-test task need NO network. Build this on the INTERNET-connected jump
 # box (it pulls from proxy.golang.org here), push to Harbor, then reference it as BUILDER_IMAGE in

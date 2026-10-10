@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26
+# syntax=docker/dockerfile:1.28
 # Builder image for AIR-GAPPED CI: bakes this app's full npm dependency tree so the in-cluster
 # build (kaniko) and the Tekton test task need NO registry.npmjs.org. Build on the INTERNET-connected
 # jump box, push to Harbor, then reference it as BUILDER_IMAGE in the app Dockerfile.
