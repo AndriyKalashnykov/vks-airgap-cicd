@@ -72,7 +72,7 @@ jobs:
       # renovate: datasource=github-releases depName=jdx/mise
       - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5
         with:
-          version: 2026.10.3
+          version: 2026.10.4
 
       # `kind` comes from .mise.toml (the mise-action above), like crane/kubectl/helm/jq —
       # so CI and a real jump box get the SAME pinned version from ONE source of truth.
