@@ -41,6 +41,8 @@ printf 'canary-lab\n'                                   > "$T/home/.local/state/
 printf 'canary-argocd\n'                                > "$T/argocd.kubeconfig"
 printf 'canary-explicit\n'                              > "$T/explicit.kubeconfig"
 : > "$F/docs/marker"
+# gitignored top-level STATE a run leaves in a checkout: a link to it would carry a write back
+mkdir -p "$F/out" "$F/.jumpbox" "$F/.claude"; : > "$F/.registry.lock"
 
 # The probe: what a test does -- (optionally) source the helper, then lib/os.sh, then ask the real
 # resolver and the real load_env what they can see. One KEY=value line per fact.
@@ -66,6 +68,8 @@ printf 'has_scripts=%s\nhas_docs=%s\nhas_bundle=%s\nhas_git=%s\n' \
   "$([ -e "$REPO_ROOT/bundle" ] && echo yes || echo no)" "$([ -e "$REPO_ROOT/.git" ] && echo yes || echo no)"
 printf 'secrets=%s\n' "$(find "$REPO_ROOT/secrets/" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')"
 printf 'mktemp=%s\n' "$(mktemp -u)"
+printf 'state_entries=%s\n' "$(for e in out .registry.lock .jumpbox .claude; do if [ -e "$REPO_ROOT/$e" ]; then printf '%s,' "$e"; fi; done)"
+printf 'proxies=%s\nno_proxy=%s\n' "${http_proxy-}${https_proxy-}${HTTP_PROXY-}${HTTPS_PROXY-}${ALL_PROXY-}${all_proxy-}" "${no_proxy-}"
 PROBE
 mkdir -p "$F/.git"
 
@@ -75,7 +79,8 @@ probe() {
   env -u REPO_ROOT -u SKIP_DOTENV -u VKS_LAB_STATE_DIR -u TMPDIR \
       -u __VKS_OS_SH_LOADED -u VKS_SUDO_PROBED VKS_STATE_FILE="$F/.env.state" \
       HOME="$T/home" KUBECONFIG="$T/explicit.kubeconfig" ARGOCD_KUBECONFIG="$T/argocd.kubeconfig" \
-      VKS_SUPERVISOR_KUBECONFIG="$T/explicit.kubeconfig" PROBE_FENCED="$fenced" "$@" \
+      VKS_SUPERVISOR_KUBECONFIG="$T/explicit.kubeconfig" PROBE_FENCED="$fenced" \
+      http_proxy=p1 https_proxy=p2 HTTP_PROXY=p3 HTTPS_PROXY=p4 ALL_PROXY=p5 all_proxy=p6 no_proxy=localhost "$@" \
       bash "$F/scripts/probe.sh" 2>&1
 }
 val() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -1; }
@@ -98,6 +103,9 @@ done
 if [ "$(val "$c" dotenv)" = from-dotenv ] && [ "$(val "$c" state)" = from-state ] && [ "$(val "$c" kind)" = from-kind ]; then
   ok "control: UNFENCED, load_env sources .env, .env.state AND the legacy .env.kind"
 else bad "control: unfenced load_env did not read all three planted files" "dotenv=$(val "$c" dotenv) state=$(val "$c" state) kind=$(val "$c" kind)"; fi
+if [ "$(val "$c" state_entries)" = 'out,.registry.lock,.jumpbox,.claude,' ] && [ "$(val "$c" proxies)" = p1p2p3p4p5p6 ]; then
+  ok "control: UNFENCED, the root holds out/, .registry.lock, .jumpbox/ and .claude/, and six proxy variables are set"
+else bad "control: the planted top-level state or the proxy variables did not reach the unfenced probe" "state=$(val "$c" state_entries) proxies=$(val "$c" proxies)"; fi
 # ...and SKIP_DOTENV=1 alone closes only ONE of the three -- the gap the helper exists for.
 c3="$(probe 0 SKIP_DOTENV=1)"
 if [ -z "$(val "$c3" dotenv)" ] && [ "$(val "$c3" state)" = from-state ] && [ "$(val "$c3" kind)" = from-kind ]; then
@@ -122,6 +130,10 @@ else bad "fenced: the sandbox root does not expose the repo's read-only trees" "
 if [ "$(val "$f" has_bundle)" = no ] && [ "$(val "$f" has_git)" = no ] && [ "$(val "$f" secrets)" = 0 ]; then
   ok "fenced: bundle/ and .git are NOT carried, and secrets/ is empty"
 else bad "fenced: the sandbox root carries something it must not" "bundle=$(val "$f" has_bundle) git=$(val "$f" has_git) secrets=$(val "$f" secrets)"; fi
+if [ -z "$(val "$f" state_entries)" ]; then ok "fenced: the checkout's gitignored top-level state (out/, .registry.lock, .jumpbox/, .claude/) is NOT linked into the sandbox root"
+else bad "fenced: the sandbox root links top-level state of the checkout, so a write through it lands there" "$(val "$f" state_entries)"; fi
+if [ -z "$(val "$f" proxies)" ] && [ "$(val "$f" no_proxy)" = localhost ]; then ok "fenced: the six proxy variables are unset (no_proxy is left)"
+else bad "fenced: a proxy variable from the caller's environment is still set" "proxies=$(val "$f" proxies) no_proxy=$(val "$f" no_proxy)"; fi
 want_pins="skip_dotenv=1 lab=/nonexistent-lab sup=/nonexistent kubeconfig=UNSET argocd_kc=UNSET"
 got_pins="skip_dotenv=$(val "$f" skip_dotenv) lab=$(val "$f" lab) sup=$(val "$f" sup) kubeconfig=$(val "$f" kubeconfig) argocd_kc=$(val "$f" argocd_kc)"
 if [ "$got_pins" = "$want_pins" ]; then ok "fenced: $want_pins"
@@ -163,16 +175,26 @@ g="$(probe 1)"; grc=$?
 chmod +x "$F/scripts/test-guard/bin/kubectl"
 if [ "$grc" -ne 0 ] && has "$g" 'not executable' && ! has "$g" 'resolver='; then ok "a stand-in that lost its mode bit STOPS the test before anything runs (rc=$grc)"
 else bad "a non-executable guard did not stop the fenced test" "rc=$grc out=${g:0:160}"; fi
+# ...ANY stand-in, not the two the check used to name: one a patch adds arrives without its bit.
+chmod -x "$F/scripts/test-guard/bin/tkn"
+g="$(probe 1)"; grc=$?
+chmod +x "$F/scripts/test-guard/bin/tkn"
+if [ "$grc" -ne 0 ] && has "$g" 'not executable' && ! has "$g" 'resolver='; then ok "  ...and so does ANY stand-in without it (tkn) (rc=$grc)"
+else bad "a non-executable tkn stand-in did not stop the fenced test" "rc=$grc out=${g:0:160}"; fi
 
 # ---- 3. the test's own EXIT trap still runs, in every shape -------------------------------------
 # t <case>  -> prints what the handler saw; the sandbox path goes to $T/sb
 cat > "$F/scripts/trapcase.sh" <<'TRAPCASE'
 #!/usr/bin/env bash
 set -euo pipefail
+# `early`: a handler set BEFORE the helper is sourced (no test does; it used to be dropped silently)
+if [ "$1" = early ]; then trap 'echo "early handler rc=$?"' EXIT; fi
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 printf '%s' "$TEST_SANDBOX" > "$SB_OUT"
 D="$(mktemp -d)"
 case "$1" in
+  early)    exit 6 ;;
+  mixed)    trap 'echo "mixed-case handler rc=$?"' Exit; exit 4 ;;
   plain)    trap 'echo "handler rc=$?"; rm -rf "$D"' EXIT; exit 3 ;;
   errexit)  trap 'echo "handler rc=$?"' EXIT; false ;;
   exits)    trap 'rc=$?; echo "handler rc=$rc"; exit 7' EXIT; sleep 30 & exit 3 ;;
@@ -200,6 +222,8 @@ tc reset    5 ''                                 "trap - EXIT removes the test's
 tc subshell 0 'sub handler|sandbox alive after subshell|' "a SUBSHELL's EXIT trap runs there and does not remove the sandbox"
 tc multi    0 '1|multi handler|'                 "trap H EXIT INT TERM: H is set for INT/TERM as asked, and runs at exit"
 tc twice    0 'same sandbox|'                    "sourcing the helper twice keeps ONE sandbox"
+tc early    6 'early handler rc=6|'              "a handler set BEFORE the helper was sourced still runs, with the test's status, and the sandbox is removed"
+tc mixed    4 'mixed-case handler rc=4|'         "trap H Exit (mixed case) is the test's EXIT handler: it runs AND the sandbox is still removed"
 
 # ---- 4. a killed test leaves nothing running ----------------------------------------------------
 # The shape that hurts: the test stubs kubectl in a mktemp dir, starts a child that keeps calling

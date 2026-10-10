@@ -44,9 +44,23 @@ _guard_next() {
   return 1
 }
 
+# _guard_exec <real> [argv...] — hand over to the real tool, ONCE. MEASURED: when the next
+# `kubectl` on PATH is a version manager's shim with no active version for the directory the test
+# is in (a mise shim, a test that cd'ed into its own temp root), the shim execs the next kubectl
+# on PATH, which is this stand-in again, and the two exec each other for ever at full CPU: the
+# test never ends. So the hand-over is marked in the real tool's environment, and a stand-in
+# entered WITH its own mark knows the "real" tool came back and stops: rc 127, as for no tool.
+_guard_exec() {
+  if [ "${__TEST_GUARD_HANDED:-}" = "$tool" ]; then
+    printf 'test-guard: the %s behind the guard came straight back to the guard (a version-manager shim with no active version execs the next %s on PATH): no real %s is usable from here\n' "$tool" "$tool" "$tool" >&2
+    exit 127
+  fi
+  __TEST_GUARD_HANDED="$tool" exec "$@"
+}
+
 case " ${TEST_GUARD_ALLOW:-} " in
   *" $tool "*)
-    if _real="$(_guard_next "$tool")"; then exec "$_real" "$@"; fi
+    if _real="$(_guard_next "$tool")"; then _guard_exec "$_real" "$@"; fi
     printf 'test-guard: %s is allowed by TEST_GUARD_ALLOW but is not installed\n' "$tool" >&2
     exit 127 ;;
 esac
@@ -63,33 +77,63 @@ esac
 #                                 by every script. Answered as a box that wants a password (rc 1,
 #                                 the state the probe is silent about) and NOT logged: it is not a
 #                                 privileged operation and it would bury every real hit.
+_guard_takes_value() {  # rc 0 for an option of kubectl/argocd this file KNOWS consumes the next word
+  case "$1" in
+    --kubeconfig|--context|--cluster|--user|-n|--namespace|-s|--server|--request-timeout|--as|\
+    --as-group|--token|--certificate-authority|--client-certificate|--client-key|--cache-dir|\
+    -o|--output|--config|--kube-context|--grpc-web-root-path|--loglevel|--logformat) return 0 ;;
+  esac
+  return 1
+}
 _guard_words() {  # the non-option words of a kubectl/argocd command line, one per line
   local skip=0 a
   for a in "$@"; do
     if [ "$skip" -eq 1 ]; then skip=0; continue; fi
     case "$a" in
-      --kubeconfig|--context|--cluster|--user|-n|--namespace|-s|--server|--request-timeout|--as|\
-      --as-group|--token|--certificate-authority|--client-certificate|--client-key|--cache-dir|\
-      -o|--output|--config|--kube-context|--grpc-web-root-path|--loglevel|--logformat) skip=1 ;;
-      -*) : ;;
+      -*) if _guard_takes_value "$a"; then skip=1; fi ;;
       *) printf '%s\n' "$a" ;;
     esac
   done
 }
+# rc 0 when an option this file does NOT know stands BEFORE the subcommand. There, an option it
+# takes for a boolean may really consume the next word (`--username config view get pods`: the
+# words then read "config view" while kubectl runs `get pods`), so the only safe reading of an
+# unknown one is "not on the list": refused. After the subcommand an unknown option is the
+# subcommand's own (`config view --minify`) and is left alone.
+_guard_unknown_global() {
+  local skip=0 a
+  for a in "$@"; do
+    if [ "$skip" -eq 1 ]; then skip=0; continue; fi
+    case "$a" in
+      --*=*) _guard_takes_value "${a%%=*}" || return 0 ;;
+      -*)    if _guard_takes_value "$a"; then skip=1; else return 0; fi ;;
+      *)     return 1 ;;
+    esac
+  done
+  return 1
+}
 _guard_local_only() {
-  local w a client=0
+  local w a client=0 raw=0
   case "$tool" in
     sudo)
       [ "$*" = "-n true" ] || return 1
       printf 'sudo: a password is required\n' >&2
       exit 1 ;;
     kubectl|argocd)
+      _guard_unknown_global "$@" && return 1
       w="$(_guard_words "$@" | head -2 | tr '\n' ' ')"
-      for a in "$@"; do case "$a" in --client|--client=true) client=1 ;; esac; done
+      for a in "$@"; do case "$a" in --client|--client=true) client=1 ;; --raw|--raw=true) raw=1 ;; esac; done
       case "$tool:$w" in
+        # `config view --raw` PRINTS the credentials in the kubeconfig it resolves, and with no
+        # --kubeconfig that is the one under HOME. Let through only where HOME is the sandbox's.
+        kubectl:"config view "*)
+          [ "$raw" -eq 0 ] && return 0
+          [ -n "${TEST_SANDBOX:-}" ] || return 1
+          case "${HOME:-}" in "$TEST_SANDBOX"/*) return 0 ;; esac
+          return 1 ;;
         # the READ-ONLY kubeconfig subcommands: they parse a file and print; nothing is dialled
         # and nothing is written (use-context, set-*, delete-* DO write, and are refused)
-        kubectl:"config view "*|kubectl:"config current-context "*|kubectl:"config get-contexts "*|\
+        kubectl:"config current-context "*|kubectl:"config get-contexts "*|\
         kubectl:"config get-clusters "*|kubectl:"config get-users "*) return 0 ;;
         kubectl:"kustomize "*)
           # a render of a LOCAL directory; a remote base (a URL, a git host path) is refused
@@ -101,7 +145,7 @@ _guard_local_only() {
   return 1
 }
 if _guard_local_only "$@"; then
-  if _real="$(_guard_next "$tool")"; then exec "$_real" "$@"; fi
+  if _real="$(_guard_next "$tool")"; then _guard_exec "$_real" "$@"; fi
   printf 'test-guard: %s: command not found (no real %s behind the guard)\n' "$tool" "$tool" >&2
   exit 127
 fi

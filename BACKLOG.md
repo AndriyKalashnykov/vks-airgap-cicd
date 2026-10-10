@@ -42,6 +42,32 @@ maven 3.10 / rust 1.99 builders, traefik v3.7.14, mise-action v5. Open:
    `k8s/`. Run locally instead for #1358 (rc=0). Likely the same class as [[B748]]; not investigated.
 6. `scripts/check-mise-pins.sh:154` still prints `# v4` in its FAIL example.
 
+## 🔴 B752 — the state overlay is ONE file per checkout, so a kind run displaces the real lab's 🔴 open
+
+**MEASURED 2026-10-10 on the owner's workstation.** While a kind e2e was running in this checkout,
+`make creds` for the real lab printed
+
+    state: .env.state belongs to a DIFFERENT cluster — NOT sourcing it … written for
+    https://127.0.0.1:<port>, you selected https://192.168.101.134:6443
+    state overlay: .env.state — REFUSED
+
+and the report showed 3 rows instead of 12. The lab's own overlay had been moved aside as
+`.env.state.stale-<timestamp>`: three such archives in one hour, one per e2e run.
+
+**Nothing was lost.** `make state-archives` lists them and `make state-restore ARCHIVE=<name>`
+puts one back; `VKS_STATE_FILE=<that archive> bash scripts/creds.sh` gave the full report (12
+serving) without touching the live file. But an operator has to know to do that, and
+`make state-restore` would in turn break the kind e2e that is running.
+
+**Done when:** the overlay is keyed by the cluster it was written for (one file per cluster,
+chosen by the selected cluster's stamp), so a kind run and a lab coexist in one checkout and
+`make creds` for either reads its own; `make state-archives` / `state-restore` keep working for
+old single-file overlays; and a test runs two clusters' writes in one sandbox root and reads each
+back.
+
+⚠️ **Needs an IDEA review before anything is built.** It changes every reader of the overlay:
+grep `state_file` and `VKS_STATE_FILE`. Nothing here has been designed or built.
+
 ## 🔴 B751 — a `ci-tier: fast` unit test could reach the lab it ran beside: ONE fence now, and a run-time guard 🔴 open (four items left)
 
 **The class.** A test that runs a real script from `scripts/` inherits everything that script
@@ -161,29 +187,40 @@ was run with `SKIP_DOTENV=1`, `KUBECONFIG=/dev/null` and the lab directory pinne
    `.env` and `.env.state` (the operator's own values, not a fixture: what any `make` does). And
    `test-workload-images.sh` creates and removes `scripts/.typo-probe-<pid>.sh`.
 
-5. **Found by the review of this change, not fixed** (each measured in a private copy unless
-   it says READ):
-   - no guard hit turns a test red: the runner does not set `TEST_GUARD_LOG`, so a refused
-     `kubectl` reads as "no cluster". Done when: the runner keeps a per-set log and fails on a
-     line no test declared;
-   - the coverage gate checks where the helper line is, not that it runs: a helper sourced
-     inside `if false`, a never-called function or after `exit 0` passes, and so does a script
-     named through `make` or a glob. Done when: the helper line must be unindented and before
-     the first command;
-   - a trap a test sets BEFORE it sources the helper is dropped without a message (no test
-     does this today), and `trap ... Exit` in mixed case replaces the helper's trap;
-   - the curl stand-in lets nine unusual shapes through: a URL after `--`, `--unix-socket`
-     followed by `--next`, a loopback proxy with `--noproxy`, a bracketed IPv6 `--connect-to`,
-     short keys and a nested file in `-K`, a non-http scheme with `--connect-to`, a proxy from
-     the environment, and `-L` following a loopback redirect elsewhere;
-   - the kubectl stand-in reads a value-taking global flag it does not list (`--username`,
-     `--password`) as a boolean, so the value becomes the verb; and an allowed
-     `config view --raw` runs the real kubectl with the caller's `HOME` (READ for real kubectl);
-   - the sandbox root links the checkout's gitignored top-level state (`.registry.lock`, `out`,
-     `.jumpbox`), so a write through `$REPO_ROOT/out` lands in the checkout;
-   - `tkn` has no stand-in, and `78-prune-runs.sh` runs `tkn pipelinerun delete`;
-   - an orphaned grandchild, or a test that leaves `IFS` changed, is not ended at exit;
-   - the count-fallback allowlist is keyed by line number and moves with every edit above it.
+5. **Found by the review of that change, and still open** (each measured in a private copy
+   unless it says READ):
+   - the coverage gate still cannot see a lab-capable script named through `make` or a glob;
+   - the curl stand-in still lets four unusual shapes through: `--unix-socket` followed by
+     `--next`, a bracketed IPv6 `--connect-to`, a non-http scheme with `--connect-to`, and `-L`
+     following a loopback redirect elsewhere;
+   - an orphaned grandchild, or a test that leaves `IFS` changed, is not ended at exit.
+
+**Fixed after that review (2026-10-10) — OFFLINE ONLY: each has a test row that was seen red
+with the fix taken out, and none of it has run beside a lab or in CI.**
+
+- *A refused call nobody declared fails the set.* `run-test-set.sh` keeps one `TEST_GUARD_LOG`
+  per set (a caller's is replaced), runs every test, then fails on any line in it and prints the
+  first ten (test, tool, arguments). `TEST_GUARD_QUIET` in the test is the declaration.
+- *The coverage gate asks that the helper RUNS FIRST.* The helper line must be the test's first
+  command: unindented, with only comments, blank lines, `set …` and a `TEST_SANDBOX_*` assignment
+  before it, and matched with a trailing comment cut off. Planted: inside `if false`, in a
+  function nobody calls, in a heredoc, after an early `exit`, and named only in a trailing
+  comment (all flagged); comment + `set` + helper with a trailing comment (clean).
+- *The sandbox helper* keeps an EXIT handler the test set BEFORE sourcing it, reads `trap … Exit`
+  in any case as the test's handler, does not link `.registry.lock`, `out`, `.jumpbox`, `.claude`,
+  `.deps-failed`, `links.md` or `token.md` into the sandbox root (an explicit list: what is
+  tracked cannot be asked without git at run time), and unsets the six proxy variables.
+- *The stand-ins.* `tkn` has one. curl: `--` ends the options and what follows is a URL; a proxy
+  combined with `--noproxy` is refused; in a `-K` file `-x`, `-K` and `noproxy` are read and
+  any other short-option cluster holding `x` or `K` refuses the file; a proxy from the
+  environment is removed before a let-through call. kubectl/argocd: an option that is not on
+  the stand-in's list and stands BEFORE the subcommand refuses the call, and `config view --raw`
+  is let through only where `HOME` is inside the sandbox (so a test that reads a token out of a
+  fixture kubeconfig that way must source the helper or stub kubectl).
+- *The runner and the helper check EVERY stand-in for its mode bit*, not kubectl and curl only:
+  a stand-in added by a patch arrives without one, and a PATH lookup then finds the real tool.
+- *The count-fallback allowlist* is keyed by `path|<text the flagged line contains>`, reconciled
+  per entry (an entry matching no flagged line, or more than one, fails the gate).
 
 **Also not done, by decision:** the runner does not put each test in its own process group, so a
 test that does NOT source the helper and is killed still leaves its children running. What changed
@@ -241,10 +278,14 @@ under a closed heading.
 
 **NOT COVERED — the class is wider than the two instances that were fixed:**
 
-- *A login in an address.* Only `HARBOR_URL` and `ARGOCD_SERVER` are stripped or refused by
-  `load_env`. `.env.example` has about fourteen address-like variables, and `GITEA_URL` is where
-  a `user:token@` is most likely to be typed. Done when: the list is derived from `.env.example`
-  (not typed), each one is stripped or refused the same way, and a case plants a login in each.
+- *A login in an address, in the variables nobody listed.* `load_env` strips or refuses three
+  now (`HARBOR_URL`, `ARGOCD_SERVER`, `GITEA_URL`: see "Fixed" below). The list is still TYPED,
+  and `.env.example` has about fourteen address-like variables. Deriving it was looked at and is
+  not safe as that file stands: nothing in it marks an address for a program to read; a match by
+  name (`*_URL`, `*_SERVER`, `*_HOST`) takes in `MAC_TUNNEL_HOST`, whose documented value IS a
+  login (`<user@mac-host>`); and half the candidates ship commented, as `# NAME=<placeholder>`.
+  Done when: `.env.example` carries a marker a program can read (as `# pin: lab` does for pins),
+  the list is read from it, and the case that plants a login runs over that list.
 - *Step 8's first fence* sources `.env` raw and puts `$HARBOR_URL` on the `curl` and `openssl`
   command lines and in its `echo` lines: a login typed there is shown by `ps` and by the block's
   own messages. Done when: the fence refuses an address holding an `@`, and is re-walked.
@@ -257,21 +298,34 @@ under a closed heading.
   `KUBECONFIG=/dev/null`, lab paths pointed nowhere, a `kubectl` that only fails): it needs its
   sandbox `.env` and an offline `kubectl config view`. With those two allowed it is 370 of 371.
   Done when: it states its own inputs the way `test-harbor-ca-refetch-advice.sh` now does.
-- *A login with no `@` at all* (`admin:secret` typed as the whole value): the rule is "an `@`
-  left after the host", so this passes as a host named `admin` with a port that is not a
-  number, and is refused only later, where a port is parsed. Done when: the value is checked
-  against the shape of a host and an optional port, not only for an `@`.
-- *`scripts/walkbox.sh` reads `HARBOR_URL` without `load_env`*, so neither the strip nor the
-  refusal runs there. Done when: it takes the address through `load_env`, with a case.
 - *Seventeen offline tests failed inside a strict fence* (no `.env`, no kubeconfig, guarded
   `kubectl`/`curl`/`ssh`): they leaned on the workstation. The shared fence and what it still
   leaves open are [[B751]].
-- *`_LOAD_ENV_ON_REFUSED_ADDRESS=report` inherited from a parent process* makes every child's
-  `load_env` report and go on. Only `creds.sh` sets it, and for its own process; nothing clears
-  it for the scripts `creds.sh` starts. Done when: `load_env` unsets it after reading it.
-- *`VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION` typed in front of a command* is replaced by the
-  `.env.example` value, silently, like the other lab pins. Done when: an override that loses
-  is said in one line.
+- *The other lab pins typed in front of a command* are still replaced by the files without a
+  word; only `VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION` says so (below).
+
+**FIXED from the lists above (2026-10-10) — OFFLINE ONLY: each has a test row that was seen red
+with the fix taken out; none of it has run against a lab.**
+
+- *A login with no `@` at all* (`admin:secret` typed as the whole value). After the strip,
+  `drop_userinfo_from` asks the one splitter (`url_host_port`, which now also reports what was
+  written where a port goes, `URL_PORT_GIVEN`) and refuses a value whose "port" is not a
+  number, in the same one-line style, printing no part of it. Every shape the splitter's table
+  accepts is a case through the real `load_env`. ⚠️ This also refuses `harbor.example:https`,
+  which used to be read as port 443; a `host:` with nothing after the colon is left alone.
+- *`GITEA_URL`* is stripped or refused like the other two; the case plants a login in every
+  name in `ENV_ADDRESS_VARIABLES`, read from `lib/os.sh`.
+- *`scripts/walkbox.sh`* asks `drop_userinfo_from HARBOR_URL` first, before a tool is asked for
+  or a VM exists (`up` only). NOT `load_env`: that harness passes on the caller's values as they
+  are, and `load_env` would also source the state overlay and default `KUBECONFIG` and the
+  ArgoCD namespace into what it hands the VM.
+- *`_LOAD_ENV_ON_REFUSED_ADDRESS=report`* is removed from the environment by `load_env` once it
+  has read it (twice: one `unset` leaves the inherited copy when it was also typed in front of
+  the call). The asker reports and goes on; a script it starts stops.
+- *`VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION` typed in front of a command*: one line names the
+  value that was typed, the value in use and `PIN_OVERRIDE` as the way to do it for one run. Once
+  per process tree (the winning value is exported, so a script started from there has nothing
+  to report); silent when the typed value is the one in use or a `PIN_OVERRIDE` names it.
 
 ## ✅ B749 — DONE (#1377, #1379 and the change after them): the Harbor CA follow-ups, Step 8 walked on the lab ✅ closed 2026-10-09
 

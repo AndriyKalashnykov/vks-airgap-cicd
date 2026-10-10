@@ -37,10 +37,31 @@ SELF="$(basename "${BASH_SOURCE[0]}")"
 # finding in it. (gates.md: "compose the token, never exclude the file".)
 PAT="($(printf 'grep -c')o?|$(printf 'wc -l'))[^|]*\|\|[[:space:]]*($(printf 'echo')|$(printf 'printf'))"
 
-# ── ALLOWLIST: path|line|reason. Tiny and REASONED: an entry must say why the two-value emission
-# CANNOT happen there, never that fixing it is inconvenient. Reconciled in BOTH directions below --
-# an entry that stops matching is a dead exemption documenting a site that no longer exists.
-ALLOW='scripts/test-env-validate-auth-truncation.sh|108|the text is a SEARCH PATTERN, not a fallback: this test asserts 02-env.sh no longer CONTAINS that shape'
+# ── ALLOWLIST: path|fragment|reason, one entry per line. Tiny and REASONED: an entry must say why
+# the two-value emission CANNOT happen there, never that fixing it is inconvenient.
+# KEYED BY A FRAGMENT OF THE LINE, NOT ITS NUMBER. It was `path|108|…`, and a line number moves
+# with every edit above it: the entry then matched nothing (reported as a dead exemption) while
+# the line it was written for became a finding. The fragment is fixed text the flagged line must
+# CONTAIN (no `|` in it); it has to be specific enough to pick ONE flagged line in that file.
+# Reconciled in BOTH directions below: an entry that matches no flagged line is a dead exemption,
+# and one that matches more than one is exempting a line nobody reasoned about.
+ALLOW='scripts/test-env-validate-auth-truncation.sh|users/current\" 2>/dev/null|the text is a SEARCH PATTERN, not a fallback: this test asserts 02-env.sh no longer CONTAINS that shape'
+
+# _allowed <file> <line> -- rc 0 when an entry for this file names a fragment the line contains.
+# Counts the match per entry (ALLOW_HITS, one "path|fragment" per matched line) for the reconcile.
+ALLOW_HITS=""
+_allowed() {
+  local e p rest frag
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    p="${e%%|*}"; rest="${e#*|}"; frag="${rest%%|*}"
+    if [ "$p" != "$1" ] || [ -z "$frag" ]; then continue; fi
+    case "$2" in *"$frag"*) ALLOW_HITS="${ALLOW_HITS}${p}|${frag}"$'\n'; return 0 ;; esac
+  done <<EOF_ALLOW
+$ALLOW
+EOF_ALLOW
+  return 1
+}
 
 _files=$(git ls-files 'scripts/*.sh' 'Makefile' 2>/dev/null || true)
 [ -n "$_files" ] || { echo "check-count-fallback: no files to scan — REFUSING (a scan of nothing is not a pass)"; exit 1; }
@@ -53,20 +74,16 @@ while IFS= read -r f; do
   # STRIP COMMENTS: this is a must-NOT-exist check, so a commented-out occurrence executes nothing
   # and is harmless. (The opposite polarity applies to a must-EXIST check -- gates.md.)
   # Test the FIRST NON-SPACE character, never `${line%%#*}`, which false-negatives on ${#ARR[@]}.
-  n=0; lineno=0
+  n=0; _path="$f"      # the path as TEXT for the allowlist (a second name: the loop below reads "$f")
   while IFS= read -r line; do
-    # COUNT FIRST. Incrementing after the comment-skip made `lineno` a count of NON-COMMENT lines,
-    # so the allowlist key never matched the real file line -- measured: 1 declared, 0 matched.
-    lineno=$((lineno + 1))
     s=${line#"${line%%[![:space:]]*}"}
     case "$s" in '#'*) continue ;; esac
     printf '%s\n' "$line" | grep -qE "$PAT" || continue
-    _key="${f}|${lineno}|"
-    case "$ALLOW" in *"$_key"*) allowed=$((allowed + 1)); continue ;; esac
+    if _allowed "$_path" "$line"; then allowed=$((allowed + 1)); continue; fi
     n=$((n + 1))
   done < "$f"
-  # An allowlisted LINE is not a finding. Match on path+line, never path alone -- exempting a whole
-  # file blinds the gate to every future real finding in it.
+  # An allowlisted LINE is not a finding. Match on path+fragment, never path alone -- exempting a
+  # whole file blinds the gate to every future real finding in it.
   if [ "$n" -gt 0 ]; then
     printf '%s|%s\n' "$f" "$n" >> "$TMP"
     hits=$((hits + n))
@@ -77,11 +94,25 @@ EOF
 
 echo "check-count-fallback: scanned ${scanned} file(s), ${allowed} allowlisted line(s)"
 # A dead exemption is a claim about a site that no longer exists -- reconcile the OTHER direction.
-_declared=$(printf '%s\n' "$ALLOW" | grep -c '|' || true)
-if [ "${allowed}" -ne "${_declared}" ]; then
-  echo "check-count-fallback: ${_declared} allowlist entr(ies) declared but ${allowed} matched — a DEAD exemption. Remove it." >&2
-  exit 1
-fi
+# Per ENTRY, not by totals: two lines matching one entry would otherwise cancel a dead one.
+_declared=0; _reconcile=0
+while IFS= read -r _e; do
+  [ -n "$_e" ] || continue
+  _declared=$((_declared + 1))
+  _ek="${_e%%|*}|"; _er="${_e#*|}"; _ek="${_ek}${_er%%|*}"
+  _eh=$(printf '%s' "$ALLOW_HITS" | grep -cxF -- "$_ek" || true)
+  if [ "$_eh" -eq 0 ]; then
+    echo "check-count-fallback: allowlist entry '${_ek}' matched NO flagged line — a DEAD exemption (the line changed or is gone). Remove it, or give it the line's current text." >&2
+    _reconcile=1
+  elif [ "$_eh" -gt 1 ]; then
+    echo "check-count-fallback: allowlist entry '${_ek}' matched ${_eh} flagged lines — the fragment is too loose: it exempts a line nobody reasoned about." >&2
+    _reconcile=1
+  fi
+done <<EOF_ALLOW
+$ALLOW
+EOF_ALLOW
+echo "check-count-fallback: ${_declared} allowlist entr(ies) declared, ${allowed} line(s) matched"
+[ "$_reconcile" -eq 0 ] || exit 1
 if [ "$hits" -eq 0 ]; then echo "check-count-fallback: OK — no counting command emits a value from its || fallback"; exit 0; fi
 
 echo "check-count-fallback: FOUND ${hits} occurrence(s) — a counting command with a value-emitting || fallback:" >&2

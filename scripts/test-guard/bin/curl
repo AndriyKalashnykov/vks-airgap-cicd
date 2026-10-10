@@ -18,8 +18,13 @@
 # letting a foreign one through.
 #
 # WHAT IT DOES NOT COVER, stated so a green is not over-read:
-#   - a proxy taken from the ENVIRONMENT (http_proxy, https_proxy, ALL_PROXY) is not inspected;
-#   - `-K -` (config on stdin) is refused outright rather than consumed;
+#   - a proxy taken from the ENVIRONMENT (http_proxy, https_proxy, ALL_PROXY) is not inspected:
+#     those variables are REMOVED before a let-through call instead, so the destination that was
+#     checked is the one dialled;
+#   - `-K -` (config on stdin) is refused outright rather than consumed, and so is a config file
+#     holding a short-option cluster with x or K in it;
+#   - `--unix-socket` followed by `--next`, a non-http scheme with `--connect-to`, and `-L`
+#     following a loopback redirect elsewhere are still let through;
 #   - a loopback service that itself forwards elsewhere is out of sight;
 #   - anything that is not curl: `openssl s_client`, bash /dev/tcp, nc, python.
 #
@@ -63,7 +68,7 @@ _refuse() {  # <reason>
   exit 97
 }
 
-urls=(); resolves=(); connects=(); proxies=(); unix_socket=0; info_only=0
+urls=(); resolves=(); connects=(); proxies=(); unix_socket=0; info_only=0; noproxy=0
 
 # Long options that consume the NEXT argument, and the short ones that do (a short option's value
 # may also be glued on: `-m5`, `-sSo/dev/null`).
@@ -100,6 +105,7 @@ _note() {  # <option> <value>
     --connect-to)                  connects+=("$2") ;;
     --proxy|--preproxy|--proxy1.0|--socks4|--socks4a|--socks5|--socks5-hostname|-x) proxies+=("$2") ;;
     --unix-socket|--abstract-unix-socket) unix_socket=1 ;;
+    --noproxy)                     noproxy=1 ;;
     --config|-K)                   _read_config "$2" ;;
   esac
 }
@@ -115,11 +121,21 @@ _read_config() {  # <file>
     val="${val#"${val%%[![:space:]=:]*}"}"
     val="${val%"${val##*[![:space:]]}"}"
     case "$val" in \"*\") val="${val#\"}"; val="${val%\"}" ;; esac
+    # A SHORT option in a config file is written with its dash (`-x proxy`, `-K other`). The two
+    # that move the destination are read; any other cluster holding x or K (`-sx`, `-xVALUE`
+    # glued) is not taken apart here, and a config this guard cannot read is refused.
+    case "$key" in
+      --*) : ;;
+      -x)  _note -x "$val"; continue ;;
+      -K)  _read_config "$val"; continue ;;
+      -*)  case "$key" in *[xK]*) _refuse "its config file holds the short option cluster '${key}', which the guard does not take apart" ;; esac
+           continue ;;
+    esac
     key="${key#--}"
     case "$key" in
-      url|resolve|connect-to|proxy|preproxy|socks4|socks4a|socks5|socks5-hostname|unix-socket|doh-url)
+      url|resolve|connect-to|proxy|preproxy|proxy1.0|socks4|socks4a|socks5|socks5-hostname|unix-socket|abstract-unix-socket|doh-url|noproxy)
         _note "--$key" "$val" ;;
-      config|K) _read_config "$val" ;;
+      config) _read_config "$val" ;;
     esac
   done < "$f"
 }
@@ -127,6 +143,8 @@ _read_config() {  # <file>
 while [ "$#" -gt 0 ]; do
   a="$1"; shift
   case "$a" in
+    # `--` ends the options: everything after it is a URL, whatever it looks like.
+    --) while [ "$#" -gt 0 ]; do urls+=("$1"); shift; done ;;
     --version|--help|--manual) info_only=1 ;;
     --*)
       if _long_takes_value "$a"; then
@@ -191,6 +209,11 @@ for x in ${proxies[@]+"${proxies[@]}"}; do
   _split "$x"
   _is_loopback "$_h" || _refuse "the proxy '${_h}' is not loopback"
 done
+# A loopback proxy made the URL's own host irrelevant below. `--noproxy` takes hosts back OUT of
+# the proxy, and they are then dialled directly: with both, the proxy proves nothing.
+if [ "${#proxies[@]}" -gt 0 ] && [ "$noproxy" -eq 1 ]; then
+  _refuse "a proxy is combined with --noproxy, so some hosts would be dialled directly"
+fi
 
 # A unix socket is local by construction; with one, the URL's host is only a Host header.
 if [ "$unix_socket" -eq 0 ] && [ "${#proxies[@]}" -eq 0 ]; then
@@ -226,4 +249,7 @@ if [ "$unix_socket" -eq 0 ] && [ "${#proxies[@]}" -eq 0 ]; then
   done
 fi
 
+# The destination checked above is the one that must be dialled: a proxy named in the environment
+# would send this very request somewhere else.
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 exec "$_real" "${_orig_args[@]}"

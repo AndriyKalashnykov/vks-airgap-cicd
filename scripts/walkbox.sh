@@ -356,6 +356,14 @@ walkbox_run() {
 }
 
 main() {
+  # HARBOR_URL goes into the ssh command line in walkbox_run, and this script reads it from the
+  # environment `make` exported: load_env never runs here, so neither did its removal of a login
+  # typed into the address. The same function load_env uses, FIRST, before a tool is asked for or
+  # a VM exists: a login that can be read out is taken out (and said), one that cannot stops the
+  # walk here. `down` is left alone: it uses no address, and must work with a broken one.
+  # NOT load_env itself: this harness passes on the caller's values as they are, and load_env
+  # would also source the state overlay and default KUBECONFIG and the ArgoCD namespace into them.
+  if [ "${1:-up}" = up ]; then drop_userinfo_from HARBOR_URL; fi
   require_cmd virsh; require_cmd qemu-img; require_cmd xorriso; require_cmd ssh; require_cmd scp
   require_cmd python3   # walkbox_lab_ip parses the lab ranges with it
   case "${1:-up}" in

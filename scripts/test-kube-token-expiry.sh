@@ -8,6 +8,11 @@
 # The failure direction that matters throughout: reporting a DEAD token as VALID. Three separate
 # defects did that, each by a different mechanism (wrong user, wrong claim, unreadable integer).
 set -uo pipefail
+# kube_token_expiry reads the token with `kubectl config view --raw` (fixture kubeconfigs only).
+# The guard lets that through only where HOME is the sandbox's: --raw prints credentials, and
+# with the caller's HOME a call that lost its --kubeconfig would print the caller's own.
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(dirname "$0")/.." || exit 1
 # shellcheck source=scripts/lib/os.sh
 . scripts/lib/os.sh 2>/dev/null || { echo "cannot source lib/os.sh"; exit 1; }

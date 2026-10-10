@@ -210,6 +210,104 @@ for planted in '_refused_mode=report' '_bounds_reported_in=x'; do
     bad "load_env: a .env line '${planted}' was accepted" "rc=${LE_RC} reached='${LE_OUT//SEKR/<S>}' leaked=${_leaked}; $(tail -n 2 "$T/le.err" | tr '\n' ' ')"
   fi
 done
+# A LOGIN WITH NO @ AT ALL. `admin:SEKR` typed as the whole value has nothing to strip and no @ to
+# refuse on: it read as a host named `admin`, and the splitter turned the "port" into 443. What
+# stands where a port goes must be a number, asked of the one splitter (URL_PORT_GIVEN).
+for bad_url in 'admin:SEKR' 'https://admin:SEKR/v2/' '[::1]:SEKR' 'harbor.example:https'; do
+  le "$bad_url"
+  if [ "$LE_RC" = 1 ] && [ -z "$LE_OUT" ] && [ "$(command grep -c 'HARBOR_URL is set, and it cannot be used' "$T/le.err")" = 1 ] \
+     && command grep -q 'is not a port number' "$T/le.err" && command grep -q 'takes a host and an optional port' "$T/le.err" \
+     && ! command grep -qF -e 'SEKR' -e 'admin' -e 'harbor.example' -e '::1' -e 'https' "$T/le.err"; then
+    ok "load_env: ${bad_url//SEKR/…} (no @, and no number where a port goes) STOPS the script, one line says why, no part of the value is printed"
+  else
+    _leaked=no; if command grep -qF -e 'SEKR' -e 'admin' "$T/le.err"; then _leaked=YES; fi
+    bad "load_env: a value whose port is not a number was accepted, or printed" "rc=${LE_RC} reached='${LE_OUT//SEKR/<S>}' notices=$(command grep 'cannot be used' "$T/le.err" | wc -l) leaked=${_leaked}"
+  fi
+done
+# ...and every shape the splitter's table accepts still goes through load_env untouched, unsaid.
+for good_url in 'harbor.example' 'harbor.example:8443' 'https://harbor.example:8443/v2/' 'harbor.example/' '10.0.0.5:8443' \
+                '[::1]:8443' '[::1]' '::1' '::1:8443' '2001:db8::1' 'https://[2001:db8::1]:8443/x' 'harbor.example:'; do
+  le "$good_url"
+  if [ "$LE_RC" = 0 ] && [ "$LE_OUT" = "REACHED H=[${good_url}]" ] && ! command grep -qE 'cannot be used|held a login' "$T/le.err"; then
+    ok "load_env: ${good_url} is accepted as it is, and nothing is said"
+  else
+    bad "load_env: an address the splitter accepts was refused or changed" "${good_url}: rc=${LE_RC} out='${LE_OUT}' $(command grep -c 'cannot be used' "$T/le.err") refusal(s)"
+  fi
+done
+# EVERY ADDRESS VARIABLE load_env COVERS, read from the library's own list (not typed here): a
+# login that can be read out is taken out of it, and one with no @ stops the script naming it.
+# shellcheck disable=SC2086  # the list is NAME words, split on purpose
+set -- $ENV_ADDRESS_VARIABLES
+if [ "$#" -ge 3 ] && has " $* " ' GITEA_URL ' && has " $* " ' HARBOR_URL ' && has " $* " ' ARGOCD_SERVER '; then ok "ENV_ADDRESS_VARIABLES covers $# variables ($*)"
+else bad "ENV_ADDRESS_VARIABLES lost a variable (want at least HARBOR_URL ARGOCD_SERVER GITEA_URL)" "$*"; fi
+for av in "$@"; do
+  printf "%s='admin:SEKR@h.example:8443'\n" "$av" > "$LE/.env"
+  # The child expands its own variables (SC2016 is deliberate).
+  # shellcheck disable=SC2016
+  av_out="$(env -u HARBOR_URL -u ARGOCD_SERVER -u GITEA_URL -u "$av" -u KUBECONFIG -u _LOAD_ENV_ON_REFUSED_ADDRESS REPO_ROOT="$LE" VKS_STATE_FILE="$LE/.env.state" \
+              bash -c '. "$1"; load_env; printf "REACHED V=[%s]\n" "${!2}"' _ "$LIB_OS" "$av" 2>"$T/le.err")"; av_rc=$?
+  if [ "$av_rc" = 0 ] && [ "$av_out" = 'REACHED V=[h.example:8443]' ] && [ "$(command grep -c "${av} held a login" "$T/le.err")" = 1 ] \
+     && ! command grep -qF -e 'SEKR' -e 'admin' "$T/le.err"; then
+    ok "load_env: a login planted in ${av} is taken out of it, one notice, nothing of the login printed"
+  else
+    bad "load_env: a login in ${av} was left in the variable (or printed)" "rc=${av_rc} out='${av_out//SEKR/<S>}' notices=$(command grep -c 'held a login' "$T/le.err")"
+  fi
+  printf "%s='admin:SEKR'\n" "$av" > "$LE/.env"
+  # shellcheck disable=SC2016
+  av_out="$(env -u HARBOR_URL -u ARGOCD_SERVER -u GITEA_URL -u "$av" -u KUBECONFIG -u _LOAD_ENV_ON_REFUSED_ADDRESS REPO_ROOT="$LE" VKS_STATE_FILE="$LE/.env.state" \
+              bash -c '. "$1"; load_env; printf "REACHED V=[%s]\n" "${!2}"' _ "$LIB_OS" "$av" 2>"$T/le.err")"; av_rc=$?
+  if [ "$av_rc" = 1 ] && [ -z "$av_out" ] && [ "$(command grep -c "${av} is set, and it cannot be used" "$T/le.err")" = 1 ] && ! command grep -qF -e 'SEKR' -e 'admin' "$T/le.err"; then
+    ok "load_env: a login with no @ planted in ${av} stops the script and names ${av}, not the value"
+  else
+    bad "load_env: a login with no @ in ${av} did not stop the script" "rc=${av_rc} out='${av_out//SEKR/<S>}'"
+  fi
+done
+# "REPORT AND GO ON" IS ONE PROCESS'S REQUEST. Inherited, it made every script the report starts
+# go on too. load_env takes it out of the environment once it has read it: the asker goes on, a
+# script it starts stops. Both ways of asking: exported by a parent, and (what creds.sh does)
+# typed in front of load_env by a process that ALSO inherited it.
+printf "HARBOR_URL='admin:4411/SEKR@harbor.example'\n" > "$LE/.env"
+for how in 'load_env' '_LOAD_ENV_ON_REFUSED_ADDRESS=report load_env'; do
+  # The child expands its own variables (SC2016 is deliberate).
+  # shellcheck disable=SC2016
+  rp_out="$(env -u HARBOR_URL -u ARGOCD_SERVER -u KUBECONFIG _LOAD_ENV_ON_REFUSED_ADDRESS=report REPO_ROOT="$LE" VKS_STATE_FILE="$LE/.env.state" \
+              bash -c '. "$1"; eval "$2"; printf "ASKER-WENT-ON refused=[%s] left=[%s]\n" "$_ENV_REFUSED_ADDRESSES" "${_LOAD_ENV_ON_REFUSED_ADDRESS-UNSET}"
+                       bash -c ". \"\$1\"; load_env; echo STARTED-SCRIPT-WENT-ON" _ "$1"; printf "started rc=%s\n" "$?"' _ "$LIB_OS" "$how" 2>"$T/le.err")"
+  if [ "$rp_out" = 'ASKER-WENT-ON refused=[HARBOR_URL] left=[UNSET]'$'\n''started rc=1' ] \
+     && [ "$(command grep -c 'HARBOR_URL is set, and it cannot be used' "$T/le.err")" = 2 ] && ! command grep -qF -e 'SEKR' -e '4411' "$T/le.err"; then
+    ok "load_env (asked as: ${how}): the process that asked to report goes on, the request is gone from its environment, and a script it starts STOPS (rc 1)"
+  else
+    bad "load_env (asked as: ${how}): the request to report and go on reached a script the asker started" "$(printf '%s' "${rp_out//SEKR/<S>}" | tr '\n' '|')"
+  fi
+done
+# scripts/walkbox.sh puts HARBOR_URL on an ssh command line and never calls load_env. It asks the
+# same function first: an unreadable login stops it before any tool runs; a readable one is taken
+# out and said. virsh, qemu-img, xorriso and scp here only record a call and fail, and the lab
+# input is pointed at nothing, so the walk cannot get past deriving an address either way.
+WB="$T/wb"; mkdir -p "$WB/bin"
+for tool in virsh qemu-img xorriso scp ssh; do
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >> "%s"\nexit 1\n' "$tool" "$WB/calls.log" > "$WB/bin/$tool"; chmod +x "$WB/bin/$tool"
+done
+wb() {  # <HARBOR_URL> ; sets WB_OUT (stdout+stderr), WB_RC
+  : > "$WB/calls.log"
+  WB_OUT="$(env -u WALKBOX_LAB_IP -u KUBECONFIG -u _LOAD_ENV_ON_REFUSED_ADDRESS PATH="$WB/bin:$PATH" WALKBOX_DIR="$WB/dir" WALKBOX_LAB_INPUT="$WB/no-such-input.yaml" \
+              HARBOR_URL="$1" timeout 60 bash "${REPO}/scripts/walkbox.sh" up 2>&1 </dev/null)"; WB_RC=$?
+}
+for bad_url in 'admin:4411/SEKR@harbor.example' 'admin:SEKR'; do
+  wb "$bad_url"
+  if [ "$WB_RC" = 1 ] && has "$WB_OUT" 'HARBOR_URL is set, and it cannot be used' && [ ! -s "$WB/calls.log" ] && ! has "$WB_OUT" 'SEKR' && ! has "$WB_OUT" 'cannot derive a lab IP'; then
+    ok "walkbox.sh: ${bad_url//SEKR/…} stops the walk at the address, before any tool is asked for, and the value is not printed"
+  else
+    bad "walkbox.sh went on with an address that cannot be used" "rc=${WB_RC}; tool calls: $(wc -l < "$WB/calls.log"); $(printf '%s' "${WB_OUT//SEKR/<S>}" | tail -1 | cut -c1-160)"
+  fi
+done
+wb 'admin:SEKR@harbor.example:8443'
+if [ "$WB_RC" != 0 ] && has "$WB_OUT" "HARBOR_URL held a login" && has "$WB_OUT" "read as 'harbor.example:8443'" && ! has "$WB_OUT" 'SEKR' && [ ! -s "$WB/calls.log" ]; then
+  ok "walkbox.sh: a login that can be read out of HARBOR_URL is taken out and said before the walk goes on (it then stops here for want of a lab input, by construction)"
+else
+  bad "walkbox.sh: a login in HARBOR_URL was not taken out" "rc=${WB_RC}; tool calls: $(wc -l < "$WB/calls.log"); $(printf '%s' "${WB_OUT//SEKR/<S>}" | head -2 | tr '\n' ' ' | cut -c1-200)"
+fi
 # What MUST still pass: an ordinary login is taken out (at the LAST @ before the first /), and the
 # notice prints nothing that came from before that @.
 while IFS='|' read -r in want; do

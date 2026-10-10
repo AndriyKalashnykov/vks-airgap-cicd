@@ -940,6 +940,15 @@ load_env() {
   # Likewise read from the environment BEFORE the files: what to do with an address that cannot
   # be used (drop_userinfo_from reads this local). Only a caller can ask to go on; .env cannot.
   local -r _refused_mode="${_LOAD_ENV_ON_REFUSED_ADDRESS:-die}"
+  # ...and it is taken OUT of the environment here: it is one process's request, and inherited by
+  # a script this one starts it made that script report and go on too (creds.sh asks for itself;
+  # an installer it starts must still stop). Twice on purpose: MEASURED, when the caller both
+  # inherited the variable and typed it in front of load_env, one unset removes only the copy in
+  # front of the call and the inherited one is exported again.
+  unset _LOAD_ENV_ON_REFUSED_ADDRESS; unset _LOAD_ENV_ON_REFUSED_ADDRESS
+  # What the caller's environment held for the one lab pin a reader is likely to type in front of
+  # a command (see the report after the pins are settled, below).
+  local -r _vcf_group_in="${VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION:-}"
   local legacy="${REPO_ROOT}/.env.kind"          # read-only back-compat; nothing writes it any more
   local state; state="$(state_file)"
   [ -f "$example" ] || die ".env.example missing at $example (it is the committed source of truth)"
@@ -1248,6 +1257,22 @@ EOF
     [ -z "${_pin_bad:-}" ] || log_warn "PIN_OVERRIDE problems:${_pin_bad}"
     export _VKS_PIN_OVERRIDE_WARNED=1
   fi
+  # A LAB pin typed in front of a command (`VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION=v9.0.2 make
+  # vks-login`) is replaced by the files, like every lab pin: sourcing overwrites the environment.
+  # For this one it is SAID, in one line: it is the pin a reader tries by hand when the vcf CLI
+  # complains about a plugin, and a silent replacement reads as "the value made no difference".
+  # Once per process tree without a flag of its own: the value is exported, so a script started
+  # from here already holds the value that won and has nothing to report. (A value left in the
+  # shell by an old `set -a; . ./.env` gets the same line, and the same remedy.)
+  # (The name is held in a variable: test-vcf-plugin-group.sh requires that no line under
+  # scripts/ reads as an assignment of this pin, and a message spelling NAME=value does.)
+  local _vcf_group_name=VCF_CLI_ESSENTIALS_PLUGIN_GROUP_VERSION
+  local _vcf_group_now="${!_vcf_group_name:-}"
+  # A PIN_OVERRIDE for it was announced above, and that line already names the value in use.
+  case "$_pin_used " in *" ${_vcf_group_name}="*) _vcf_group_now="$_vcf_group_in" ;; esac
+  if [ -n "$_vcf_group_in" ] && [ "$_vcf_group_in" != "$_vcf_group_now" ]; then
+    log_warn "${_vcf_group_name}=${_vcf_group_in} from the environment is NOT used: ${_vcf_group_now:-(nothing)} from .env.example (or .env) is, because a version pin is read from the files. For one run: PIN_OVERRIDE='${_vcf_group_name}=${_vcf_group_in}' make <target>."
+  fi
 
   export KUBECONFIG="${KUBECONFIG:-${REPO_ROOT}/secrets/vks.kubeconfig}"
 
@@ -1285,8 +1310,7 @@ EOF
   # A login typed into an address (`user:password@harbor…`) must not reach a report line. LAST,
   # after every file has been sourced and the caller's selectors restored: this is the value
   # every script below will read.
-  drop_userinfo_from HARBOR_URL
-  drop_userinfo_from ARGOCD_SERVER
+  drop_userinfo_from_addresses
 
   # The operator-settable time limits, checked HERE: this is the script's main shell and its own
   # stderr, the one place a "this value cannot be used" line is certain to be seen (see
@@ -2800,10 +2824,12 @@ registry_hostport() {
 #              A bare IPv6 literal cannot carry a port: `::1:8443` is itself a valid address, so
 #              nothing can tell a port from the last group. To give a port, write `[::1]:8443`.
 #   host:port  split at the colon;  host alone: port 443
-# A port that is not all digits becomes 443 (the default the callers had).
+# A port that is not all digits becomes 443 (the default the callers had). URL_PORT_GIVEN keeps
+# what was written where a port goes (empty when none was): the one caller that must REFUSE a
+# value whose "port" is not a number (drop_userinfo_from) reads it, so there is still one parser.
 # URL_HOST never carries brackets; host_port_join puts them back where a tool needs `[v6]:port`.
 # Globals, not output: every caller wants both values and most run where a subshell is costly.
-URL_HOST=""; URL_PORT=""
+URL_HOST=""; URL_PORT=""; URL_PORT_GIVEN=""
 # _url_scheme_len <value> — prints how many leading characters are a scheme (`https://` -> 8), or
 # 0. ANCHORED at the start and made of scheme characters only: `*://*` anywhere in the value also
 # matched `h.example/r?u=https://evil` (host came out as `evil`) and `u:a://b@h.example`.
@@ -2811,18 +2837,18 @@ _url_scheme_len() {
   if [[ "${1:-}" =~ ^[A-Za-z][A-Za-z0-9+.-]*:// ]]; then printf '%s' "${#BASH_REMATCH[0]}"; else printf 0; fi
 }
 url_host_port() {
-  local h="${1:-}" p=443 n
+  local h="${1:-}" p=443 n given=""
   n="$(_url_scheme_len "$h")"; h="${h:$n}"
   h="${h%%/*}"
   case "$h" in *@*) h="${h##*@}" ;; esac
   case "$h" in
-    \[*\]:*) p="${h##*]:}"; h="${h%%]*}"; h="${h#\[}" ;;
+    \[*\]:*) p="${h##*]:}"; given="$p"; h="${h%%]*}"; h="${h#\[}" ;;
     \[*\])   h="${h%%]*}"; h="${h#\[}" ;;
     *:*:*)   : ;;
-    *:*)     p="${h##*:}"; h="${h%:*}" ;;
+    *:*)     p="${h##*:}"; given="$p"; h="${h%:*}" ;;
   esac
   case "$p" in ''|*[!0-9]*) p=443 ;; esac
-  URL_HOST="$h"; URL_PORT="$p"
+  URL_HOST="$h"; URL_PORT="$p"; URL_PORT_GIVEN="$given"
 }
 
 # host_port_join <host> <port> — `host:port`, with the brackets an IPv6 literal needs there
@@ -2864,8 +2890,9 @@ url_login_unreadable() {
 
 # drop_userinfo_from <VARIABLE> — if the variable's value carries `user:password@`, take it out of
 # the variable (so nothing below can print or dial it) and say so once, WITHOUT printing it.
-# load_env calls this for HARBOR_URL and ARGOCD_SERVER: both were printed verbatim in report
-# lines, so a password typed into the address ended up in a terminal and in pasted output.
+# load_env calls this for every name in ENV_ADDRESS_VARIABLES (below): HARBOR_URL and
+# ARGOCD_SERVER were printed verbatim in report lines, so a password typed into the address
+# ended up in a terminal and in pasted output; GITEA_URL is where a `user:token@` is likeliest.
 #
 # A value whose login cannot be read out (url_login_unreadable) STOPS THE RUN. It is an address
 # the operator typed that cannot be used, and carrying on with the variable emptied turned that
@@ -2879,6 +2906,19 @@ url_login_unreadable() {
 # line goes to stderr as an error, and the names are left in _ENV_REFUSED_ADDRESSES for the
 # report to say, truthfully, "set but not used" instead of "not set".
 _ENV_REFUSED_ADDRESSES=""
+# ENV_ADDRESS_VARIABLES — the variables load_env strips or refuses. A TYPED list, on purpose.
+# Deriving it from .env.example was looked at (READ, not built) and is not safe: that file marks an address by
+# nothing a program can read. By NAME (`*_URL`, `*_SERVER`, `*_HOST`) the match takes in
+# MAC_TUNNEL_HOST, whose documented value IS a login (`<user@mac-host>`, an ssh destination), and
+# chart-repository URLs nobody types a login into; and half of the candidates ship COMMENTED, as
+# `# NAME=<placeholder>`, which reads the same as an example line in prose. So: the three a
+# reader is told to type an address into, where a `user:token@` is likely. test-url-host-port.sh
+# plants a login in every name in this list, read from here.
+ENV_ADDRESS_VARIABLES="HARBOR_URL ARGOCD_SERVER GITEA_URL"
+drop_userinfo_from_addresses() {
+  local IFS=$' \t\n' _n          # the list is split HERE; a caller's IFS must not decide how
+  for _n in $ENV_ADDRESS_VARIABLES; do drop_userinfo_from "$_n"; done
+}
 drop_userinfo_from() {
   local name="$1" v clean host msg
   v="${!name:-}"
@@ -2893,6 +2933,15 @@ drop_userinfo_from() {
     host="${clean#*://}"; host="${host%%/*}"
     if [ "$clean" != "$v" ] && [ -z "$host" ]; then
       msg="${name} is set, and it cannot be used: it holds a login (the part before the @) and no host after it. It is not printed and not dialled. ${name} takes a host and an optional port, nothing else: put that in .env, and the login in its own variables."
+    else
+      # A LOGIN WITH NO @ AT ALL (`admin:secret` typed as the whole value) has nothing to strip:
+      # it reads as a host named `admin` with a "port" that is not a number, and the splitter
+      # would quietly dial `admin:443`. Asked of the ONE splitter, after the strip: what stands
+      # where a port goes must be digits. (`host:` with nothing after the colon is left alone.)
+      url_host_port "$clean"
+      case "$URL_PORT_GIVEN" in
+        *[!0-9]*) msg="${name} is set, and it cannot be used: what follows the last colon of its host part is not a port number, which is what a login typed without a host looks like (user:password). It is not printed and not dialled. ${name} takes a host and an optional port, nothing else: put that in .env, and the login in its own variables." ;;
+      esac
     fi
   fi
   if [ -n "$msg" ]; then
