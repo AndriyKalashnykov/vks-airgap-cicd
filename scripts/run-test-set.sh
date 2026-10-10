@@ -29,7 +29,7 @@ fi
 
 # ⚠️ THE TEST GUARD GOES FIRST ON PATH FOR EVERY TEST (B751). scripts/test-guard/bin holds refusing,
 # logging stand-ins for the tools that reach a cluster, a registry, a container engine or another
-# machine (kubectl helm argocd vcf crane kind docker podman ssh sudo, and a curl that allows
+# machine (kubectl helm argocd vcf tkn crane kind docker podman ssh sudo, and a curl that allows
 # loopback only). A test's own stub dir is prepended by the test and still wins; what changes is
 # what a test falls through to when it stubbed NOTHING, or when its `trap 'rm -rf "$T"' EXIT` has
 # already deleted the stub dir and a child it started is still running: the stand-in, not the real
@@ -40,7 +40,14 @@ fi
 # A missing guard is a FAILURE, not a warning: a runner that quietly ran every test unfenced would
 # be the fence reading as present while absent.
 _guard_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-guard/bin"
-if [ ! -x "$_guard_bin/kubectl" ] || [ ! -x "$_guard_bin/curl" ]; then
+_guard_ok=1
+if [ ! -x "$_guard_bin/kubectl" ] || [ ! -x "$_guard_bin/curl" ]; then _guard_ok=0; fi
+# EVERY stand-in: one that lost (or never got) its mode bit is not found by a PATH lookup, and
+# the real tool behind it answers. A patch carries no modes, so a NEW stand-in arrives like that.
+for _guard_f in "$_guard_bin"/*; do
+  if [ -f "$_guard_f" ] && [ ! -x "$_guard_f" ]; then _guard_ok=0; fi
+done
+if [ "$_guard_ok" -ne 1 ]; then
   printf 'run-test-set: the test guard is missing or not executable: %s\n' "$_guard_bin" >&2
   printf '  refusing to run the "%s" set unfenced -- restore scripts/test-guard/ and make its files executable.\n' "$label" >&2
   exit 1
@@ -50,6 +57,15 @@ PATH="$_guard_bin:$PATH"; export PATH
 # shell (someone debugging a single test with `export TEST_GUARD_ALLOW=kubectl`) they would open
 # the guard for every test in the set, and every one would still print ok.
 unset TEST_GUARD_ALLOW TEST_GUARD_CURL_HOSTS TEST_GUARD_QUIET
+# ⚠️ A REFUSED CALL NOBODY DECLARED FAILS THE SET. Without a log, a refused `kubectl` reads to the
+# script under test as "no cluster", the test prints ok, and the un-stubbed call stays in the suite
+# until it runs somewhere the guard is not. So the set keeps ONE log of its own (the caller's
+# TEST_GUARD_LOG, if any, is replaced: a set must not be judged by, or write into, another's
+# file), every test still runs, and a line in it at the end is a failure that names the test, the
+# tool and the arguments. A test that provokes a refusal on purpose says so with TEST_GUARD_QUIET
+# (not logged), or points TEST_GUARD_LOG at a file of its own for that one command.
+_guard_log="$(mktemp)" || { printf 'run-test-set: could not create the guard log\n' >&2; exit 1; }
+TEST_GUARD_LOG="$_guard_log"; export TEST_GUARD_LOG
 
 total=0; failed=0; failures=""; start=$SECONDS
 # ⚠️ SKIPPED ARMS WERE INVISIBLE, AND THAT MADE THIS RUNNER A FAKE-GREEN FOR EVERY GATE IT JUDGES.
@@ -72,7 +88,7 @@ total=0; failed=0; failures=""; start=$SECONDS
 # correctly skips its live-cluster arm on a laptop is not a defect). So this SURFACES, and never
 # gates -- the gates.md "print the denominator" discipline, not a new red.
 skipped=0; skipnotes=""
-log=$(mktemp); trap 'rm -f "$log"' EXIT
+log=$(mktemp); trap 'rm -f "$log" "$_guard_log"' EXIT
 
 for t in "$@"; do
   if [ ! -f "$t" ]; then
@@ -109,5 +125,19 @@ printf '\nrun-test-set [%s]: %d test(s) run in %ds, %d failed, %d with skipped a
   "$label" "$total" "$((SECONDS - start))" "$failed" "$skipped"
 # NOT a failure -- a DENOMINATOR. A green whose coverage shrank silently is the thing this prints.
 [ "$skipped" -eq 0 ] || printf 'SKIPPED ARMS (green, but these tests did not measure everything):\n%s' "$skipnotes"
+# `wc -l` on a file always prints a number; a log that vanished counts as empty AND is said.
+_guard_hits=0
+if [ -f "$_guard_log" ]; then _guard_hits="$(wc -l < "$_guard_log" | tr -d ' ')"
+else printf 'run-test-set: the guard log is gone (%s): a test removed it, so undeclared calls cannot be counted\n' "$_guard_log" >&2; _guard_hits=1; fi
+case "$_guard_hits" in ''|*[!0-9]*) _guard_hits=1 ;; esac
+if [ "$_guard_hits" -gt 0 ]; then
+  printf 'TEST GUARD: %s call(s) to a real tool were REFUSED and no test declared them (test, tool, arguments; first 10):\n' "$_guard_hits"
+  if [ -f "$_guard_log" ]; then
+    head -10 "$_guard_log" | sed 's/^/  | /'
+    printf '  by test:\n'; cut -f1 "$_guard_log" | sort | uniq -c | sed 's/^/  | /'
+  fi
+  printf '  Stub the tool in that test, or declare the refusal there: export TEST_GUARD_QUIET="<tool>" with the reason.\n'
+  failed=$((failed + 1)); failures="${failures}  (the test guard: ${_guard_hits} undeclared call(s) to a real tool)"$'\n'
+fi
 [ "$failed" -eq 0 ] || { printf 'FAILED:\n%s' "$failures"; exit 1; }
 exit 0

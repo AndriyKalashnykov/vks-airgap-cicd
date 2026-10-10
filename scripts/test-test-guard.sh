@@ -23,7 +23,7 @@ ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
 bad() { fail=$((fail + 1)); printf '  FAIL  %s\n' "$1"; [ -z "${2:-}" ] || printf '        %s\n' "$2"; }
 has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
 
-TOOLS="kubectl helm argocd vcf crane kind docker podman ssh sudo curl"
+TOOLS="kubectl helm argocd vcf tkn crane kind docker podman ssh sudo curl"
 mkdir -p "$T/real" "$T/dir"
 for t in $TOOLS; do
   # shellcheck disable=SC2016  # $* belongs to the fake, at ITS run time
@@ -71,6 +71,7 @@ run refuse "helm upgrade --install"                 helm upgrade --install x y
 run refuse "argocd app sync"                        argocd app sync demo
 run refuse "argocd version (server side)"           argocd version
 run refuse "vcf plugin list"                        vcf plugin list
+run refuse "tkn pipelinerun delete (the prune step runs it)" tkn pipelinerun delete --all -f
 run refuse "crane push"                             crane push a.tar reg.invalid/x:1
 run refuse "kind delete cluster"                    kind delete cluster --name x
 run refuse "docker ps"                              docker ps
@@ -78,14 +79,30 @@ run refuse "podman run"                             podman run --rm x
 run refuse "ssh"                                    ssh root@192.0.2.9 true
 run refuse "sudo anything but the probe"            sudo systemctl restart libvirtd
 n_logged="$(wc -l < "$LOG" | tr -d ' ')"
-if [ "$n_logged" -eq 17 ]; then ok "every refusal wrote one line to TEST_GUARD_LOG (17)"
-else bad "TEST_GUARD_LOG holds $n_logged line(s), want 17" "$(head -3 "$LOG")"; fi
+if [ "$n_logged" -eq 18 ]; then ok "every refusal wrote one line to TEST_GUARD_LOG (18)"
+else bad "TEST_GUARD_LOG holds $n_logged line(s), want 18" "$(head -3 "$LOG")"; fi
 if grep -q "^self	kubectl	-n lab delete cluster gc1$" "$LOG"; then ok "a log line is <test> TAB <tool> TAB <argv>"
 else bad "the log line format changed" "$(sed -n 2p "$LOG")"; fi
 
 # ---- 2. the closed list of local-only invocations -----------------------------------------------
 run real "kubectl --kubeconfig F config view --minify"  kubectl --kubeconfig "$T/kc" config view --minify -o 'jsonpath={.clusters[0].cluster.server}'
-run real "kubectl config view --raw"                    kubectl config view --raw
+# `config view --raw` prints the credentials of the kubeconfig it resolves (HOME's, by default):
+# let through only where HOME is the sandbox's own.
+run refuse "kubectl config view --raw with the caller's HOME"   kubectl config view --raw
+run refuse "  ...and with --kubeconfig, HOME still the caller's" kubectl --kubeconfig "$T/kc" config view --raw -o 'jsonpath={.users[0].user.token}'
+mkdir -p "$T/sbx/home"
+G_ENV=(TEST_SANDBOX="$T/sbx" HOME="$T/sbx/home")
+run real   "kubectl config view --raw with HOME inside the sandbox" kubectl --kubeconfig "$T/kc" config view --raw
+G_ENV=(TEST_SANDBOX="$T/sbx" HOME="$T/sbx-elsewhere")
+run refuse "  ...and not when HOME only STARTS like the sandbox path" kubectl config view --raw
+G_ENV=()
+# An option the guard does not know, BEFORE the subcommand, may consume the next word: with
+# `--username config view get pods` the words read "config view" while kubectl runs `get pods`.
+run refuse "kubectl --username <v> … (an unknown option before the subcommand)" kubectl --username config view get pods
+run refuse "kubectl --password=<v> config view"         kubectl --password=x config view
+run refuse "kubectl --insecure-skip-tls-verify config view (unknown: refused, not guessed)" kubectl --insecure-skip-tls-verify config view
+run real "kubectl --request-timeout=3s config view (a known option, = form)" kubectl --request-timeout=3s config view
+run real "kubectl config view --minify (an option AFTER the subcommand is the subcommand's)" kubectl config view --minify --flatten=false
 run real "kubectl config current-context"               kubectl --kubeconfig "$T/kc" config current-context
 run real "kubectl version --client"                     kubectl version --client -o json
 run real "kubectl kustomize <local dir>"                kubectl kustomize "$T/dir"
@@ -124,6 +141,34 @@ run refuse "curl 127.0.0.1.evil (a NAME that starts like loopback)" curl http://
 run refuse "curl user@evil@127.0.0.1.x"                     curl http://user@evil.example@127.0.0.1.x/
 run refuse "curl two URLs, the second foreign"              curl http://127.0.0.1/ https://harbor.example.invalid/
 run refuse "curl an option the guard does not know + value (fail CLOSED)" curl --some-future-option value http://127.0.0.1/
+# `--` ends the options: what follows is a URL even when it looks like one.
+run refuse "curl -s -- <foreign URL>"                       curl -s -- https://harbor.example.invalid/
+run refuse "curl <loopback> -- --not-an-option.example"     curl http://127.0.0.1/ -- --not-an-option.example.invalid
+run real   "curl -s -- <loopback URL>"                      curl -s -- http://127.0.0.1:8080/x
+# a loopback proxy makes the URL's host irrelevant; --noproxy takes hosts back out of it
+run real   "curl -x <loopback proxy> to a foreign name"     curl -x http://127.0.0.1:3128 https://harbor.example.invalid/
+run refuse "curl -x <loopback proxy> --noproxy '*'"         curl -x http://127.0.0.1:3128 --noproxy '*' https://harbor.example.invalid/
+# a config file: short keys, a nested file, and noproxy are read (or the file is refused)
+printf -- '-x http://proxy.example.invalid:3128\nurl = "http://127.0.0.1/"\n'        > "$T/k-shortx"
+printf -- '-K %s\n' "$T/k-foreign"                                                   > "$T/k-nested"
+printf -- '-sSxhttp://proxy.example.invalid:3128\nurl = "http://127.0.0.1/"\n'       > "$T/k-cluster"
+printf 'proxy = "http://127.0.0.1:3128"\nnoproxy = "*"\nurl = "https://harbor.example.invalid/"\n' > "$T/k-noproxy"
+printf -- '-s\n-H "X-Test: 1"\n-K %s\n' "$T/k-loop"                                  > "$T/k-nested-loop"
+run refuse "curl -K <config: -x foreign proxy>"             curl -K "$T/k-shortx"
+run refuse "curl -K <config: -K file naming a foreign host>" curl -K "$T/k-nested"
+run refuse "curl -K <config: a short-option cluster with x>" curl -K "$T/k-cluster"
+run refuse "curl -K <config: loopback proxy + noproxy>"     curl -K "$T/k-noproxy"
+run real   "curl -K <config: -s, -H and a nested loopback file>" curl -K "$T/k-nested-loop"
+# a proxy named in the ENVIRONMENT is removed before a let-through call (the fake prints what it got)
+# shellcheck disable=SC2016  # the fake expands its own variables
+printf '#!/bin/sh\necho "REAL curl proxy=[${http_proxy-}${https_proxy-}${HTTPS_PROXY-}${ALL_PROXY-}]"\n' > "$T/real/curl"
+G_ENV=(http_proxy=http://proxy.example.invalid:3128 https_proxy=http://proxy.example.invalid:3128 HTTPS_PROXY=http://proxy.example.invalid:3128 ALL_PROXY=socks5://proxy.example.invalid:1080)
+out="$(env "${G_ENV[@]}" PATH="$GUARD:$T/real:/usr/bin:/bin" curl -s http://127.0.0.1:8080/x 2>&1)"
+if [ "$out" = 'REAL curl proxy=[]' ]; then ok "allowed  curl to loopback with a proxy in the environment: the real curl is started WITHOUT it"
+else bad "a proxy from the environment reached the real curl" "$out"; fi
+G_ENV=()
+# shellcheck disable=SC2016  # $* belongs to the fake, at ITS run time
+printf '#!/bin/sh\necho "REAL curl $*"\n' > "$T/real/curl"
 
 # ---- 4. the opt-ins ---------------------------------------------------------------------------
 G_ENV=(TEST_GUARD_ALLOW="docker kind")
@@ -159,6 +204,16 @@ else bad "two guard dirs on PATH did not resolve to the real tool" "rc=$rc (124 
 out="$(PATH="$T/guard-copy/bin:$GUARD:$T/real:/usr/bin:/bin" timeout 10 kubectl config view 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && [ "${out#REAL kubectl}" != "$out" ]; then ok "  ...and so does an allowed kubectl call"
 else bad "two guard dirs: an allowed kubectl call did not reach the real tool" "rc=$rc out=${out:0:100}"; fi
+# A VERSION MANAGER'S SHIM behind the guard, with no active version: it execs the next kubectl on
+# PATH that is not itself, which is the stand-in again. MEASURED (a mise shim, a test that cd'ed
+# out of the repo): the two exec each other for ever. The fake shim here does exactly that.
+mkdir -p "$T/shim"
+# shellcheck disable=SC2016  # the shim expands its own variables
+printf '#!/usr/bin/env bash\nd="$(cd "$(dirname "$0")" && pwd)"; IFS=:\nfor p in $PATH; do [ "$p" = "$d" ] && continue; [ -x "$p/kubectl" ] && exec "$p/kubectl" "$@"; done\nexit 127\n' > "$T/shim/kubectl"
+chmod +x "$T/shim/kubectl"
+out="$(PATH="$GUARD:$T/shim:/usr/bin:/bin" timeout 10 kubectl config view 2>&1)"; rc=$?
+if [ "$rc" -eq 127 ] && has "$out" 'came straight back to the guard'; then ok "a shim behind the guard that execs back to the stand-in ENDS (rc 127, and says so) instead of looping"
+else bad "a shim that resolves back to the stand-in was not stopped" "rc=$rc (124 = they exec each other until the timeout) out=${out:0:140}"; fi
 if [ -f "$GUARD/.test-guard" ]; then ok "the marker file the stand-ins key on exists (bin/.test-guard)"
 else bad "scripts/test-guard/bin/.test-guard is missing" "without it a stand-in cannot tell a guard dir from a real one and execs ITSELF"; fi
 
@@ -207,6 +262,24 @@ fi
 if printf '%s' "$out" | grep -q 'guard-test=test-probe.sh'; then ok "the runner names the running test in TEST_GUARD_TEST"
 else bad "TEST_GUARD_TEST is not the test's name" "$(printf '%s' "$out" | grep 'guard-test=')"; fi
 
+# ---- 6b. a refused call that no test declared FAILS the set, after every test ran ---------------
+# A refused kubectl reads to the script under test as "no cluster", so the test prints ok. The
+# runner keeps a log of its own for the set and fails on a line in it.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$T/test-clean.sh"
+printf '#!/usr/bin/env bash\nkubectl get ns >/dev/null 2>&1\nhelm version >/dev/null 2>&1\nexit 0\n' > "$T/test-hit.sh"
+printf '#!/usr/bin/env bash\nexport TEST_GUARD_QUIET="kubectl"\nkubectl get ns >/dev/null 2>&1\nexit 0\n' > "$T/test-declared.sh"
+: > "$LOG"
+out="$(TEST_GUARD_LOG="$LOG" PATH="$T/real:/usr/bin:/bin" bash "$SCRIPTS/run-test-set.sh" probe "$T/test-clean.sh" "$T/test-hit.sh" "$T/test-declared.sh" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && has "$out" 'ok    test-hit.sh' && has "$out" 'ok    test-declared.sh' && has "$out" 'TEST GUARD: 2 call(s)' \
+   && has "$out" "| test-hit.sh	kubectl	get ns" && has "$out" "| test-hit.sh	helm	version" && has "$out" 'the test guard: 2 undeclared'; then
+  ok "run-test-set.sh FAILS a set whose tests all passed when a real tool was refused and not declared: every test still ran, and the lines name the test, the tool and the arguments (rc=$rc)"
+else bad "an undeclared refused call did not fail the set" "rc=$rc out=$(printf '%s' "$out" | tail -8 | tr '\n' '|' | cut -c1-400)"; fi
+if [ ! -s "$LOG" ]; then ok "  ...and the set wrote to its OWN log, not to a TEST_GUARD_LOG inherited from the caller"
+else bad "the runner wrote the set's refusals into the caller's TEST_GUARD_LOG" "$(head -2 "$LOG")"; fi
+out="$(PATH="$T/real:/usr/bin:/bin" bash "$SCRIPTS/run-test-set.sh" probe "$T/test-clean.sh" "$T/test-declared.sh" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && ! has "$out" 'TEST GUARD'; then ok "  ...and a refusal the test DECLARED (TEST_GUARD_QUIET) leaves the set green (control)"
+else bad "a declared refusal failed the set" "rc=$rc out=$(printf '%s' "$out" | tail -5 | tr '\n' '|' | cut -c1-300)"; fi
+
 # ---- 7. a runner with NO guard refuses to run the set -------------------------------------------
 mkdir -p "$T/noguard"; cp "$SCRIPTS/run-test-set.sh" "$T/noguard/"
 printf '#!/usr/bin/env bash\necho RAN-UNFENCED\n' > "$T/noguard/test-x.sh"
@@ -217,6 +290,10 @@ mkdir -p "$T/noguard/test-guard"; cp -r "$SCRIPTS/test-guard/." "$T/noguard/test
 out="$(bash "$T/noguard/run-test-set.sh" probe "$T/noguard/test-x.sh" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && has "$out" 'not executable'; then ok "  ...and when a stand-in has lost its mode bit"
 else bad "the runner ran a set with a non-executable stand-in" "rc=$rc out=${out:0:160}"; fi
+chmod +x "$T/noguard/test-guard/bin/kubectl"; chmod -x "$T/noguard/test-guard/bin/tkn"
+out="$(bash "$T/noguard/run-test-set.sh" probe "$T/noguard/test-x.sh" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && has "$out" 'not executable' && ! has "$out" 'RAN-UNFENCED'; then ok "  ...and when ANY stand-in has (tkn: a file a patch adds arrives with no mode bit)"
+else bad "the runner ran a set with a non-executable tkn stand-in" "rc=$rc out=${out:0:160}"; fi
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

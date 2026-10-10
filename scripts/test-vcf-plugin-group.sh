@@ -74,6 +74,25 @@ got="$(run_after_load_env PIN_OVERRIDE="${KEY}=v0.0.2")"
 if [ "$got" = v0.0.2 ]; then ok "PIN_OVERRIDE wins for one run, over .env (v0.0.2)"
 else bad "PIN_OVERRIDE did not reach vcf" "saw '${got}'; stderr: $(head -1 "$T/err" | cut -c1-120)"; fi
 rm -f "$T/root/.env"
+# TYPED IN FRONT OF A COMMAND, the value loses to the files like every lab pin. That is SAID, in
+# one line naming both values and the way to do it for one run; a script started from there
+# re-reads the files and says nothing again.
+got="$(run_after_load_env "${KEY}=v0.0.9")"
+if [ "$got" = "$DEFAULT" ] && [ "$(command grep -c "${KEY}=v0.0.9 from the environment is NOT used" "$T/err")" = 1 ] \
+   && command grep -q "${DEFAULT} from .env.example" "$T/err" && command grep -q "PIN_OVERRIDE='${KEY}=v0.0.9'" "$T/err"; then
+  ok "a value typed in front of the command loses to .env.example, and ONE line says which value is used and how to override for one run"
+else bad "a typed value that lost was replaced without a word (or did not lose)" "vcf saw '${got}'; lines: $(command grep -c 'is NOT used' "$T/err")"; fi
+# shellcheck disable=SC2016
+env -u KUBECONFIG "${KEY}=v0.0.9" PATH="$T/bin:$PATH" REPO_ROOT="$T/root" VKS_STATE_FILE="$T/root/.env.state" \
+  bash -c '. "$1"; load_env; bash -c ". \"\$1\"; load_env; load_env" _ "$1"' _ "$LIB_OS" >/dev/null 2>"$T/err"
+if [ "$(command grep -c 'is NOT used' "$T/err")" = 1 ]; then ok "  ...once for the process tree: a script started from there, and a second load_env, add no second line"
+else bad "the lost-override line was repeated (or never printed) across a process tree" "$(command grep -c 'is NOT used' "$T/err") line(s)"; fi
+got="$(run_after_load_env "${KEY}=${DEFAULT}")"
+if [ "$got" = "$DEFAULT" ] && ! command grep -q 'is NOT used' "$T/err"; then ok "  ...and nothing is said when the typed value IS the one in use"
+else bad "the lost-override line was printed for a value that did not lose" "$(command grep 'is NOT used' "$T/err" | head -1 | cut -c1-140)"; fi
+got="$(run_after_load_env "${KEY}=v0.0.9" PIN_OVERRIDE="${KEY}=v0.0.2")"
+if [ "$got" = v0.0.2 ] && ! command grep -q 'is NOT used' "$T/err" && command grep -q 'PIN_OVERRIDE in effect' "$T/err"; then ok "  ...and with a PIN_OVERRIDE for it, the override's own line is the only one"
+else bad "a PIN_OVERRIDE and a typed value: the wrong line was printed" "vcf saw '${got}'; $(command grep -c 'is NOT used' "$T/err") lost-override line(s)"; fi
 # Without load_env the variable is NOT there: this is the control that makes case 4 matter.
 : > "$T/vcf.log"; env -u "$KEY" PATH="$T/bin:$PATH" vcf context list
 if command grep -q 'group=\[UNSET\]' "$T/vcf.log"; then ok "control: a vcf run WITHOUT load_env does not get the variable (so every caller must load_env first)"

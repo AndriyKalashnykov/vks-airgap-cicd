@@ -14,6 +14,9 @@
 set -uo pipefail
 # shellcheck source=scripts/lib/test-sandbox.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+# 03-check-tools.sh asks every tool it finds for its version, and under the runner the tools it
+# finds are the guard's stand-ins: those refusals are this test's own, so they are declared.
+export TEST_GUARD_QUIET="helm crane vcf tkn docker kind podman"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 

@@ -125,7 +125,7 @@ _sup_timeout() {
 # the variable is set and not used — never that it is "not set".
 _LOAD_ENV_ON_REFUSED_ADDRESS=report load_env 2> >(grep -v "does not record which cluster it belongs to" >&2)
 for _refused in ${_ENV_REFUSED_ADDRESSES:-}; do
-  printf 'NOTE: %s is SET in .env but NOT USED: it holds an @ after the host (a login with a / or :// in its password looks like that). It is not shown here. Rows below that depend on it read as if it were not set; every other command stops on it until it is corrected.\n' "$_refused"
+  printf 'NOTE: %s is SET in .env but NOT USED: it is not a host with an optional port (a login typed into it looks like that; the line above says which part). It is not shown here. Rows below that depend on it read as if it were not set; every other command stops on it until it is corrected.\n' "$_refused"
 done
 # THE TIME LIMITS THIS REPORT IS BUILT ON ARE CHECKED BY load_env ITSELF now (bounds_normalize,
 # lib/os.sh, its last step): the three lines that did it here moved there, so every script gets

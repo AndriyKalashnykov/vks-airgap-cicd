@@ -47,6 +47,9 @@
 #                              three that assert on the DEFAULT path red.
 #   HOME                       an empty directory (the real one is kept in TEST_REAL_HOME).
 #   TMPDIR                     inside the sandbox, so a test's own mktemp lands there.
+#   http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy   UNSET (no_proxy is left).
+#   (and the sandbox REPO_ROOT does NOT link the checkout's gitignored top-level state:
+#   .registry.lock, out, .jumpbox, .claude, .deps-failed, links.md, token.md.)
 #   PATH                       scripts/test-guard/bin FIRST: refusing stand-ins for the tools that
 #                              reach a cluster, a registry, an engine or another machine. The
 #                              test's own stub dir still goes in front of it.
@@ -130,6 +133,12 @@ test_sandbox_repo() {
     b="${e##*/}"
     case "$b" in
       .git|.env|.env.*|secrets|bundle) continue ;;
+      # GITIGNORED STATE a run leaves at the top level: a link to it would let a write through
+      # "$REPO_ROOT/out" (or the lock, or the jump-box kubeconfig dir, or the harness's own
+      # worktrees) land in the checkout. An explicit list: what is TRACKED cannot be asked at run
+      # time without git (the bundle on an air-gapped box has none), and these are the top-level
+      # names .gitignore gives to state, as opposed to build output inside a tracked directory.
+      .registry.lock|out|.jumpbox|.claude|.deps-failed|links.md|token.md) continue ;;
     esac
     [ -e "$d/$b" ] || ln -s "$e" "$d/$b" || return 1
   done
@@ -157,6 +166,9 @@ unset ARGOCD_KUBECONFIG
 unset KUBECONFIG
 export HOME="$TEST_SANDBOX/home"
 export TMPDIR="$TEST_SANDBOX/tmp"
+# A proxy named in the environment sends a "loopback" request of ANY tool somewhere else, and the
+# guard reads only what is on a command line. (no_proxy is left: it can only take hosts OUT.)
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 
 # The guard goes first ONCE: run-test-set.sh has usually put it there already, and a second copy
 # would only lengthen PATH.
@@ -164,7 +176,14 @@ __test_guard_bin="$TEST_REAL_REPO/scripts/test-guard/bin"
 # ⚠️ FAIL CLOSED ON A GUARD THAT CANNOT RUN. A stand-in that lost its mode bit (a patch applied
 # without modes, a checkout with core.fileMode off) is simply NOT FOUND by a PATH lookup, so the
 # real tool behind it would answer and nothing would say so.
-if [ ! -x "$__test_guard_bin/kubectl" ] || [ ! -x "$__test_guard_bin/curl" ] || [ ! -x "$__test_guard_bin/../refuse.sh" ]; then
+__test_guard_ok=1
+if [ ! -x "$__test_guard_bin/kubectl" ] || [ ! -x "$__test_guard_bin/curl" ] || [ ! -x "$__test_guard_bin/../refuse.sh" ]; then __test_guard_ok=0; fi
+# EVERY stand-in, not the two named above: one added later (tkn) arrives by patch with no mode bit.
+for __test_guard_f in "$__test_guard_bin"/*; do
+  if [ -f "$__test_guard_f" ] && [ ! -x "$__test_guard_f" ]; then __test_guard_ok=0; fi
+done
+unset __test_guard_f
+if [ "$__test_guard_ok" -ne 1 ]; then
   printf 'test-sandbox: the test guard is missing or not executable: %s\n' "$__test_guard_bin" >&2
   printf '  refusing to run unfenced -- restore scripts/test-guard/ and make its files executable (chmod +x).\n' >&2
   rm -rf "$TEST_SANDBOX"; exit 1
@@ -264,18 +283,20 @@ __test_sandbox_exit() {
 trap() {
   # Not the shell that owns the sandbox (a subshell, a function run in `$( )`): untouched.
   if [ "$BASHPID" != "${__TEST_SANDBOX_PID:-}" ]; then builtin trap "$@"; return; fi
+  # bash reads a signal name in ANY case (`trap … Exit` sets the EXIT trap: MEASURED), so the
+  # comparisons below are made on the upper-cased word. Spelled `exit` only, `Exit` replaced ours.
   local __a __is_exit=0 __n=0
   for __a in "$@"; do
     __n=$((__n + 1))
     [ "$__n" -gt 1 ] || continue
-    case "$__a" in EXIT|0|exit) __is_exit=1 ;; esac
+    case "${__a^^}" in EXIT|0) __is_exit=1 ;; esac
   done
   # `trap -p`, `trap -l`, a bare `trap`, or a handler for other signals only: not ours to touch.
   case "${1:-}" in -p|-l) builtin trap "$@"; return ;; esac
   [ "$#" -gt 0 ] || { builtin trap; return; }
   # `trap EXIT` (one argument) RESETS the handler: forget the test's, keep ours.
   if [ "$#" -eq 1 ]; then
-    case "$1" in EXIT|0|exit) __test_sandbox_user_exit=""; return 0 ;; esac
+    case "${1^^}" in EXIT|0) __test_sandbox_user_exit=""; return 0 ;; esac
     builtin trap "$@"; return
   fi
   if [ "$__is_exit" -eq 0 ]; then builtin trap "$@"; return; fi
@@ -285,9 +306,20 @@ trap() {
   [ "$__h" != "--" ] || { __h="${1:-}"; shift; }
   case "$__h" in -|'') __test_sandbox_user_exit="" ;; *) __test_sandbox_user_exit="$__h" ;; esac
   local __rest=()
-  for __a in "$@"; do case "$__a" in EXIT|0|exit) : ;; *) __rest+=("$__a") ;; esac; done
+  for __a in "$@"; do case "${__a^^}" in EXIT|0) : ;; *) __rest+=("$__a") ;; esac; done
   [ "${#__rest[@]}" -eq 0 ] || builtin trap -- "$__h" "${__rest[@]}"
   builtin trap __test_sandbox_exit EXIT
 }
 
+# AN EXIT HANDLER THE TEST SET BEFORE IT SOURCED THIS FILE is kept, not replaced: the line below
+# would otherwise drop it without a word. `trap -p EXIT` prints it re-readable (`trap -- '<handler>'
+# EXIT`), so the handler is its third word. (Source this file FIRST all the same: the coverage
+# gate asks for that, and a handler set earlier ran unfenced until here.)
+__test_sandbox_prev="$(builtin trap -p EXIT 2>/dev/null || true)"
+if [ -n "$__test_sandbox_prev" ]; then
+  eval "__test_sandbox_prev=(${__test_sandbox_prev})"
+  # shellcheck disable=SC2128  # after the eval it IS an array; index 2 is the handler
+  [ "${#__test_sandbox_prev[@]}" -lt 4 ] || __test_sandbox_user_exit="${__test_sandbox_prev[2]}"
+fi
+unset __test_sandbox_prev
 builtin trap __test_sandbox_exit EXIT
