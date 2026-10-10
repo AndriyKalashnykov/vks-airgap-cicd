@@ -235,6 +235,7 @@ RFC 5737 ones. Item 4 is done when no test changes a path under the checkout (th
 sandbox root, as `test-state-archives.sh` now does).
 
 **Found by the review of the follow-up change, not fixed:**
+
 - the runner prints "0 failed" and then FAILED when a set fails only on the guard log: the
   count line should include the guard failure;
 - `check-count-fallback.sh` has no committed test for its "dead entry" and "too loose" arms,
@@ -340,6 +341,7 @@ with the fix taken out; none of it has run against a lab.**
   to report); silent when the typed value is the one in use or a `PIN_OVERRIDE` names it.
 
 **Found by the review of the follow-up change, not fixed:**
+
 - a login with a colon in the password and no `@` (`admin:pa:ss`) is read as a bare IPv6
   address and passes; `admin:1234` cannot be told from a host and a port at all. The row above
   about "a login with no @" is closed only for a port that is not a number;
