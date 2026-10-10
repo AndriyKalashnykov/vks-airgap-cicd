@@ -12,6 +12,8 @@
 # The whole point of the function is that it PRINTS and never gates, so every case asserts rc=0 AND
 # asserts on the text. A case that only checked rc would pass no matter what it said.
 set -euo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="${SCRIPT_DIR}/26-vks-cluster-status.sh"
 [ -f "$TARGET" ] || { echo "FAIL: $TARGET missing"; exit 1; }

@@ -21,6 +21,8 @@
 #   20-bundle-load.sh's mv-aside / restore-on-failure plumbing, which needs a real tarball and a
 #   toolchain install. Case 3 is therefore the closest available proxy, not a test of that code.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 
 fail=0

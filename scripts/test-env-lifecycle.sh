@@ -15,6 +15,9 @@
 # NOT COVERED: the DISCOVER path itself (needs a cluster) and env-validate's connectivity
 # leg. This tests the OFFLINE half; the other half is named in doc-harness-coverage's output.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 REPO=$PWD
 fail=0; n=0

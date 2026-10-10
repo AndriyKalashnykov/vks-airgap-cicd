@@ -5,6 +5,8 @@
 # cluster, which is how gates end up shipped unproven. Every case below is a pod shape that actually
 # occurs.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 pass=0; fail=0

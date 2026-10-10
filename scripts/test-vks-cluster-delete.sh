@@ -26,6 +26,8 @@
 #      was forbidden", so the fail-closed branch is unreachable unless the stub can return rc!=0
 #      with empty stdout.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 REPO="$PWD"
 

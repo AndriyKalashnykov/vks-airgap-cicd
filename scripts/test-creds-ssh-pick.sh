@@ -13,6 +13,9 @@
 # real function is what these cases measure. If the extraction ever yields nothing, that is a hard
 # failure, not a skip: a test that silently tests an empty function is worse than no test.
 set -euo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test sets REPO_ROOT itself, as a plain (unexported) variable naming this checkout
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Extract by function name up to its closing brace at column 0 — deliberately NOT a line range,

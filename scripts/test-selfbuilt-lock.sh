@@ -24,6 +24,8 @@
 # NOT build an image. It proves the record survives skips and is byte-stable across them. It does
 # not prove the record's CONTENT is right on a cold build — that is `make selfbuilt-image`.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 pass=0; fail=0

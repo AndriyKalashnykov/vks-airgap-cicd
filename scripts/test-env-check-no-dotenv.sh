@@ -16,6 +16,8 @@
 # The corpus is `git archive HEAD` -- tracked files only, so .env CANNOT exist. That is what makes
 # this honest, and it cannot rot into a passing test on a box that happens to have one.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 export LC_ALL=C
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 pass=0; fail=0; T=""

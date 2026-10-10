@@ -10,6 +10,9 @@
 # because .env OVERRIDES the code default that would otherwise have worked. So "two policies -> writes
 # NOTHING" is the load-bearing assertion here, not the happy path.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 pass=0; fail=0
 ok()  { printf '  ok    %s\n' "$1"; pass=$((pass+1)); }

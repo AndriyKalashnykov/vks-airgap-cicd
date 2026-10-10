@@ -11,6 +11,9 @@
 # The real TLS behaviour (Apple's verifier vs Go's) cannot be stubbed; it was measured on the Mac.
 # shellcheck disable=SC2016  # single quotes are the point: bash -c bodies and stub scripts
 set -uo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test sets REPO_ROOT itself, as a plain (unexported) variable naming this checkout
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf -- "${T:?}"' EXIT

@@ -12,6 +12,8 @@
 # repo failed the comparison / the controller never judged it / the CLI could not be reached /
 # the reply could not be parsed. The old code collapsed all of them into one sentence naming Gitea.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"

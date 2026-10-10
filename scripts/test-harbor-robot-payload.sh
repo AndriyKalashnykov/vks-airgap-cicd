@@ -20,6 +20,8 @@
 #     POST /api/v2.0/projects/{p}/robots existed in 2.12 and was REMOVED in the 2.13 line.
 #   * a level:"project" robot may hold exactly ONE project permission.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh

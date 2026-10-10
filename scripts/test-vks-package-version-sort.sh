@@ -12,6 +12,8 @@
 # defect), and the pasted copy could not notice the product diverging from it. Do not reintroduce
 # either: if a case does not run `$_VKEY` read out of the product file, it proves nothing.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 export LC_ALL=C
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 pass=0; fail=0

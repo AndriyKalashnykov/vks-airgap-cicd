@@ -21,6 +21,8 @@
 # What is still NOT covered: the live behaviour of a real dying port-forward. That is
 # `make e2e-kind`, and it is where the defect was found in the first place.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 pass=0; fail=0
 ck() { if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "  ok    $1"; else fail=$((fail+1)); echo "  FAIL  $1 (want '$3', got '$2')"; fi; }
 

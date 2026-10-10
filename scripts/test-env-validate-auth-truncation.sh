@@ -25,6 +25,8 @@
 # Tests the SHELL FORM, not the whole gate: env_validate needs a populated .env and a reachable
 # Harbor, and the defect lives entirely in how the probe normalises curl's two outputs.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 
 cat > "$T/oracle.py" <<'PY'

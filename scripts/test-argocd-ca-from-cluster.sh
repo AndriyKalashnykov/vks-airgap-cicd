@@ -6,6 +6,8 @@
 # (must be written) or an unrelated B (must be REFUSED, the output untouched). The verification is an
 # exact SHA-256 match, so the RED is "a certificate that is a valid cert, just not the served one".
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T="$(mktemp -d)"
 cleanup() { [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null; rm -rf "$T"; }

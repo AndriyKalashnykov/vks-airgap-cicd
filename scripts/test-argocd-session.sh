@@ -11,6 +11,9 @@
 # exactly those characters and yields a 400 that reads as a wrong credential. jq escapes correctly,
 # and this test is what keeps anyone from "simplifying" it back.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export TEST_GUARD_QUIET="kubectl"   # argocd_admin_password is driven at a kubeconfig that does not exist; the refusal IS the case
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"

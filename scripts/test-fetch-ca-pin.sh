@@ -17,6 +17,8 @@
 # over the connection this file anchors; 22-harbor-robot.sh mints the robot with the ADMIN credential over
 # the same channel. A MITM here harvests credentials, it does not merely serve bad images.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 FETCH="${SCRIPT_DIR}/fetch-ca.sh"

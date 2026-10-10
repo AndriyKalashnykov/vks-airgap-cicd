@@ -9,13 +9,17 @@
 #   argocd-cli-darwin-amd64-<ver>.gz                            -> amd64 only; Broadcom ships no arm64
 # A Linux archive sits beside each Darwin one, so a case passes only if the installer picks by OS.
 set -euo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test sets REPO_ROOT itself, as a plain (unexported) variable naming this checkout
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export TEST_GUARD_QUIET="vcf"   # the installer ends with an un-gated `vcf plugin list`; under DRY_RUN nothing was installed, and it only warns
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALLER="$SCRIPT_DIR/01-install-vcf-clis.sh"
 
 # Pinned versions exactly as the installer sees them (SKIP_DOTENV=1: see test-vcf-cli-resolve.sh).
 ev() {
-  ( set -a; SKIP_DOTENV=1
+  ( set -a; SKIP_DOTENV=1; REPO_ROOT="$TEST_SANDBOX_ROOT"     # the SAME root the installer is given
     # shellcheck disable=SC1090,SC1091
     . "$REPO_ROOT/scripts/lib/os.sh" >/dev/null 2>&1; load_env >/dev/null 2>&1; set +a
     printf '%s' "${!1}" )
@@ -48,7 +52,7 @@ fake_uname() {
 run_as() {
   local u; u="$(fake_uname "$1" "$2")"
   # shellcheck disable=SC2031  # os.sh assigns PATH on macOS only; this per-command PATH is intended
-  PATH="$u:$PATH" SKIP_DOTENV=1 VCF_CLI_SRC_DIR="$4" BIN_DIR="$5" DRY_RUN=1 \
+  PATH="$u:$PATH" REPO_ROOT="$TEST_SANDBOX_ROOT" SKIP_DOTENV=1 VCF_CLI_SRC_DIR="$4" BIN_DIR="$5" DRY_RUN=1 \
     bash "$INSTALLER" "$3" >/dev/null 2>"$6"
 }
 n=0

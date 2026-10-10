@@ -19,6 +19,8 @@
 # So the server below writes a COMPLETE status line + Content-Length: 5000, sends 9 bytes, and
 # closes hard. Do not "simplify" it back to http.server.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 
 fail=0

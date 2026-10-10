@@ -34,6 +34,8 @@
 # The downgrade itself is provable only against a live Supervisor; the guard is what this file
 # proves, and the guard is what stops it.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 printf 'apiVersion: v1\n' > "$T/kubeconfig"

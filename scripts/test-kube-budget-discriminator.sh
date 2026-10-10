@@ -23,6 +23,9 @@
 #
 # The timeout here is REAL: the kubectl stub sleeps past the budget. Nothing simulates an rc.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 cd "$(dirname "$0")/.." || exit 1
 # shellcheck source=scripts/lib/os.sh
 . scripts/lib/os.sh 2>/dev/null || { echo "cannot source lib/os.sh"; exit 1; }

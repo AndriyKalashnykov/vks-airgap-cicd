@@ -64,6 +64,11 @@
 # recorded in 27-harbor-ca-from-cluster.sh), that the Harbor UI has the button the text names, or
 # that the two routes work there. It proves the sentence follows the shape of what the server sends.
 set -uo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test sets REPO_ROOT itself, as a plain (unexported) variable naming this checkout
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
+export TEST_GUARD_QUIET="kubectl"   # make creds / env-validate probe a cluster that is not there; only the CA rows are under test
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$REPO_ROOT"
 PASS=0; FAIL=0

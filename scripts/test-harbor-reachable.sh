@@ -14,6 +14,9 @@
 # Offline: a stub kubectl gets past the cluster gate, and a real local listener (or the absence of
 # one) drives the reachability branch. No cluster, no Harbor, no network.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export TEST_GUARD_CURL_HOSTS="harbor.mac.test"   # a made-up name only the dscacheutil STUB resolves: the real curl must fail on it
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP="$(mktemp -d)"; mkdir -p "$TMP/bin"
 cleanup() { rm -rf "$TMP"; local p; for p in ${SRV:-} ${SRV_H:-} ${SRV_O:-} ${SRV_R1:-} ${SRV_R2:-} ${SRV_R3:-}; do kill "$p" 2>/dev/null; done; }

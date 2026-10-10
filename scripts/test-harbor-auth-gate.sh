@@ -5,6 +5,8 @@
 # and does a clean report stay green? Stubs the libs in a throwaway dir; touches no real Harbor
 # (a deliberate bad-password probe against a live registry is not a thing to fire off casually).
 set -euo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/lib"

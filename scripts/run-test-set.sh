@@ -27,6 +27,30 @@ if [ "$#" -eq 0 ]; then
   exit 1
 fi
 
+# ⚠️ THE TEST GUARD GOES FIRST ON PATH FOR EVERY TEST (B751). scripts/test-guard/bin holds refusing,
+# logging stand-ins for the tools that reach a cluster, a registry, a container engine or another
+# machine (kubectl helm argocd vcf crane kind docker podman ssh sudo, and a curl that allows
+# loopback only). A test's own stub dir is prepended by the test and still wins; what changes is
+# what a test falls through to when it stubbed NOTHING, or when its `trap 'rm -rf "$T"' EXIT` has
+# already deleted the stub dir and a child it started is still running: the stand-in, not the real
+# tool. It is a COMMITTED directory, set here, so it exists before the first test and after the
+# last and no test's own trap can remove it. A test that needs the real tool says so by name
+# (TEST_GUARD_ALLOW, see scripts/test-guard/refuse.sh).
+#
+# A missing guard is a FAILURE, not a warning: a runner that quietly ran every test unfenced would
+# be the fence reading as present while absent.
+_guard_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-guard/bin"
+if [ ! -x "$_guard_bin/kubectl" ] || [ ! -x "$_guard_bin/curl" ]; then
+  printf 'run-test-set: the test guard is missing or not executable: %s\n' "$_guard_bin" >&2
+  printf '  refusing to run the "%s" set unfenced -- restore scripts/test-guard/ and make its files executable.\n' "$label" >&2
+  exit 1
+fi
+PATH="$_guard_bin:$PATH"; export PATH
+# The guard's opt-ins belong to ONE test, which sets them itself. Inherited from the caller's
+# shell (someone debugging a single test with `export TEST_GUARD_ALLOW=kubectl`) they would open
+# the guard for every test in the set, and every one would still print ok.
+unset TEST_GUARD_ALLOW TEST_GUARD_CURL_HOSTS TEST_GUARD_QUIET
+
 total=0; failed=0; failures=""; start=$SECONDS
 # ⚠️ SKIPPED ARMS WERE INVISIBLE, AND THAT MADE THIS RUNNER A FAKE-GREEN FOR EVERY GATE IT JUDGES.
 # `bash "$t" > "$log" 2>&1` captures the test's output and the log is cat'd ONLY in the rc!=0
@@ -59,7 +83,7 @@ for t in "$@"; do
   total=$((total + 1))
   t0=$SECONDS
   rc=0
-  bash "$t" > "$log" 2>&1 || rc=$?
+  TEST_GUARD_TEST="$(basename "$t")" bash "$t" > "$log" 2>&1 || rc=$?
   if [ "$rc" -eq 0 ]; then
     # Count the test's OWN skip lines. `grep -c` prints 0 and exits 1 on no match, which under
     # `set -e` would kill the runner -- hence `|| true`, the documented capture-then-test form.

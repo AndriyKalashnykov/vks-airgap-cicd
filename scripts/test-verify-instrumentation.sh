@@ -15,6 +15,9 @@
 # Driven through the REAL function with a stubbed kubectl on PATH — never by re-implementing the
 # logic, which is how a test comes to agree with a bug.
 set -euo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export TEST_GUARD_QUIET="argocd"   # the block lifted from 99-verify.sh nudges with `argocd app get --refresh`; its failure is what case 1 asserts
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin"

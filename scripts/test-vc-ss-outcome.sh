@@ -8,6 +8,8 @@
 #
 # Each case drives the REAL vc_ss_install with a stubbed vc_api and asserts VC_SS_OUTCOME.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 
 fail=0

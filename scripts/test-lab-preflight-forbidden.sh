@@ -16,6 +16,8 @@
 #
 # Hermetic: a fake `kubectl` on PATH, no cluster, no network, no `.env` (SKIP_DOTENV=1).
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 fail=0

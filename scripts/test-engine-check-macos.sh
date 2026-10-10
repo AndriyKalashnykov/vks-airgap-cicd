@@ -13,6 +13,8 @@
 #                             containers.conf makes every podman command fail; a drop-in wins over it.
 #   no Rosetta 2 on host   -> PROBLEM naming softwareupdate (the registry enrolls a .NET app)
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf -- "${T:?}"' EXIT
 fail=0; n=0

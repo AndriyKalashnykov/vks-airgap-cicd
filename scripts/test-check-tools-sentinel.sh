@@ -12,6 +12,8 @@
 # ⚠️ Cases 1 and 3 (sentinel ABSENT -> no warning) are the ones people skip. Without them nothing stops
 # the warning becoming unconditional, which is how a real signal gets ignored.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 

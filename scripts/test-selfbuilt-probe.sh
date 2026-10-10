@@ -29,6 +29,8 @@
 #   match HITS=1:RC=0 -> verified · no match HITS=0:RC=1 -> die
 #   grep errored HITS=:RC=2 -> WARN tooling · no shell rc=127 -> WARN no-shell
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  ok    %s\n' "$1"; }
@@ -175,9 +177,11 @@ if command -v crane >/dev/null 2>&1; then
   mkdir -p "$TMP/gz"
   printf 'dep\tgithub.com/google/go-containerregistry\tv0.21.9\th1:x\n' > "$TMP/gz/executor"
   tar -C "$TMP/gz" -czf "$TMP/gz/layer.tgz" executor
-  if crane append --oci-empty-base -f "$TMP/gz/layer.tgz" -t localhost/fx:1 -o "$TMP/gz/fx.tar" >/dev/null 2>&1; then
+  # TEST_GUARD_ALLOW=crane on these two calls only: both are LOCAL (a layer tarball in, an image
+  # tarball out with -o; nothing is pushed), and the run-time guard refuses crane otherwise.
+  if TEST_GUARD_ALLOW=crane crane append --oci-empty-base -f "$TMP/gz/layer.tgz" -t localhost/fx:1 -o "$TMP/gz/fx.tar" >/dev/null 2>&1; then
     raw=$(grep -acw 'github.com/google/go-containerregistry.v0.21.9' "$TMP/gz/fx.tar" || true)
-    crane export - "$TMP/gz/fx.flat" < "$TMP/gz/fx.tar" 2>/dev/null
+    TEST_GUARD_ALLOW=crane crane export - "$TMP/gz/fx.flat" < "$TMP/gz/fx.tar" 2>/dev/null
     right=$(grep -acw 'github.com/google/go-containerregistry.v0.21.9' "$TMP/gz/fx.flat" || true)
     wrong=$(grep -acw 'github.com/google/go-containerregistry.v0.21.1' "$TMP/gz/fx.flat" || true)
     if [ "${raw:-0}" = 0 ]; then ok "gzip fixture reproduces the defect: raw tarball grep finds 0"

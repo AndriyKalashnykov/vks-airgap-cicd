@@ -13,6 +13,8 @@
 # BUNDLE_OUT_DIR clobber that is now guarded three ways (commented var, 11-bundle.sh's inside-check,
 # check-env-clobber). The exclude is kept as cheap portable insurance, not as the fix for a live bug.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 
 fail=0

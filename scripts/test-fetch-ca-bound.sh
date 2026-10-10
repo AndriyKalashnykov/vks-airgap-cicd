@@ -31,6 +31,9 @@
 # DOES NOT PROVE: anything about a real Harbor or ArgoCD; a host whose packets are dropped (no
 # such address is dialled here); or Ctrl-C with a `timeout` other than the one on this machine.
 set -uo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test sets REPO_ROOT itself, as a plain (unexported) variable naming this checkout
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$REPO_ROOT"
 FETCH="${REPO}/scripts/fetch-ca.sh"

@@ -24,6 +24,8 @@
 # DOES NOT PROVE: that any tool this repo drives (crane, podman, argocd, kubectl) accepts an IPv6
 # registry or server address, nor a zone id (`fe80::1%eth0`). Only the parsing and the TLS checks.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$REPO_ROOT"
 PASS=0; FAIL=0

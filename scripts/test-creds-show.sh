@@ -24,6 +24,10 @@
 #   * ingress present       -> it MUST print them (a gate that only ever checks the negative is half a gate)
 #   * fully installed       -> no "not set"/"needs"/"default" markers at all
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
+export TEST_GUARD_QUIET="kubectl curl"   # creds.sh probes a cluster and a Harbor (10.0.0.1) that are not there, in ~30 fixtures, on purpose
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 # The stamp cases parse a kubeconfig with kubectl (state_kubeconfig_server). Without it they report

@@ -25,6 +25,8 @@
 # guaranteed on Photon". If someone reintroduces realpath here, this file will still pass on a dev
 # box — so the guard is the COMMENT plus the grep at the bottom, not these cases.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 
 fail=0

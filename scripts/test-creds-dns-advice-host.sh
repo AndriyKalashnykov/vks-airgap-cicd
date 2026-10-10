@@ -20,6 +20,9 @@
 # read/arg and it vanishes — which is the RED-proof. Conversely `git.corp.example.com` must appear
 # ONLY once, in the Gitea URL cell, and never in the advice.
 set -euo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 T="$(mktemp -d)"

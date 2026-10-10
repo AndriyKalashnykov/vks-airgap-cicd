@@ -1,0 +1,2 @@
+This directory is the unit-test guard: every file here stands in for a real tool and refuses.
+The stand-ins skip any PATH directory that holds this marker. See ../refuse.sh.

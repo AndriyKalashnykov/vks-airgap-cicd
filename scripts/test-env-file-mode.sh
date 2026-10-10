@@ -15,6 +15,8 @@
 # hardening the writer alone leaves a window from Step 2 (the hand-edited VCENTER_PASSWORD) to the
 # first hardening writer at Step ~5 — permanently if the walk diverges. Case group 3 covers that.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -112,16 +114,53 @@ else bad "$sinks gate(s) that point ENV_FILE at .env.example also WRITE through 
 # Makefile regenerates them at PARSE time with a `>` redirect, and `umask` is create-only, so a
 # pre-existing loose mode survives the truncate unless the writer unlinks first. Measured before the
 # fix: a pre-seeded 0644 stayed 0644 with a live credential inside.
+#
+# ⚠️ THIS SECTION RUNS IN A SANDBOX, AND IT DID NOT (B751). It used to `cd "$REPO"` and drive the
+# REAL Makefile: five times per run it truncated, chmodded (644/664/666/400) and regenerated the
+# real `$REPO/secrets/.env.state.make` from a fixture holding a fixture HARBOR_PASSWORD, then
+# `rm -f`ed it -- on every fast-tier run, in the checkout a lab `make` may be running from. That
+# other `make` `-include`s the same path, so it could read an overlay generated from this fixture.
+# The include machinery is now LIFTED out of the shipped Makefile into the sandbox (the same lift
+# test-env-precedence.sh makes, asserted the same way, so a failed extraction cannot pass), and the
+# real file's identity is asserted UNCHANGED around the whole section.
 d="$(mktemp -d)"; printf 'HARBOR_PASSWORD=%s\n' "$SECRET" > "$d/.env.state"
+# The real overlay and its directory: inode, mtime (ns), mode, size, content. ABSENT is a state too
+# -- the old code left the file ABSENT at the end, so on a box where it started absent only the
+# DIRECTORY's mtime records that it was created and removed in between.
+_real_sig() {
+  local f="$REPO/secrets/.env.state.make" dd="$REPO/secrets"
+  if [ -e "$dd" ]; then stat -c 'dir %i %y %a' "$dd"; else echo 'dir ABSENT'; fi
+  if [ -e "$f" ]; then stat -c 'file %i %y %a %s' "$f"; cksum < "$f"; else echo 'file ABSENT'; fi
+}
+real_before="$(_real_sig)"
+# shellcheck disable=SC2016  # $(...) below is MAKEFILE syntax matched in / written to a Makefile
+{
+  sed -n '/^define regen_overlay_mk$/,/^endef$/p'                                        "$REPO/Makefile"
+  sed -n '/^_ENVMK_KIND := /,/^-include \$(if \$(wildcard \.env\.kind)/p'               "$REPO/Makefile"
+  sed -n '/^STATE_SRC := /,/^-include \$(if \$(wildcard \$(STATE_SRC))/p'                "$REPO/Makefile"
+  sed -n '/^_ENVMK_ENV := /,/^-include \$(if \$(wildcard \.env),/p'                      "$REPO/Makefile"
+  printf 'help: ; @:\n'
+} > "$d/Makefile"
+lifted="$(grep -c . "$d/Makefile")"
+if [ "$lifted" -ge 10 ] && [ "$lifted" -le 31 ] && grep -q '^endef$' "$d/Makefile" \
+   && [ "$(grep -c 'call regen_overlay_mk' "$d/Makefile")" -eq 3 ] \
+   && grep -q 'secrets/\.env\.state\.make' "$d/Makefile"; then
+  ok "lifted ${lifted} non-blank lines of the shipped overlay machinery into the sandbox"
+else
+  bad "LIFT FAILED (${lifted} lines)" "section 5 is not testing the product; fix the sed anchors (they are test-env-precedence.sh's)"
+fi
+gen="$d/secrets/.env.state.make"
 gen_bad=""
 for pre in none 644 664 666 400; do
+  mkdir -p "$d/secrets"
   if [ "$pre" = none ]; then
-    rm -f "$REPO/secrets/.env.state.make"
+    rm -f "$gen"
   else
-    : > "$REPO/secrets/.env.state.make"; chmod "$pre" "$REPO/secrets/.env.state.make"
+    : > "$gen"; chmod "$pre" "$gen"
   fi
-  ( cd "$REPO" || exit 1; VKS_STATE_FILE="$d/.env.state" make -s --no-print-directory help >/dev/null 2>&1 )
-  m="$(stat -c %a "$REPO/secrets/.env.state.make" 2>/dev/null || echo MISSING)"
+  # MAKEFLAGS= for the reason test-env-precedence.sh records: an outer `make -C` leaks `-w`.
+  ( cd "$d" || exit 1; VKS_STATE_FILE="$d/.env.state" MAKEFLAGS='' make -s --no-print-directory help >/dev/null 2>&1 )
+  m="$(stat -c %a "$gen" 2>/dev/null || echo MISSING)"
   [ "$m" = 600 ] || gen_bad="$gen_bad pre=$pre:$m"
 done
 if [ -z "$gen_bad" ]; then
@@ -129,12 +168,27 @@ if [ -z "$gen_bad" ]; then
 else
   bad "generated overlay mode:$gen_bad" "umask is create-only — mv the temp file in, do not redirect over the destination"
 fi
+# The overlay must carry the fixture's key, or the five cells above measured an empty file's mode.
+if grep -q '^HARBOR_PASSWORD ?= ' "$gen" 2>/dev/null; then
+  ok "the sandbox overlay was GENERATED from the fixture state file (it carries the rewritten key)"
+else
+  bad "the sandbox overlay does not carry HARBOR_PASSWORD" "the lifted machinery did not run against the fixture, so the mode cells prove nothing"
+fi
 # The writer is atomic (write a PID-suffixed temp, then rename), so nothing may survive it. A
 # leftover here means someone replaced the mv with a plain redirect, or the rename failed silently.
-leftover="$(find "$REPO/secrets" -maxdepth 1 -name '*.tmp' 2>/dev/null | wc -l)"
+leftover="$(find "$d/secrets" -maxdepth 1 -name '*.tmp' 2>/dev/null | wc -l)"
 if [ "$leftover" -eq 0 ]; then ok "the atomic writer leaves no *.tmp behind in secrets/"
 else bad "$leftover leftover *.tmp in secrets/" "the temp file is PID-suffixed; a survivor means the rename did not happen"; fi
-rm -rf "$d"; rm -f "$REPO/secrets/.env.state.make"
+rm -rf "$d"
+# THE FENCE, asserted. RED-proven by pointing `gen` back at "$REPO/secrets/.env.state.make" and
+# the `cd` back at "$REPO": the inode and the directory mtime both move.
+real_after="$(_real_sig)"
+if [ "$real_before" = "$real_after" ]; then
+  ok "the REAL secrets/.env.state.make and secrets/ are untouched (inode, mtime, mode, size, content)"
+else
+  bad "the REAL secrets/.env.state.make or secrets/ CHANGED while this test ran" \
+      "before: $(printf '%s' "$real_before" | tr '\n' ' ') | after: $(printf '%s' "$real_after" | tr '\n' ' ') -- this test must never write there (or a 'make' ran in this checkout meanwhile: re-run)"
+fi
 
 printf '\n== %s passed, %s failed ==\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

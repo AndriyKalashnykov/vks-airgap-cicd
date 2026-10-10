@@ -8,6 +8,10 @@
 # operator's real .env is never read. Values come from .env.example itself (not typed here), so a
 # Renovate bump cannot rot the test.
 set -uo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test copies scripts/ into a throwaway root; lib/os.sh derives REPO_ROOT from the copy
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "${SCRIPT_DIR}/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf -- "${T:?}"' EXIT

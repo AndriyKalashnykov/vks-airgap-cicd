@@ -12,6 +12,10 @@
 # after install-all, which builds no app image — B529), while 404 means the ingress does not know
 # this host, i.e. a rendering/attach fault.
 set -euo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test sets REPO_ROOT itself, as a plain (unexported) variable naming this checkout
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export TEST_GUARD_CURL_HOSTS="ingress.example.test 203.0.113.9"   # two DELIBERATELY dead destinations (a reserved name, RFC 5737 TEST-NET-3): the real curl must fail at them
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Extract by function name up to its closing brace at column 0 — deliberately NOT a line range, so a

@@ -16,6 +16,8 @@
 # read 2026-09-06T07:45:25Z on cicd-gc3. A rotation inside the same second as bootstrap would be
 # read as CURRENT — harmless, and named rather than hidden.
 set -euo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"

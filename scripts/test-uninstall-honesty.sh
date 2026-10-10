@@ -12,6 +12,8 @@
 # script, never a copy — and assert the THREE STATES PRODUCE THREE DIFFERENT STRINGS. A test that
 # only checked "it printed something" would pass on the bug.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Overridable so the RED-proof can point at a deliberately-broken copy.
 TARGET="${UNINSTALL_SCRIPT:-${SCRIPT_DIR}/98-uninstall-all.sh}"
