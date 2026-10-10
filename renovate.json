@@ -122,6 +122,17 @@
     },
     {
       "customType": "regex",
+      "description": "busybox in scripts/49-install-headlamp.sh \u2014 a SECOND copy of the tag in images/images.txt, passed through mirror_target_ref \"docker.io/library/busybox:<tag>\". No manager reached it: the scripts/ manager above matches only the ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/ form, so the bot bumped images.txt alone and check-image-alignment went RED (measured: PR #1358, busybox 1.37.0->1.38.0). depName busybox matches the images.txt annotation, so both copies ride the 'Docker images' group.",
+      "managerFilePatterns": [
+        "/^scripts/49-install-headlamp\\.sh$/"
+      ],
+      "matchStrings": [
+        "mirror_target_ref \"docker\\.io/library/(?<depName>busybox):(?<currentValue>[^\"$]+)\""
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
       "description": "mise binary version pinned on jdx/mise-action (CI resolves no 'latest' at run time).",
       "managerFilePatterns": [
         "/^\\.github/workflows/.+\\.ya?ml$/"
@@ -159,7 +170,9 @@
         "kubernetes-sigs/cloud-provider-kind",
         "harbor",
         "istio/pilot",
-        "istio/proxyv2"
+        "istio/proxyv2",
+        "gitea/gitea",
+        "traefik"
       ],
       "matchUpdateTypes": [
         "major"
@@ -227,19 +240,32 @@
       ]
     },
     {
-      "description": "Gateway API CRDs are COUPLED to Istio: the CRD version must be one the pinned Istio vendors/tests against. A bot bumping it ALONE re-introduces the supportedFeatures []string->[]object skew that crash-loops controllers, or lands CRDs Istio does not understand. Group them so they move together and CI judges them as a unit.",
-      "matchPackageNames": [
-        "kubernetes-sigs/gateway-api",
-        "istio/istio"
+      "description": "Istio images + Gateway API CRDs are version-locked (check-gwapi-istio-alignment). matchDepNames on the REAL dep names: this rule used to match packageNames kubernetes-sigs/gateway-api + istio/istio, and no dep is called istio/istio \u2014 the Istio pins are istio/pilot + istio/proxyv2 (docker datasource), so they stayed in 'Docker images' and the pair was never grouped (measured: PR #1358 bumped Istio 1.30.3->1.31.1 inside the Docker images PR and left GATEWAY_API_VERSION behind). Must stay AFTER 'Docker images' so it overrides that groupName. WHAT THIS BUYS, HONESTLY: Renovate cannot derive the CRD version Istio vendors, so the next Istio minor still goes RED on the gate and needs GATEWAY_API_VERSION + the cap below hand-edited in that PR \u2014 but it now fails ALONE instead of blocking every unrelated image bump.",
+      "matchDepNames": [
+        "istio/pilot",
+        "istio/proxyv2",
+        "kubernetes-sigs/gateway-api"
       ],
       "groupName": "istio + gateway-api (version-locked)"
     },
     {
-      "description": "HOLD gateway-api at <v1.6.0. It is NOT stale: v1.5.1 is the NEWEST version any Istio supports \u2014 Istio 1.30.2 (the latest release) vendors sigs.k8s.io/gateway-api v1.5.1, and CRDs newer than Istio's own Go client re-introduce the supportedFeatures []string->[]object skew that crash-loops controllers. Renovate solo-merged v1.6.0 once already. REMOVE THIS CAP the moment an Istio release vendors v1.6+; verify with: curl -sSL https://raw.githubusercontent.com/istio/istio/release-<minor>/go.mod | grep gateway-api",
-      "matchPackageNames": [
+      "description": "An Istio MINOR never automerges. Istio is 1.x forever, so the major-approval rule above cannot fire for it, and only a cluster e2e exercises the bump: 1.31 moved the helm charts to a different host (blob.istio.io), which no offline gate can see \u2014 `helm pull` died in `make mirror-pull` (measured 2026-10-10). The PR still opens; a human runs `make e2e-kind E2E_FRESH=1` and merges. Patches keep flowing.",
+      "matchDepNames": [
+        "istio/pilot",
+        "istio/proxyv2"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor"
+      ],
+      "automerge": false
+    },
+    {
+      "description": "HOLD gateway-api at EXACTLY what the pinned Istio vendors: Istio 1.31 -> v1.6.0. check-gwapi-istio-alignment demands equality with the version in Istio's go.mod, so a later v1.6.x patch is RED too (v1.6.1-v1.6.3 exist), and CRDs newer than Istio's Go client re-introduce the supportedFeatures []string->[]object skew that crash-loops controllers. Raise this together with ISTIO_VERSION, in the same PR; verify with: curl -sSL https://raw.githubusercontent.com/istio/istio/release-<minor>/go.mod | grep gateway-api",
+      "matchDepNames": [
         "kubernetes-sigs/gateway-api"
       ],
-      "allowedVersions": "<v1.6.0"
+      "allowedVersions": "<v1.6.1"
     },
     {
       "description": "The mise BINARY pin on jdx/mise-action (.github/workflows/*.yml `version:`, via the customManager above) gets the same 3-day buffer every other toolchain pin here has. Until 2026-09-30 NOTHING bound this dep: it arrives via custom.regex with depName jdx/mise, so `matchManagers:[mise]` (the .mise.toml TOOLS manager) misses it, `matchManagers:[github-actions]` misses it, 2026.9.2->2026.9.x is a semver PATCH so the major rule misses it, and config:best-practices' minimumReleaseAge preset is npm-only. All 11 rules were executed against {depName:jdx/mise, datasource:github-releases, manager:custom.regex, updateType:patch}: zero bound. BE HONEST ABOUT WHAT THIS BUYS: it does NOT prevent the 2026-09-08 draft-window outage (see ci.yml) -- Renovate discards drafts and keys on published_at, and across all 19 2026.9.x releases the last asset preceded published_at every time, so the bot cannot propose an unfetchable release. This is the generic let-someone-else-hit-the-bad-release property, nothing more. matchDepNames ALONE is deliberate: adding matchManagers forces a custom.regex-vs-regex token choice whose failure mode is a silent no-match.",
