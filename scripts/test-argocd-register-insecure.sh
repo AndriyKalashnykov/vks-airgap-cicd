@@ -25,6 +25,10 @@
 # This replays 71-argocd-register-guest.sh's EXACT ordering (snapshot -> source -> load_env ->
 # restore) in a throwaway REPO_ROOT. The operator's real `.env` is never read and never written.
 set -uo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test copies scripts/ into a throwaway root; lib/os.sh derives REPO_ROOT from the copy
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 fail=0

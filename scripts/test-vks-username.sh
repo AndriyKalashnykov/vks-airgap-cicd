@@ -16,6 +16,8 @@
 #
 # Offline, pure-string, no network, no cluster.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$REPO" || exit 1
 # shellcheck source=scripts/lib/os.sh
 . scripts/lib/os.sh

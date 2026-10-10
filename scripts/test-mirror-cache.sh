@@ -17,6 +17,8 @@
 #     here (cache_should_skip) so the resume semantics are locked, but the code a RED
 #     actually breaks is the lib/mirror.sh primitives it calls.
 set -euo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"

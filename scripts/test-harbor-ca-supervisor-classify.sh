@@ -15,6 +15,8 @@
 # siblings — 27 passes that flag, and a stub that does not know it mis-parses and looks like a
 # product bug rather than a harness bug.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP="$(mktemp -d)"; mkdir -p "$TMP/bin"; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0

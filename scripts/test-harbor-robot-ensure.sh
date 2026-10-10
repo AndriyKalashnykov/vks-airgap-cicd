@@ -19,6 +19,9 @@
 #   The verdict strings (`unchecked:no CA yet (Step 8 fetches it) ...`) are likewise literals copied
 #   verbatim from lib/harbor.sh, so the case arms are tested against the real text.
 set -euo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/lib" "$T/secrets"

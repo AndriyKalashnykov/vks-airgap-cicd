@@ -13,6 +13,10 @@
 # that echoes a unique MARKER, so running the installed binary proves WHICH source archive / arch
 # resolve_archive selected.
 set -euo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test sets REPO_ROOT itself, as a plain (unexported) variable naming this checkout
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export TEST_GUARD_QUIET="vcf"   # the installer ends with an un-gated `vcf plugin list`; under DRY_RUN nothing was installed, and it only warns
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALLER="$SCRIPT_DIR/01-install-vcf-clis.sh"
@@ -38,6 +42,7 @@ esac
 ev() {
   ( set -a
     SKIP_DOTENV=1
+    REPO_ROOT="$TEST_SANDBOX_ROOT"     # the SAME root the installer below is given
     # shellcheck disable=SC1090,SC1091
     . "$REPO_ROOT/scripts/lib/os.sh" >/dev/null 2>&1
     load_env >/dev/null 2>&1
@@ -65,7 +70,10 @@ run_installer() {
   # comparing the REAL argocd/vcf help output against fixture sentinels ("want [ARGOCD-BARE-AMD64],
   # got [argocd controls a Argo CD server...]") -- i.e. the test installed the real 207 MB CLI into
   # its temp dir. It passed on any box that had NOT followed Step 1, which is what made it latent.
-  SKIP_DOTENV=1 VCF_CLI_SRC_DIR="$2" BIN_DIR="$3" DRY_RUN=1 bash "$INSTALLER" "$1" >/dev/null 2>"$4"
+  # REPO_ROOT is the SANDBOX root for the installer: SKIP_DOTENV=1 skips .env only, and with this
+  # checkout as its root load_env still sourced the real .env.state and .env.kind (MEASURED with a
+  # canary in each: 14 reads per run of this file).
+  REPO_ROOT="$TEST_SANDBOX_ROOT" SKIP_DOTENV=1 VCF_CLI_SRC_DIR="$2" BIN_DIR="$3" DRY_RUN=1 bash "$INSTALLER" "$1" >/dev/null 2>"$4"
 }
 
 # Per-case scratch (reused; each case cleans up at the end). Registered for the exit trap too.

@@ -25,6 +25,9 @@
                             # are exactly right, and this repo has a rule about an unquoted
                             # `robot$<name>` making the state overlay unsourceable.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pass=0; fail=0
 ok()  { printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); }

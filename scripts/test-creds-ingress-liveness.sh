@@ -15,6 +15,9 @@
 # `silent` (creds.sh:843), and suppressing the hint kills the ONLY checkable Expect literal in
 # docs/scenario-1.md:1099 and docs/scenario-2.md:929, reddening the six-row walk matrix hours later.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export TEST_GUARD_QUIET="kubectl"   # creds.sh probes a cluster that is not there; only the ingress rows are under test
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 pass=0; fail=0

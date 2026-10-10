@@ -14,9 +14,23 @@
 # The gate is driven END-TO-END here (real script, fixture SRC_DIR) rather than by re-implementing
 # its comparison, because re-implementing it is how a test agrees with a bug.
 set -euo pipefail
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fail=0
+
+# ⚠️ WHAT USED TO STAND BETWEEN THIS TEST AND vCenter WAS AN EMPTY FILE (B751). The script under
+# test is run for real, and 5 lines after the pair check it calls vc_login -- a POST of
+# VCENTER_USERNAME/VCENTER_PASSWORD to VCENTER_HOST. MEASURED with a line trace: an ACCEPTED pair
+# ran on to `die "hostname did not render"`, and only because the fixture template is zero bytes.
+# REPO_ROOT was the real repo and VKS_STATE_FILE was unset, so the .env.state overlay (the
+# discovered vCenter credentials) WAS sourced. A fixture with one more line would have logged in.
+# Now: the helper above gives a sandbox REPO_ROOT, where no state overlay exists; curl is a stub that
+# fails and COUNTS; and VCENTER_HOST names a host that cannot exist.
+mkdir -p "$TMP/bin"; CURL_CALLS="$TMP/curl.calls"; : > "$CURL_CALLS"
+# shellcheck disable=SC2016  # $* and $CURL_CALLS belong to the stub, at ITS run time
+printf '#!/bin/sh\necho "curl $*" >> "$CURL_CALLS"\nexit 7\n' > "$TMP/bin/curl"; chmod +x "$TMP/bin/curl"
+export CURL_CALLS
 ok()  { printf '  ok    %s\n' "$1"; }
 bad() { printf '  FAIL  %s\n' "$1"; fail=1; }
 
@@ -28,7 +42,8 @@ run_pair() {   # run_pair <def-version> <tpl-version>
   : > "${d}/supervisor-service-harbor-data-values-v${2}.yml"
   env HARBOR_URL=harbor.example.test HARBOR_STORAGE_CLASS=wcp-vmfs \
       VCF_CLI_SRC_DIR="$d" SKIP_DOTENV=1 KUBECONFIG="$TMP/none.kc" \
-      bash "${REPO_ROOT}/scripts/04-install-harbor-service.sh" >"$TMP/out" 2>&1 || true
+      PATH="$TMP/bin:$PATH" VCENTER_HOST=vc.invalid \
+      bash "${TEST_REAL_REPO}/scripts/04-install-harbor-service.sh" >"$TMP/out" 2>&1 || true
   grep -q 'version MISMATCH' "$TMP/out" && printf 'MISMATCH' || printf 'accepted'
 }
 
@@ -53,5 +68,13 @@ if [ "$r" = accepted ]; then ok "identical stamped pair is accepted"; else bad "
 
 r="$(run_pair '2.14.3' '2.14.3')"
 if [ "$r" = accepted ]; then ok "identical bare pair is accepted"; else bad "identical bare pair refused ($r)"; fi
+
+# Six runs of the real installer, three of them past the pair check -- and not one network call.
+# If this goes red the script now gets FURTHER on these fixtures than it did (it reached the curl
+# stub), which is exactly when the fence above stops being a precaution: read what it called.
+if [ ! -s "$CURL_CALLS" ]; then ok "the installer made NO curl call in any run (it never reached vc_login)"
+else bad "the installer reached curl $(wc -l < "$CURL_CALLS" | tr -d ' ') time(s): $(head -1 "$CURL_CALLS")"; fi
+case "${REPO_ROOT}" in "${TEST_SANDBOX}"/*) ok "the installer ran with a sandbox REPO_ROOT, not this checkout" ;;
+  *) bad "REPO_ROOT is not the sandbox root (${REPO_ROOT})" ;; esac
 
 if [ "$fail" -eq 0 ]; then echo "test-harbor-pair-version: OK"; else echo "test-harbor-pair-version: FAILED"; exit 1; fi

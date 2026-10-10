@@ -22,6 +22,8 @@
 # Offline by construction: `kubectl config view` PARSES the kubeconfig file, it never dials the API
 # server — so both guards are fully testable with two synthetic files and no cluster.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh

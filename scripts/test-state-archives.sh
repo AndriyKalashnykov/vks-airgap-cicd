@@ -3,6 +3,8 @@
 # and `make state-restore` refuses anything that is not a plain archive and is reversible (B723).
 # Everything runs against a throwaway sink via VKS_STATE_FILE; the operator's own state is untouched.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
@@ -83,13 +85,32 @@ echo "== the MAKE TARGETS are wired (a script that passes proves nothing about i
 # MEASURED 2026-09-26: `state-restore: export ARCHIVE` (a bare target-specific export) made GNU make
 # read `export` as a PREREQUISITE -- "No rule to make target 'export'" -- and every test above still
 # passed, because they call the script. The target must reach the script and hand it ARCHIVE.
+#
+# ⚠️ `make -C` THE SANDBOX ROOT, NOT THIS CHECKOUT (B751). The Makefile regenerates
+# secrets/.env.state.make at PARSE time from whatever VKS_STATE_FILE names -- so `make -C <this
+# checkout> ... VKS_STATE_FILE=<the fixture>` REWROTE the real overlay from the fixture and LEFT it
+# there. MEASURED: after this test the checkout's own secrets/.env.state.make read
+# `HARBOR_PASSWORD ?= HUNTER2SECRET` and `INGRESS_LB_IP ?= 10.9.9.9`, until the next make. The
+# sandbox root is the same Makefile and the same scripts (symlinks) with a secrets/ of its own.
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
-mo="$(make -s -C "$REPO" state-restore ARCHIVE=.env.state.stale-19990101-000000 VKS_STATE_FILE="$VKS_STATE_FILE" 2>&1)"
+_real_sig() {
+  local f="$REPO/secrets/.env.state.make" dd="$REPO/secrets"
+  if [ -e "$dd" ]; then stat -c 'dir %i %y %a' "$dd"; else echo 'dir ABSENT'; fi
+  if [ -e "$f" ]; then stat -c 'file %i %y %a %s' "$f"; cksum < "$f"; else echo 'file ABSENT'; fi
+}
+real_before="$(_real_sig)"
+mo="$(make -s -C "$TEST_SANDBOX_ROOT" state-restore ARCHIVE=.env.state.stale-19990101-000000 VKS_STATE_FILE="$VKS_STATE_FILE" 2>&1)"
 if printf '%s' "$mo" | grep -q 'is not an archive'; then ok "make state-restore reaches the script with ARCHIVE"
 else bad "make state-restore is not wired: $mo"; fi
-mo="$(make -s -C "$REPO" state-archives VKS_STATE_FILE="$VKS_STATE_FILE" 2>&1)"
+mo="$(make -s -C "$TEST_SANDBOX_ROOT" state-archives VKS_STATE_FILE="$VKS_STATE_FILE" 2>&1)"
 if printf '%s' "$mo" | grep -q 'archive(s) beside'; then ok "make state-archives reaches the script"
 else bad "make state-archives is not wired: $mo"; fi
+# The two `make` runs above DID regenerate an overlay from the fixture -- in the sandbox -- or the
+# assertion after it would be green for a make that never parsed.
+if grep -q '^HARBOR_PASSWORD ?= ' "$TEST_SANDBOX_ROOT/secrets/.env.state.make" 2>/dev/null; then ok "the overlay was regenerated from the fixture INSIDE the sandbox root"
+else bad "no overlay was generated in the sandbox root -- the make runs above did not parse the include machinery"; fi
+if [ "$real_before" = "$(_real_sig)" ]; then ok "this checkout's own secrets/.env.state.make and secrets/ are untouched"
+else bad "this checkout's secrets/.env.state.make or secrets/ CHANGED while the make targets ran (or a 'make' ran here meanwhile: re-run)"; fi
 
 echo "test-state-archives: ${checks} checks, rc=$rc"
 exit "$rc"

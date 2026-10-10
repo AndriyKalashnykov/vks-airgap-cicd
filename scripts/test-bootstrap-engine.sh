@@ -29,6 +29,7 @@
 # The engine's registry-TLS behaviour is a DIFFERENT claim, measured host-native by
 # scripts/16-engine-trust-check.sh / 17-engine-rootless-docker-check.sh against the real Harbor.
 set -euo pipefail
+# test-sandbox: exempt — manual tier: builds bare Photon/Ubuntu images with a REAL container engine, by hand; the guard would refuse the engine it exists to drive
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh

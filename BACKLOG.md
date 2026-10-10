@@ -16,6 +16,161 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B751 — a `ci-tier: fast` unit test could reach the lab it ran beside: ONE fence now, and a run-time guard 🔴 open (four items left)
+
+**The class.** A test that runs a real script from `scripts/` inherits everything that script
+reads: `.env`, the `.env.state` overlay, the Supervisor kubeconfig resolver (which defaults to a
+sibling lab's real kubeconfig under `$HOME`), `$KUBECONFIG`, and every tool on `PATH`. Each test
+assembled its own subset of the pins that close those, there was no shared helper, and nothing at
+the runner stopped a real `kubectl`. An audit on 2026-10-09 (the day a test run beside a live lab
+powered a VM off) read the suite for this; the numbers below are from running it, not from reading.
+
+**How it was measured.** Every fast- and slow-tier test was run once from a private copy of
+`cfd3810` with a refusing, logging stand-in first on `PATH` for kubectl, helm, argocd, vcf, crane,
+kind, docker, podman, ssh, sudo and (non-loopback) curl, an empty `HOME`, and a `connect()`
+interposer that refuses every non-loopback address. So "reached the guard" below means "would have
+run the real tool on a developer's box". Not measured: the same suite with NO pins at all (the copy
+was run with `SKIP_DOTENV=1`, `KUBECONFIG=/dev/null` and the lab directory pinned throughout).
+
+**What it found (MEASURED unless graded otherwise).**
+
+1. `test-env-file-mode.sh` section 5 ran `make help` in the REAL checkout five times per run and
+   truncated, chmodded (644/664/666/400), regenerated and finally `rm -f`ed the real
+   `secrets/.env.state.make`, from a fixture holding a fixture `HARBOR_PASSWORD`. A mutation that
+   restores this overwrote a canary overlay with `HARBOR_PASSWORD ?= <the fixture value>`.
+   `test-state-archives.sh` did the same thing a second way, which the audit had not seen:
+   `make -C <this checkout> state-restore VKS_STATE_FILE=<fixture>` makes the Makefile regenerate
+   the overlay at parse time, and the test LEFT the real file holding the fixture's four keys.
+2. 161 un-stubbed calls reached the guard in one pass of the two tiers, from 14 tests. 138 of them
+   are three `creds.sh` probes (`kubectl version`, `kubectl -n argocd get svc argocd-server`, and
+   `kubectl -n headlamp create token headlamp-viewer --duration=24h`, which MINTS a credential on
+   whatever cluster answers) from `test-creds-show.sh`, `test-harbor-ca-refetch-advice.sh` and
+   `test-creds-ingress-liveness.sh`. The rest: `vcf plugin list`, `argocd app get --refresh`, one
+   `kubectl version` with no kubeconfig argument, `crane append`, and curl to `10.0.0.1`,
+   `192.0.2.1`, `203.0.113.9`, two made-up names and `raw.githubusercontent.com`.
+   `test-creds-show.sh` also opened sockets to `10.0.0.2`, `10.0.0.3` and `10.0.0.9` without curl.
+3. `test-harbor-pair-version.sh` ran the real `04-install-harbor-service.sh` with the real
+   `REPO_ROOT` and no `VKS_STATE_FILE`. An accepted pair ran on to `die "hostname did not render"`,
+   five lines before `vc_login`, and only because the fixture template is zero bytes. With a
+   template that renders, and credentials present, it POSTs to `https://$VCENTER_HOST/api/session`.
+4. `test-istio-package-version-probe.sh` ran the real `43-install-istio-package.sh` to line ~231 of
+   289, past the probe it tests, stopping in `istio_refuse_foreign_owner` only because its kubectl
+   stub answers an unknown query with nothing. The next lines are `kubectl apply`, the vcf CLI and
+   three `state_set`s, which would have written the checkout's own `.env.state`.
+5. `SKIP_DOTENV=1` skips `.env` only: `.env.state` and the legacy `.env.kind` are still sourced
+   (`test-test-sandbox.sh` pins this as a control).
+6. A killed test leaves its children running. On `TERM` or `HUP` bash runs the test's `EXIT` trap,
+   the trap deletes the stub directory, and a child still alive resolves its next FRESH `kubectl`
+   lookup from what is left on `PATH`. Killed mid-run, `test-creds-dns-advice-host.sh` and
+   `test-creds-ingress-liveness.sh` each sent `kubectl` calls to the guard AFTER the kill, and
+   three more left a listener or a subshell behind. (A bare `kubectl` in the SAME bash does not
+   fall through: bash keeps the hashed path and fails. A new process, `timeout`, `env` do.)
+7. The resolver has 14 non-test callers by grep (9 numbered scripts, 5 others), not the 16 the audit
+   counted; 4 tests pinned the lab directory.
+8. With a canary `.env.state`, `.env.kind` and `secrets/supervisor.kubeconfig` planted in the
+   checkout itself and `load_env` and the resolver instrumented: **27 tests** sourced the checkout's
+   own `.env.state` and/or `.env.kind`, and `test-creds-ingress-liveness.sh` resolved the checkout's
+   own Supervisor kubeconfig 37 times in one run. (`.env` itself could not be measured: every run
+   here had `SKIP_DOTENV=1`.)
+
+**What is fixed.**
+
+- **One helper**, `scripts/lib/test-sandbox.sh` (a pointer; the code is
+  `scripts/test-guard/sandbox.sh`, because `check-lib-sourcing.sh` reads every function under
+  `scripts/lib/` as a library helper and the helper wraps `trap`). It exports a sandbox `REPO_ROOT`
+  (a copy of `.env.example`, an empty `secrets/`, a symlink to every other top-level entry),
+  `SKIP_DOTENV=1`, `VKS_STATE_FILE` UNSET (so the overlay is the sandbox root's, which has none),
+  `VKS_LAB_STATE_DIR=/nonexistent-lab`, `VKS_SUPERVISOR_KUBECONFIG=/nonexistent`, `KUBECONFIG`
+  UNSET, a throwaway `HOME` and `TMPDIR`, and the guard first on `PATH`.
+  Two pins were built as fixed values first and MEASURED wrong, by instrumenting `load_env` and
+  `state_file`: `VKS_STATE_FILE=<an absent path>` diverted the overlay of 19 tests that own their
+  root (one went red; 18 stayed green on a different file), and `KUBECONFIG=/dev/null` is read by
+  `load_env` as an explicit selection (16 tests took that arm and stayed green; 3 went red).
+  Its clean-up composes with a test's own `trap ... EXIT` and kills the test's descendants BEFORE
+  that handler runs (the handler deletes the stub dir a live child still has on `PATH`).
+  `test-test-sandbox.sh` plants a canary in all four resolver slots and in `.env`, `.env.state` and
+  `.env.kind`, shows the unfenced probe reach every one, and requires the fenced probe to reach
+  none.
+- **A committed guard**, `scripts/test-guard/bin/`, put first on `PATH` by `run-test-set.sh` for
+  every test (it refuses to run a set if the guard is missing). A test's own stub dir still wins.
+  Let through, as a closed list: read-only `kubectl config` subcommands, `kubectl kustomize <local
+  dir>`, `kubectl`/`argocd version --client`, the `sudo -n true` probe `lib/os.sh` makes at source
+  time, and curl to loopback (by destination: `--resolve`, `--connect-to`, `-x` and `-K` are read).
+  `test-test-guard.sh` is its table.
+- **A gate**, `test-sandbox-coverage.sh`: every test whose code NAMES a numbered script, `creds.sh`
+  or a resolver caller (derived by grep), or starts a background job, sources the helper before
+  that line or carries `# test-sandbox: exempt — <reason>`. Planted controls in both directions,
+  floors on what it scanned. 108 tests are in scope: 106 fenced, 2 exempt (both manual tier).
+- Items 1 (both tests), 3 and 4 are fenced and each carries an assertion that goes red if the
+  fence is removed. `test-state-archives.sh` now runs its two `make` targets with `-C` the sandbox
+  root: the same Makefile and scripts through symlinks, with a `secrets/` of its own.
+- Item 8, re-measured the same way: 27 tests down to **9**, and the Supervisor kubeconfig is
+  resolved from the checkout by none.
+
+**What is NOT fixed.**
+
+1. **Nine tests still read the checkout's own `.env.state` or `.env.kind`** (item 8, after).
+   Eight are OUTSIDE the gate's scope, because the script they run calls `load_env` and is neither
+   numbered nor a resolver caller: `test-bundle-orphans.sh`, `test-env-timing-overrides.sh` (it
+   calls `load_env` itself), `test-show-dns-records-failure.sh`, `test-sigterm-gate.sh`,
+   `test-unwedge-transport-refusal.sh`, `test-vks-package-adoption.sh`,
+   `test-vks-package-error-discrimination.sh`, `test-vks-package-guard.sh`. The ninth,
+   `test-state-overlay.sh`, exports this checkout as `REPO_ROOT` on purpose and reads `.env.kind`
+   once. Widening the rule to "names any script that calls `load_env`, or calls it itself" is 99
+   scripts instead of 73 and pulls in 21 more tests (one manual); none of them was converted here.
+2. **`TEST_SANDBOX_REPO_ROOT=keep` re-opens four things.** Sixteen tests keep their own `REPO_ROOT`
+   (they copy `scripts/` into a root of their own, or assign `REPO_ROOT` as a plain variable). In
+   that mode a child that sources the REAL `lib/os.sh` reaches resolver slot 2
+   (`secrets/supervisor.kubeconfig`), the `.env.state` overlay, `.env.kind` and the default
+   `secrets/vks.kubeconfig` again. The canary run found none of the sixteen doing so; the gate
+   prints the list on every run so it cannot grow unseen.
+3. **Nothing fences a dial that is not curl.** `bash /dev/tcp`, `openssl s_client`, `nc` and
+   python reach whatever they are pointed at; `test-creds-show.sh` still opens sockets to three
+   RFC 1918 addresses that way. A proxy taken from the environment is not inspected either.
+
+4. **Six tests still write inside the checkout**, measured by listing what each test changed under
+   its own root. Five run `make` there (`test-deps-mise.sh`, `test-e2e-fresh.sh`,
+   `test-harbor-ca-refetch-advice.sh`, `test-make-version-guard.sh`, `test-shell-rc-file.sh`), so
+   the Makefile's parse-time `mkdir -p secrets` and overlay regeneration run against the real
+   `.env` and `.env.state` (the operator's own values, not a fixture: what any `make` does). And
+   `test-workload-images.sh` creates and removes `scripts/.typo-probe-<pid>.sh`.
+
+5. **Found by the review of this change, not fixed** (each measured in a private copy unless
+   it says READ):
+   - no guard hit turns a test red: the runner does not set `TEST_GUARD_LOG`, so a refused
+     `kubectl` reads as "no cluster". Done when: the runner keeps a per-set log and fails on a
+     line no test declared;
+   - the coverage gate checks where the helper line is, not that it runs: a helper sourced
+     inside `if false`, a never-called function or after `exit 0` passes, and so does a script
+     named through `make` or a glob. Done when: the helper line must be unindented and before
+     the first command;
+   - a trap a test sets BEFORE it sources the helper is dropped without a message (no test
+     does this today), and `trap ... Exit` in mixed case replaces the helper's trap;
+   - the curl stand-in lets nine unusual shapes through: a URL after `--`, `--unix-socket`
+     followed by `--next`, a loopback proxy with `--noproxy`, a bracketed IPv6 `--connect-to`,
+     short keys and a nested file in `-K`, a non-http scheme with `--connect-to`, a proxy from
+     the environment, and `-L` following a loopback redirect elsewhere;
+   - the kubectl stand-in reads a value-taking global flag it does not list (`--username`,
+     `--password`) as a boolean, so the value becomes the verb; and an allowed
+     `config view --raw` runs the real kubectl with the caller's `HOME` (READ for real kubectl);
+   - the sandbox root links the checkout's gitignored top-level state (`.registry.lock`, `out`,
+     `.jumpbox`), so a write through `$REPO_ROOT/out` lands in the checkout;
+   - `tkn` has no stand-in, and `78-prune-runs.sh` runs `tkn pipelinerun delete`;
+   - an orphaned grandchild, or a test that leaves `IFS` changed, is not ended at exit;
+   - the count-fallback allowlist is keyed by line number and moves with every edit above it.
+
+**Also not done, by decision:** the runner does not put each test in its own process group, so a
+test that does NOT source the helper and is killed still leaves its children running. What changed
+for those is what the child finds: the stand-in, not the real tool. And 28 fenced tests lift a pin
+for a root they own (`SKIP_DOTENV=0` for a `.env` they write, or `keep` above); the gate prints them.
+
+**Done when:** a canary `.env.state` and `.env.kind` in the checkout are read by NO test (item 1:
+widen the gate's rule, convert the 21, re-run the canary); no `keep` user is left that runs a real
+script without passing `REPO_ROOT="$TEST_SANDBOX_ROOT"` (item 2); and item 3 is either closed by a
+network namespace for the test set or recorded as accepted, with the three addresses replaced by
+RFC 5737 ones. Item 4 is done when no test changes a path under the checkout (the six use the
+sandbox root, as `test-state-archives.sh` now does).
+
 ## 🔴 B750 — what the Harbor-CA / time-limit / address work ([[B749]]) left open 🔴 open
 
 [[B749]] is closed: everything it lists is in the code and Step 8 was walked on the lab. This row
@@ -82,9 +237,9 @@ under a closed heading.
   against the shape of a host and an optional port, not only for an `@`.
 - *`scripts/walkbox.sh` reads `HARBOR_URL` without `load_env`*, so neither the strip nor the
   refusal runs there. Done when: it takes the address through `load_env`, with a case.
-- *Seventeen offline tests fail inside a strict fence* (no `.env`, no kubeconfig, guarded
-  `kubectl`/`curl`/`ssh`), on `main` as well: they lean on the workstation. Done when: each
-  states its own inputs, and the fenced run is part of the static check.
+- *Seventeen offline tests failed inside a strict fence* (no `.env`, no kubeconfig, guarded
+  `kubectl`/`curl`/`ssh`): they leaned on the workstation. The shared fence and what it still
+  leaves open are [[B751]].
 - *`_LOAD_ENV_ON_REFUSED_ADDRESS=report` inherited from a parent process* makes every child's
   `load_env` report and go on. Only `creds.sh` sets it, and for its own process; nothing clears
   it for the scripts `creds.sh` starts. Done when: `load_env` unsets it after reading it.

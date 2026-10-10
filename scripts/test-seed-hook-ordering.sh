@@ -17,6 +17,8 @@
 # This offline test guards the ORDERING only. It cannot see the live behaviour; the live proof must
 # be a WARM run, because a cold cluster cannot reproduce the bug at all.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 S="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/50-seed-gitea-repos.sh"
 pass=0; fail=0
 ck() { if [ "$2" = "$3" ]; then printf '  ok    %s\n' "$1"; pass=$((pass+1));

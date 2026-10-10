@@ -111,6 +111,9 @@
 #
 # shellcheck shell=bash
 set -uo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test sets REPO_ROOT itself, as a plain (unexported) variable naming this checkout
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # ABSOLUTE self path, captured BEFORE the cd. The header-reason assertion below greps this file;

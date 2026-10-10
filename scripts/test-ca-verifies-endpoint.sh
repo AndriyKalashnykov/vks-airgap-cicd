@@ -16,6 +16,8 @@
 # 3->4), making the fix strictly WORSE than the bug. A plaintext-only test shows green on that.
 # Cases 1-3 are what catch it; do not delete them as "unrelated to the change".
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/tls.sh
 . "${SCRIPT_DIR}/lib/tls.sh"

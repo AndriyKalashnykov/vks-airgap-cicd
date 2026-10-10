@@ -5,6 +5,8 @@
 # with a redirect naming a file that contains an `n` BEFORE </dev/null read as missing it (false red).
 # Runs the real gate against copies of the repo with 30-vks-login.sh's create line mutated.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 fail=0; n=0

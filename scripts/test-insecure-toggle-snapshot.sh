@@ -31,6 +31,9 @@
 # silent. The `[ -n "${!_sel:-}" ]` guard is what makes the pair possible, and only the pair
 # discriminates a working snapshot from a stuck one.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 
 fail=0

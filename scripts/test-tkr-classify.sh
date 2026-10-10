@@ -13,6 +13,8 @@
 # ASSERT ELAPSED, NOT ONLY rc. The old path also exits non-zero at its timeout, so rc alone cannot
 # tell "refused up front" from "burned the budget" — which is the entire point.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP="$(mktemp -d)"; mkdir -p "$TMP/bin"; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0

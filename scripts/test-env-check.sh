@@ -19,6 +19,9 @@
 # default). The test's own env is stripped of any stray HARBOR_URL/KUBECONFIG/HARBOR_CA_FILE — either
 # would be snapshotted and pin the value regardless of the fabricated .env.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENVSH="$REPO/scripts/02-env.sh"

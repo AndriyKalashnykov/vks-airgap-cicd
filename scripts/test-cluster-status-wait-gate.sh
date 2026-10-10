@@ -15,6 +15,8 @@
 # tell "refused up front" from "burned the whole budget" — which is the entire point of B92. The
 # discriminator is TIME: refused in under a second, or still running when the budget expires.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP="$(mktemp -d)"; mkdir -p "$TMP/bin" "$TMP/secrets" "$TMP/repo/secrets"
 # The throwaway repo root needs whatever 26-vks-cluster-status.sh reads FROM the root -- today just

@@ -4,6 +4,8 @@
 # EVERY case here has an incident behind it -- two adversary rounds on 2026-09-06 REFUTED the first
 # version of this fix, and each finding is pinned below so the naive form cannot come back.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(dirname "$0")/.." || exit 1
 # shellcheck source=scripts/lib/headlamp.sh
 . scripts/lib/headlamp.sh

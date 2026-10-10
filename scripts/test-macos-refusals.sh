@@ -6,6 +6,8 @@
 #   make engine-trust-check-> podman remote has no pull/push --cert-dir (measured, podman 6.1.2)
 #   make trust-harbor      -> would install a CA the engine VM never reads
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf -- "${T:?}"' EXIT
 # shellcheck disable=SC2016  # $1 belongs to the generated script

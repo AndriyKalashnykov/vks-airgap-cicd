@@ -12,6 +12,9 @@
 # The discriminator is the REAL script, not a reconstruction of its condition: the fixture's git URL
 # is unreachable, so SKIP => rc 0 with the skip line, REBUILD => a clone attempt that fails loudly.
 set -uo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test copies scripts/ into a throwaway root; lib/os.sh derives REPO_ROOT from the copy
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SRC_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"

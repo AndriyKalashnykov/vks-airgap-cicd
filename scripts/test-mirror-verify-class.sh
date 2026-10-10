@@ -13,6 +13,8 @@
 # corruption message templates, not invented strings. A classifier tested only on strings its
 # author wrote is testing the author's imagination.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 
 fail=0

@@ -6,6 +6,9 @@
 # in both push scripts the platform assertion must come BEFORE `crane push`, or it guards nothing.
 # shellcheck disable=SC2016  # single quotes are the point: bash -c bodies, a stub script, grep patterns
 set -uo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test sets REPO_ROOT itself, as a plain (unexported) variable naming this checkout
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf -- "${T:?}"' EXIT

@@ -13,6 +13,9 @@
 # HERMETIC: a TEMP repo root with a copied .env.example + a fabricated .env (like test-env-check.sh); a
 # real self-signed HTTPS endpoint via `openssl s_server`; a mock `kubectl` on PATH for the DISCOVER path.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENVSH="$REPO/scripts/02-env.sh"
 fail=0

@@ -12,6 +12,8 @@
 #
 # `kubectl` here is a STUB. Everything below is offline.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(dirname "$0")/.." || exit 1
 # shellcheck source=scripts/lib/os.sh
 . scripts/lib/os.sh 2>/dev/null || { echo "cannot source lib/os.sh"; exit 1; }

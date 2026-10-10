@@ -26,6 +26,8 @@
 # Every check runs BOTH directions: the escaped value must round-trip, AND the unescaped control
 # must still be corrupted — a green that cannot fail is not a test.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh

@@ -21,6 +21,8 @@
 # Offline by construction: `kubectl config view` PARSES a kubeconfig file — it never dials an API
 # server and needs no RBAC, which is also why a locked-down TENANT can use it.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 export REPO_ROOT="$PWD"
@@ -151,7 +153,7 @@ users: [{name: u, user: {}}]
 KC
 printf 'KUBECONFIG=%s/other.kubeconfig\n' "$fake" > "${fake}/.env"    # the DOCUMENTED lab setup
 printf 'VKS_STATE_SERVER=https://1.2.3.4:6443\nSINK_ONLY_CANARY=leaked\n' > "${fake}/.env.state"
-leak8="$(cd "${REPO_ROOT}" && REPO_ROOT="$fake" VKS_STATE_FILE="${fake}/.env.state" \
+leak8="$(cd "${REPO_ROOT}" && REPO_ROOT="$fake" VKS_STATE_FILE="${fake}/.env.state" SKIP_DOTENV=0 \
            bash -c '. scripts/lib/os.sh; load_env >/dev/null 2>&1; printf "%s" "${SINK_ONLY_CANARY:-}"')"
 if [ -n "$leak8" ]; then
   bad "a KUBECONFIG in .env is IGNORED as a selector — a foreign cluster's sink was sourced into the run"

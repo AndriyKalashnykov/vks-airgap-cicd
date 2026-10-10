@@ -14,6 +14,8 @@
 # one that keeps this from becoming the advice-on-a-non-finding class the repo has a recorded defect
 # for. Case 1 is the only state that may warn.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(dirname "$0")/.." || exit 1
 
 pass=0; fail=0

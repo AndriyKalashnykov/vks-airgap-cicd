@@ -20,6 +20,9 @@
 # on 401" would turn that into 2..N and is the one change that could actually lock the account out.
 # If case 3 below ever goes green having been silently skipped, this file is measuring nothing.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export TEST_GUARD_CURL_HOSTS="192.0.2.1"   # RFC 5737 TEST-NET-1: vc_login must see a real connect failure (http 000)
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 
 fail=0

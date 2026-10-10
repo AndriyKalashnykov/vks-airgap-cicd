@@ -14,6 +14,8 @@
 #
 # Offline by construction: `have` is a PATH lookup. Nothing is executed, no engine is contacted.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 export REPO_ROOT="$PWD"

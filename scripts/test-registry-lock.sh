@@ -18,6 +18,8 @@
 # ⚠️ AND THIS CONTROL HAD NO TEST AT ALL until 2026-09-08, despite its absence having caused a
 # documented incident. That is the reason for the first case: a gate nobody has seen fail is a gate.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(dirname "$0")/.." || exit 1
 # shellcheck source=scripts/lib/os.sh
 . scripts/lib/os.sh 2>/dev/null || { echo "cannot source lib/os.sh"; exit 1; }

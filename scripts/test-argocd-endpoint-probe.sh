@@ -14,6 +14,8 @@
 # same trap that makes the diag FILE necessary in the first place. Results come back via files
 # and globals, never via captured stdout.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/lib/argocd.sh" 2>/dev/null || { echo "cannot source lib/argocd.sh"; exit 1; }

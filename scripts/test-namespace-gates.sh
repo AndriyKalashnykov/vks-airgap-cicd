@@ -24,6 +24,9 @@
 #
 # shellcheck disable=SC2016  # grep/sed patterns contain a literal `$VAR` — the $ must stay literal.
 set -uo pipefail
+TEST_SANDBOX_REPO_ROOT=keep   # this test copies scripts/ into a throwaway root; lib/os.sh derives REPO_ROOT from the copy
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh

@@ -12,6 +12,8 @@
 # 05-kind-up.sh, step 0). This test pins the decision itself, offline, with stateful fakes: every
 # arm asserts on the fakes' call log, because the property is about what was NOT created or removed.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh

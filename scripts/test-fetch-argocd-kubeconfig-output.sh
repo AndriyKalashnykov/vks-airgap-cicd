@@ -9,6 +9,8 @@
 # Offline: the real script runs with `vcf` and `kubectl` STUBBED on PATH, from a copy of scripts/ +
 # .env.example (no secrets/, so no real CA is picked up), SKIP_DOTENV=1, and every written path in $T.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$REPO" || exit 1
 
 fail=0; n=0

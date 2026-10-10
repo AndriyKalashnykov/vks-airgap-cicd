@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+# ============================================================================
+# scripts/test-guard/bin/curl — the TARGET-AWARE stand-in. See scripts/test-guard/refuse.sh.
+#
+# The other stand-ins refuse outright. curl cannot: many unit tests drive the real curl at a
+# throwaway responder on 127.0.0.1, and that is the right test. So this one reads the request's
+# DESTINATION and
+#     loopback (127.0.0.0/8, ::1, localhost, a unix socket)   -> exec the real curl, unchanged
+#     anything else                                           -> refuse, log, exit 97
+#
+# THE DESTINATION is where the connection goes, not the name in the URL: `--resolve H:P:ADDR` and
+# `--connect-to H1:P1:H2:P2` redirect it (the TLS tests dial `https://harbor.test` at 127.0.0.1
+# this way), and an explicit `-x/--proxy` replaces it. `-K/--config FILE` is read for the same
+# keys, because the scripts under test put the URL there to keep a secret off argv.
+#
+# FAIL CLOSED. An argument this parser does not recognise as an option's value is treated as a URL,
+# so an unknown value-taking option makes a loopback call REFUSE (loud, fixable here) rather than
+# letting a foreign one through.
+#
+# WHAT IT DOES NOT COVER, stated so a green is not over-read:
+#   - a proxy taken from the ENVIRONMENT (http_proxy, https_proxy, ALL_PROXY) is not inspected;
+#   - `-K -` (config on stdin) is refused outright rather than consumed;
+#   - a loopback service that itself forwards elsewhere is out of sight;
+#   - anything that is not curl: `openssl s_client`, bash /dev/tcp, nc, python.
+#
+# OPT IN, per test:
+#   export TEST_GUARD_CURL_HOSTS="192.0.2.1 vc.invalid"   these exact destinations, and loopback
+#   export TEST_GUARD_ALLOW="curl"                        every destination (the real curl, unfenced)
+#   export TEST_GUARD_QUIET="curl"                        still refused, but declared: not logged
+# ============================================================================
+set -u
+
+_guard_next() {
+  local d oldifs="$IFS"
+  IFS=:
+  for d in $PATH; do
+    IFS="$oldifs"
+    [ -n "$d" ] || continue
+    # Skip EVERY guard directory, not only this one: a test that runs from a COPY of the repo has
+    # two on PATH, and skipping only "mine" makes the two exec each other for ever (MEASURED).
+    [ -e "$d/.test-guard" ] && continue
+    if [ -f "$d/curl" ] && [ -x "$d/curl" ]; then printf '%s' "$d/curl"; return 0; fi
+  done
+  IFS="$oldifs"
+  return 1
+}
+
+_real="$(_guard_next)" || { printf 'test-guard: no real curl on PATH behind the guard\n' >&2; exit 127; }
+
+case " ${TEST_GUARD_ALLOW:-} " in *" curl "*) exec "$_real" "$@" ;; esac
+
+_orig_args=("$@")
+_argv_flat="$*"; _argv_flat="${_argv_flat//$'\n'/ }"; _argv_flat="${_argv_flat//$'\t'/ }"
+
+_refuse() {  # <reason>
+  local quiet=0
+  case " ${TEST_GUARD_QUIET:-} " in *" curl "*) quiet=1 ;; esac
+  if [ -n "${TEST_GUARD_LOG:-}" ] && [ "$quiet" -eq 0 ]; then
+    printf '%s\tcurl\t%s\n' "${TEST_GUARD_TEST:-?}" "$_argv_flat" >> "$TEST_GUARD_LOG" 2>/dev/null || true
+  fi
+  # shellcheck disable=SC2016  # the backticks are literal text in the message
+  printf 'test-guard: REFUSED a real `curl` -- %s. A unit test may dial loopback only: stub curl, or opt in with TEST_GUARD_ALLOW="curl" (scripts/test-guard/bin/curl)\n' "$1" >&2
+  exit 97
+}
+
+urls=(); resolves=(); connects=(); proxies=(); unix_socket=0; info_only=0
+
+# Long options that consume the NEXT argument, and the short ones that do (a short option's value
+# may also be glued on: `-m5`, `-sSo/dev/null`).
+_long_takes_value() {
+  case "$1" in
+    --abstract-unix-socket|--alt-svc|--aws-sigv4|--cacert|--capath|--cert|--cert-type|--ciphers|\
+    --config|--connect-timeout|--connect-to|--continue-at|--cookie|--cookie-jar|--create-file-mode|\
+    --crlfile|--curves|--data|--data-ascii|--data-binary|--data-raw|--data-urlencode|--delegation|\
+    --dns-interface|--dns-ipv4-addr|--dns-ipv6-addr|--dns-servers|--doh-url|--dump-header|\
+    --egd-file|--engine|--etag-compare|--etag-save|--expect100-timeout|--form|--form-string|\
+    --ftp-account|--ftp-method|--ftp-port|--happy-eyeballs-timeout-ms|--header|--hostpubmd5|\
+    --hostpubsha256|--hsts|--interface|--ip-tos|--ipfs-gateway|--json|--keepalive-time|--key|\
+    --key-type|--libcurl|--limit-rate|--local-port|--login-options|--max-filesize|--max-redirs|\
+    --max-time|--netrc-file|--noproxy|--oauth2-bearer|--output|--output-dir|--parallel-max|--pass|\
+    --pinnedpubkey|--proto|--proto-default|--proto-redir|--proxy|--proxy-cacert|--proxy-user|\
+    --proxy1.0|--preproxy|--pubkey|--quote|--random-file|--range|--rate|--referer|--request|\
+    --request-target|--resolve|--retry|--retry-delay|--retry-max-time|--sasl-authzid|\
+    --service-name|--socks4|--socks4a|--socks5|--socks5-hostname|--speed-limit|--speed-time|\
+    --stderr|--time-cond|--tls-max|--tls13-ciphers|--tlsauthtype|--tlspassword|--tlsuser|--trace|\
+    --trace-ascii|--trace-config|--unix-socket|--upload-file|--url|--url-query|--user|\
+    --user-agent|--variable|--vlan-priority|--write-out) return 0 ;;
+  esac
+  return 1
+}
+_short_takes_value() {
+  case "$1" in A|b|c|C|d|D|e|E|F|H|K|m|o|P|Q|r|t|T|u|U|w|x|X|y|Y|z) return 0 ;; esac
+  return 1
+}
+
+_note() {  # <option> <value>
+  case "$1" in
+    --url|--doh-url)               urls+=("$2") ;;
+    --resolve)                     resolves+=("$2") ;;
+    --connect-to)                  connects+=("$2") ;;
+    --proxy|--preproxy|--proxy1.0|--socks4|--socks4a|--socks5|--socks5-hostname|-x) proxies+=("$2") ;;
+    --unix-socket|--abstract-unix-socket) unix_socket=1 ;;
+    --config|-K)                   _read_config "$2" ;;
+  esac
+}
+
+_read_config() {  # <file>
+  local f="$1" line key val
+  [ "$f" = "-" ] && _refuse "its config comes from stdin (-K -), which the guard cannot inspect"
+  [ -r "$f" ] || return 0     # the real curl reports an unreadable config itself
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in ''|'#'*) continue ;; esac
+    key="${line%%[[:space:]=:]*}"; val="${line#"$key"}"
+    val="${val#"${val%%[![:space:]=:]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+    case "$val" in \"*\") val="${val#\"}"; val="${val%\"}" ;; esac
+    key="${key#--}"
+    case "$key" in
+      url|resolve|connect-to|proxy|preproxy|socks4|socks4a|socks5|socks5-hostname|unix-socket|doh-url)
+        _note "--$key" "$val" ;;
+      config|K) _read_config "$val" ;;
+    esac
+  done < "$f"
+}
+
+while [ "$#" -gt 0 ]; do
+  a="$1"; shift
+  case "$a" in
+    --version|--help|--manual) info_only=1 ;;
+    --*)
+      if _long_takes_value "$a"; then
+        [ "$#" -gt 0 ] || break
+        _note "$a" "$1"; shift
+      fi ;;
+    -?*)
+      rest="${a#-}"
+      while [ -n "$rest" ]; do
+        c="${rest:0:1}"; rest="${rest:1}"
+        case "$c" in V|M|h) info_only=1 ;; esac
+        if _short_takes_value "$c"; then
+          if [ -n "$rest" ]; then v="$rest"; rest=""
+          else [ "$#" -gt 0 ] || break 2; v="$1"; shift; fi
+          case "$c" in K) _note -K "$v" ;; x) _note -x "$v" ;; esac
+        fi
+      done ;;
+    *) urls+=("$a") ;;
+  esac
+done
+
+# host and port of a URL-ish string -> _h, _p (the port is empty for a scheme with no default here).
+_split() {
+  local u="$1" scheme=""
+  case "$u" in *://*) scheme="${u%%://*}"; u="${u#*://}" ;; esac
+  u="${u%%[/?#]*}"; u="${u##*@}"
+  case "$u" in
+    \[*\]*) _h="${u%%]*}"; _h="${_h#[}"; _p="${u##*]}"; _p="${_p#:}" ;;
+    *:*)    _h="${u%%:*}"; _p="${u##*:}" ;;
+    *)      _h="$u"; _p="" ;;
+  esac
+  if [ -z "$_p" ]; then
+    case "$(printf '%s' "$scheme" | tr '[:upper:]' '[:lower:]')" in
+      https|wss) _p=443 ;; http|ws|'') _p=80 ;; *) _p="" ;;
+    esac
+  fi
+  _h="$(printf '%s' "$_h" | tr '[:upper:]' '[:lower:]')"
+}
+
+# TEST_GUARD_CURL_HOSTS -- a test's own, exact, space-separated list of extra destinations it may
+# dial. It exists for the tests that probe a DELIBERATELY dead address (RFC 5737 TEST-NET, a
+# `.invalid` name) to watch the script under test fail: narrower than TEST_GUARD_ALLOW="curl",
+# which lets every destination through.
+_is_loopback() {
+  local h="$1"
+  case " ${TEST_GUARD_CURL_HOSTS:-} " in *" $h "*) [ -n "$h" ] && return 0 ;; esac
+  case "$h" in \[*\]) h="${h#[}"; h="${h%]}" ;; esac
+  case "$h" in
+    localhost|::1|0:0:0:0:0:0:0:1) return 0 ;;
+    127.*) case "$h" in *[!0-9.]*) return 1 ;; esac; return 0 ;;
+  esac
+  return 1
+}
+
+# No destination at all (`curl --version`, `curl --help all`, or a bare option list curl itself
+# rejects): nothing to dial.
+if [ "${#urls[@]}" -eq 0 ] || [ "$info_only" -eq 1 ]; then
+  exec "$_real" ${_orig_args[@]+"${_orig_args[@]}"}
+fi
+
+for x in ${proxies[@]+"${proxies[@]}"}; do
+  _split "$x"
+  _is_loopback "$_h" || _refuse "the proxy '${_h}' is not loopback"
+done
+
+# A unix socket is local by construction; with one, the URL's host is only a Host header.
+if [ "$unix_socket" -eq 0 ] && [ "${#proxies[@]}" -eq 0 ]; then
+  for u in "${urls[@]}"; do
+    # file:// reads this machine's own filesystem; there is no destination to fence.
+    case "$(printf '%s' "${u%%://*}" | tr '[:upper:]' '[:lower:]')" in file) [ "$u" != "${u#*://}" ] && continue ;; esac
+    _split "$u"; host="$_h"; port="$_p"; dest="$host"
+    # --connect-to H1:P1:H2:P2 -- an empty H1 or P1 matches anything; an empty H2 keeps the host.
+    for x in ${connects[@]+"${connects[@]}"}; do
+      c_h1="${x%%:*}"; c_r="${x#*:}"; c_p1="${c_r%%:*}"; c_r="${c_r#*:}"
+      case "$c_r" in \[*) c_h2="${c_r%%]*}"; c_h2="${c_h2#[}" ;; *) c_h2="${c_r%%:*}" ;; esac
+      c_h1="$(printf '%s' "$c_h1" | tr '[:upper:]' '[:lower:]')"
+      if { [ -z "$c_h1" ] || [ "$c_h1" = "$host" ]; } && { [ -z "$c_p1" ] || [ "$c_p1" = "$port" ]; }; then
+        [ -n "$c_h2" ] && dest="$c_h2"
+      fi
+    done
+    # --resolve [+]HOST:PORT:ADDR[,ADDR...] -- `*` matches any host. Every address must be loopback.
+    for x in ${resolves[@]+"${resolves[@]}"}; do
+      x="${x#+}"; r_h="${x%%:*}"; r_r="${x#*:}"; r_p="${r_r%%:*}"; r_a="${r_r#*:}"
+      r_h="$(printf '%s' "$r_h" | tr '[:upper:]' '[:lower:]')"
+      if { [ "$r_h" = "*" ] || [ "$r_h" = "$host" ]; } && [ "$r_p" = "$port" ] && [ "$dest" = "$host" ]; then
+        dest=""
+        oldifs="$IFS"; IFS=,
+        for ad in $r_a; do
+          IFS="$oldifs"
+          _is_loopback "$ad" || _refuse "'${host}' is resolved to '${ad}', which is not loopback"
+          dest="$ad"
+        done
+        IFS="$oldifs"
+      fi
+    done
+    _is_loopback "$dest" || _refuse "the destination '${dest:-$host}' is not loopback"
+  done
+fi
+
+exec "$_real" "${_orig_args[@]}"

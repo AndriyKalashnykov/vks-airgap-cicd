@@ -16,6 +16,8 @@
 # BOTH DIRECTIONS: a fix that never claims absence would pass the tenant case and destroy the
 # genuine-absence path that KinD and a fresh cluster rely on.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 fail=0
 

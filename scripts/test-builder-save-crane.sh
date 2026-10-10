@@ -42,6 +42,7 @@
 # A missing prerequisite SKIPS LOUDLY (printed), never a silent pass. (`registry:2` is an intentional
 # test-only external — tag-pinned, not digest-pinned, and deliberately NOT in images.txt / Renovate.)
 set -uo pipefail
+# test-sandbox: exempt — manual tier: needs both container engines, crane and a throwaway registry, by hand; the guard would refuse all three
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$REPO" || exit 1
 fail=0; ran=0

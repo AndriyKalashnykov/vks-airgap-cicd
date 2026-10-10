@@ -40,7 +40,7 @@ PAT="($(printf 'grep -c')o?|$(printf 'wc -l'))[^|]*\|\|[[:space:]]*($(printf 'ec
 # ── ALLOWLIST: path|line|reason. Tiny and REASONED: an entry must say why the two-value emission
 # CANNOT happen there, never that fixing it is inconvenient. Reconciled in BOTH directions below --
 # an entry that stops matching is a dead exemption documenting a site that no longer exists.
-ALLOW='scripts/test-env-validate-auth-truncation.sh|106|the text is a SEARCH PATTERN, not a fallback: this test asserts 02-env.sh no longer CONTAINS that shape'
+ALLOW='scripts/test-env-validate-auth-truncation.sh|108|the text is a SEARCH PATTERN, not a fallback: this test asserts 02-env.sh no longer CONTAINS that shape'
 
 _files=$(git ls-files 'scripts/*.sh' 'Makefile' 2>/dev/null || true)
 [ -n "$_files" ] || { echo "check-count-fallback: no files to scan — REFUSING (a scan of nothing is not a pass)"; exit 1; }

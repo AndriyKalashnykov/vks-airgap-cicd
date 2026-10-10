@@ -29,6 +29,8 @@
 # Offline: `openssl`, `kubectl`, `vcf`, `curl`, `getent` are stand-ins on PATH, every path is in a
 # temp dir, and the only address dialled is a closed port on 127.0.0.1.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$REPO" || exit 1
 
 # An exported value from the caller's shell must not reach the scripts under test: load_env keeps

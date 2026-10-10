@@ -18,6 +18,8 @@
 # path -- 96-verify-gateway-image.sh exits 0 in this mode BY DESIGN and says so. If this file goes
 # green while 43's probe is broken, nothing else is looking.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 
 fail=0; ran=0
@@ -26,6 +28,18 @@ bad() { printf '  FAIL  %s\n' "$1"; fail=1; }
 
 STUB="$(mktemp -d)"; KC="$(mktemp)"
 trap 'rm -rf "$STUB" "$KC"' EXIT
+
+# ⚠️ HOW FAR THE REAL SCRIPT RUNS HERE, MEASURED (B751) with a line trace: to line ~231 of 289 --
+# PAST the probe under test, into istio_refuse_foreign_owner, which dies only because the kubectl
+# stub below answers `get deploy istiod -o json` with nothing. The next lines are `kubectl apply`,
+# `vks-package.sh install` (the vcf CLI) and three `state_set`s. It used to run with the real
+# REPO_ROOT and no VKS_STATE_FILE, so those would have written this checkout's .env.state.
+# Now: the helper above gives a sandbox REPO_ROOT (so the overlay is a sandbox file); curl is a stub that fails and
+# COUNTS; VCENTER_HOST cannot exist; and the run-time guard refuses vcf.
+CURL_CALLS="$STUB/curl.calls"; : > "$CURL_CALLS"
+# shellcheck disable=SC2016  # $* and $CURL_CALLS belong to the stub, at ITS run time
+printf '#!/bin/sh\necho "curl $*" >> "$CURL_CALLS"\nexit 7\n' > "$STUB/curl"; chmod +x "$STUB/curl"
+export CURL_CALLS
 printf 'apiVersion: v1\nkind: Config\ncurrent-context: c\nclusters: []\ncontexts: []\nusers: []\n' > "$KC"
 
 # Two istio Packages. API order puts the PUBLIC one last on purpose; semver puts the MIRRORED one
@@ -71,6 +85,7 @@ probe() { # $1=mode  [$2=ISTIO_PACKAGE_VERSION]
   PATH="$STUB:$PATH" KUBECONFIG="$KC" SKIP_DOTENV=1 \
     HARBOR_URL=harbor.example.test VKS_PACKAGE_NAMESPACE=vmware-system-tkg \
     ISTIO_PACKAGE_VERSION="${2:-}" INGRESS_CONTROLLER=istio ISTIO_INSTALL_METHOD=package \
+    VCENTER_HOST=vc.invalid \
     timeout 60 bash scripts/43-install-istio-package.sh 2>&1
 }
 
@@ -150,6 +165,14 @@ for h in depot.kube-system.svc depot-image-proxy.kube-system.svc.cluster.local; 
     ok "$h accepted"
   else bad "$h REFUSED — that is the vendor's own air-gapped configuration"; fi
 done
+
+# The fence, asserted (not counted in `ran`: these are about the harness, not the probe).
+if [ ! -s "$CURL_CALLS" ]; then ok "no curl call in any run of the real installer"
+else bad "the installer reached curl $(wc -l < "$CURL_CALLS" | tr -d ' ') time(s): $(head -1 "$CURL_CALLS")"; fi
+if [ ! -e "$REPO_ROOT/.env.state" ]; then ok "no state overlay was written (the installer never reached state_set)"
+else bad "the installer WROTE a state overlay -- it now runs past istio_refuse_foreign_owner on these fixtures"; fi
+case "${REPO_ROOT}" in "${TEST_SANDBOX}"/*) ok "the installer ran with a sandbox REPO_ROOT, not this checkout" ;;
+  *) bad "REPO_ROOT is not the sandbox root (${REPO_ROOT})" ;; esac
 
 [ "$ran" -eq 9 ] || { echo "  harness lost track of itself (ran=$ran)"; exit 1; }
 [ "$fail" -eq 0 ] || { echo "istio-package-version-probe: FAILED"; exit 1; }

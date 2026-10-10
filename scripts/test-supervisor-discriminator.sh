@@ -13,6 +13,7 @@
 #
 # Offline by construction: kubectl is a STUB on PATH, so this needs no cluster and cannot be flaky.
 set -uo pipefail
+export TEST_GUARD_QUIET="kubectl"   # the empty-path case reaches ONE un-stubbed `kubectl version`; nothing is meant to answer it
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.." || { printf 'FATAL: cannot cd to the repo root\n' >&2; exit 1; }
 # shellcheck source=/dev/null

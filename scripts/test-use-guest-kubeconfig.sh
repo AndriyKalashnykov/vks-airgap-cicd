@@ -14,6 +14,9 @@
 #
 # Offline: `kubectl` only reads a synthetic kubeconfig (no cluster is contacted).
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
+export SKIP_DOTENV=0   # this test feeds its OWN .env into a throwaway root; the helper's root has none
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pass=0; fail=0
 ok()  { pass=$((pass+1)); echo "  PASS  $1"; }

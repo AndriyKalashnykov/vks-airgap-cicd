@@ -12,6 +12,8 @@
 # REPO_ROOT (23 calls load_env; a copied .env.example with ARGOCD_MECHANISM stripped keeps the per-run
 # ARGOCD_MECHANISM from being clobbered). No cluster.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$REPO" || exit 1
 fail=0
 ok()  { printf 'ok    %s\n' "$1"; }

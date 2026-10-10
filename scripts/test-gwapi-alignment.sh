@@ -15,6 +15,7 @@
 # NETWORK: the gate fetches istio's go.mod, so this test does too. It SKIPS loudly when offline
 # rather than reporting a pass it did not earn.
 set -uo pipefail
+export TEST_GUARD_CURL_HOSTS="raw.githubusercontent.com"   # this test drives an ONLINE gate and says so; it SKIPs loudly when GitHub is unreachable
 export LC_ALL=C
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 pass=0; fail=0; flakes=0; T=""; _skip_f8=0

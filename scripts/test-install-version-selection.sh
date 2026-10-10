@@ -13,6 +13,8 @@
 # behavioural change that keeps the shape. Comments are stripped before matching, so the ban cannot
 # be satisfied (or tripped) by prose describing it.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 export LC_ALL=C
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 pass=0; fail=0

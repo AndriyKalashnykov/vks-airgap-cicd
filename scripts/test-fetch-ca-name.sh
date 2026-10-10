@@ -21,6 +21,8 @@
 #   5  the SAN list was read from the CA, not the leaf. A real CA has no SAN, so on a chain the
 #      remedy printed an empty list and then said "point the address at a name above".
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null || true
 # ⚠️ `cd "$(dirname ...)/.."` SUCCEEDS as `cd /..` when dirname is missing, and under `set -uo` (no
 # -e) a failing $( ) is not caught — so a `|| exit 1` never fires and the suite runs from /. Assert a

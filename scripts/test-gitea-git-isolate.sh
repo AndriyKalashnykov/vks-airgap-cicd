@@ -7,6 +7,8 @@
 # user and token, `approve` must not reach the spy (that is the keychain leak). CONTROL: the same clone
 # WITHOUT the isolation must return the stale value, or the test measures nothing.
 set -uo pipefail
+# shellcheck source=scripts/lib/test-sandbox.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test-sandbox.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
