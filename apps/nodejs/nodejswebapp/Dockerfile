@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26
+# syntax=docker/dockerfile:1.28
 # nodejswebapp — THE BUILDER-IMAGE case of the six.
 #
 # AIR-GAP: this app has a real npm dependency tree, so the in-cluster build cannot reach

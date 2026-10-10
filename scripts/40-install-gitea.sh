@@ -50,7 +50,7 @@ GITEA_SERVICE_TYPE="${GITEA_SERVICE_TYPE:-LoadBalancer}"
 # The air-gap default: the image mirrored into Harbor. Overridable so a test WITHOUT a Harbor (the
 # cross-cluster e2e, which exercises the ArgoCD topology rather than the air gap) can still run Gitea.
 _gi_default=0; [ -n "${GITEA_IMAGE:-}" ] || _gi_default=1
-GITEA_IMAGE="${GITEA_IMAGE:-${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/gitea/gitea:1.27.2-rootless}"
+GITEA_IMAGE="${GITEA_IMAGE:-${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/gitea/gitea:1.27.3-rootless}"
 # The Harbor project the kubelet will actually pull from: the first path segment after the registry.
 # It used to probe HARBOR_INFRA_PROJECT regardless -- measured: an explicit `harbor.test/infra/...`
 # image made the probe query `/projects/cicd`, so an empty image project passed (then ImagePullBackOff,

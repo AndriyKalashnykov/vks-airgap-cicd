@@ -304,10 +304,10 @@ log_info "starting $CPK_CONTAINER ($CPK_IMAGE) — manages LB via the docker soc
 #
 # It is also what keeps CPK clear of an admission policy that is ALREADY IN THIS CLUSTER. The
 # gateway-api STANDARD bundle we install ships the `safe-upgrades` ValidatingAdmissionPolicy (see
-# bundle/manifests/gateway-api-v1.5.1.yaml — channel: standard), whose CEL DENIES any gateway-api CRD
+# bundle/manifests/gateway-api-${GATEWAY_API_VERSION}.yaml — channel: standard), whose CEL DENIES any gateway-api CRD
 # whose bundle-version matches v1.[0-4].\d+ or v0 (i.e. anything before v1.5.0). CPK force-reconciles
 # its EMBEDDED CRDs at startup with a plain Create(), so it is subject to that policy — the CPK pinned
-# by CLOUD_PROVIDER_KIND_VERSION vendors v1.5.1 today and PASSES. What keeps this safe is CPK's
+# by CLOUD_PROVIDER_KIND_VERSION vendors a v1.5+ bundle (v1.6.2 at v0.12.0) and PASSES. What keeps this safe is CPK's
 # vendored version PLUS this flag; it is NOT our GATEWAY_API_VERSION pin. If the flag were dropped and
 # CPK vendored an older bundle, its CRD install would be DENIED, it aborts the WHOLE controller, and
 # every LoadBalancer silently stops getting an IP — surfacing as "Harbor LB did not get an external

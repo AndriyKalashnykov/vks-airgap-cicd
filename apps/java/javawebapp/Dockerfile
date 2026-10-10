@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26
+# syntax=docker/dockerfile:1.28
 # Multi-stage build for the air-gapped VKS CI/CD demo web UI.
 # Built by the Tekton pipeline (kaniko) and pushed to the VKS-provided Harbor.
 
@@ -7,7 +7,7 @@
 # In the air gap, CI passes BUILDER_IMAGE=<harbor>/cicd/javawebapp-builder:<ver> (a
 # builder with this pom's dependencies pre-baked — see app/Dockerfile.builder and
 # scripts/15-build-push-builder.sh) plus MVN_OFFLINE=-o so `package` needs no network.
-ARG BUILDER_IMAGE=maven:3.9-eclipse-temurin-25
+ARG BUILDER_IMAGE=maven:3.10-eclipse-temurin-25
 ARG RUNTIME_IMAGE=eclipse-temurin:25.0.4_7-jre-jammy
 # BUILDER_IMAGE default is explicitly tagged; DL3006 can't see through the ARG.
 # hadolint ignore=DL3006

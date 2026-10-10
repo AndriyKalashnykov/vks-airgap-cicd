@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26
+# syntax=docker/dockerfile:1.28
 # Builder image for AIR-GAPPED CI: bakes this app's wheels so the in-cluster build needs NO PyPI.
 #
 # PYTHON IS THE INTERPRETED CASE and it differs from Java/Go/Rust: the dependencies must be present

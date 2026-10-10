@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26
+# syntax=docker/dockerfile:1.28
 # Builder image for AIR-GAPPED CI: bakes this app's NuGet cache so the in-cluster build needs NO
 # nuget.org. Build on the INTERNET-connected jump box, push to Harbor.
 #

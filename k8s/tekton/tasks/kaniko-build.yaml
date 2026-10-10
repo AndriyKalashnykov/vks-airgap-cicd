@@ -155,7 +155,7 @@ spec:
         git clone -b "$(params.deploy-revision)" "$(params.deploy-url)" \
           "$(workspaces.source.path)/deploy"
     - name: set-tag
-      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/mikefarah/yq:4.53.6
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/mikefarah/yq:4.54.1
       securityContext: { runAsUser: 0, runAsGroup: 0 }
       env:
         - name: TAG

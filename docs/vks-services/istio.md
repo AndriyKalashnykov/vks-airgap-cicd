@@ -142,7 +142,7 @@ same object; the CLI wrapper itself is still unverified here.
 
 > **We install upstream Istio; a real lab runs a VMware-built one, and nothing keeps them in step.**
 > `INGRESS_CONTROLLER=istio` installs **upstream 1.30.3** — charts from
-> `istio-release.storage.googleapis.com`, images mirrored as `istio/pilot` + `istio/proxyv2`
+> `blob.istio.io/istio-release/charts` (Istio 1.31+ is no longer published to `istio-release.storage.googleapis.com`), images mirrored as `istio/pilot` + `istio/proxyv2`
 > (`.env.example:601`, gated by `check-image-alignment`). `istio-existing` attaches to whatever the VKS
 > add-on repository shipped: **measured 2026-08-10 on a 9.1 guest cluster, `1.27.1` `1.27.4` `1.27.5`
 > `1.27.8` `1.28.2` `1.28.5`, all `+vmware.1-vks.1`** (the "Versions offered" row in the Broadcom table).

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26
+# syntax=docker/dockerfile:1.28
 # dotnetwebapp — the CHISELLED case: an ASP.NET Core app on a base with no shell and no package
 # manager, which is what makes the runtime-stage air-gap invariant free rather than enforced.
 #

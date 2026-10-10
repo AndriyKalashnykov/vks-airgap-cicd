@@ -94,7 +94,7 @@ fi
 log_info "PLATFORM: Gateway API CRDs are ABSENT (the honest tenant starting state) — installing them as the mesh admin"
 istio_ensure_gwapi_crds
 
-run helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
+run helm repo add istio "${ISTIO_CHART_REPO:-https://blob.istio.io/istio-release/charts}" --force-update
 run helm repo update istio
 run helm upgrade --install istio-base istio/base \
   --namespace "$PLATFORM_ISTIOD_NS" --create-namespace \
@@ -158,13 +158,25 @@ trap 'kubectl delete ns "$MATRIX_NS_BARE" "$MATRIX_NS_NSLBL" "$MATRIX_NS_PODLBL"
 
 # containers <ns> — count containers + initContainers. istio-init is an INIT container and is the
 # one PSA rejects (NET_ADMIN), so counting only .spec.containers would miss the thing that matters.
+# `|| true`: a pod that was never created must reach the caller's `die`, which names the cause. Under
+# `set -e` a failing `ctl="$(...)"` killed the script first, with no message at all.
 _matrix_containers() {
-  kubectl -n "$1" get pod p -o jsonpath='{.spec.containers[*].name} {.spec.initContainers[*].name}' 2>/dev/null
+  kubectl -n "$1" get pod p -o jsonpath='{.spec.containers[*].name} {.spec.initContainers[*].name}' 2>/dev/null || true
 }
+# The CREATE is retried and its error is KEPT. `helm --wait` returns when istiod is Ready, which is
+# before the API server can reliably call the injector webhook (failurePolicy: Fail) -- measured
+# 2026-10-10 on Istio 1.31.1: the create 7s after "istiod successfully installed" left NO pod, the
+# same create two minutes later was admitted and injected. The old form sent the error to
+# /dev/null, so the leg died silently one line later.
 _matrix_run() { # <ns> [extra kubectl run args...]
-  local ns="$1"; shift
-  kubectl -n "$ns" run p --image="${PROBE_IMAGE:-curlimages/curl:8.18.0}" --restart=Never \
-    "$@" --command -- sleep 300 >/dev/null 2>&1
+  local ns="$1" i err=""; shift
+  for i in 1 2 3 4 5 6; do
+    if err="$(kubectl -n "$ns" run p --image="${PROBE_IMAGE:-curlimages/curl:8.18.0}" --restart=Never \
+      "$@" --command -- sleep 300 2>&1 >/dev/null)"; then err=""; break; fi
+    log_warn "  probe pod create in ${ns} refused (attempt ${i}/6): ${err}"
+    sleep 5
+  done
+  [ -z "$err" ] || die "INJECTION MATRIX: could not create the probe pod in ${ns} after 6 attempts: ${err}"
   kubectl -n "$ns" wait --for=jsonpath='{.metadata.name}'=p pod/p --timeout=60s >/dev/null 2>&1 || true
 }
 

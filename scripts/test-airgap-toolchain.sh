@@ -161,7 +161,7 @@ echo "--- can the DEFAULT ingress (istio) actually install here? ---"
 chart="$(find bundle/charts -name 'base-*.tgz' -print -quit 2>/dev/null || true)"
 if [ -z "$chart" ]; then
   echo "    FAIL  no istio charts in the bundle — 'make install-ingress' (default: istio) would need"
-  echo "          'helm repo add https://istio-release.storage.googleapis.com', impossible on this box."
+  echo "          'helm repo add https://blob.istio.io/istio-release/charts', impossible on this box."
   exit 1
 fi
 helm template istio-base "$chart" >/dev/null 2>&1 \

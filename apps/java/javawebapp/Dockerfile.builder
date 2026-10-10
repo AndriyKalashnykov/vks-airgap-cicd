@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26
+# syntax=docker/dockerfile:1.28
 # Builder image for AIR-GAPPED CI: bakes this app's full Maven dependency +
 # plugin cache so the in-cluster build (kaniko) and the Tekton maven-test task
 # need NO network. Build this on the INTERNET-connected jump box (it pulls from
@@ -6,7 +6,7 @@
 # app Dockerfile and as the maven-test task image.
 #
 # Rebuild whenever pom.xml changes. See scripts/15-build-push-builder.sh.
-ARG MAVEN_IMAGE=maven:3.9-eclipse-temurin-25
+ARG MAVEN_IMAGE=maven:3.10-eclipse-temurin-25
 # MAVEN_IMAGE default is explicitly tagged; DL3006 can't see through the ARG.
 # hadolint ignore=DL3006
 FROM ${MAVEN_IMAGE}

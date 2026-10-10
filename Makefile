@@ -288,7 +288,7 @@ ARGOCD_NAMESPACE    ?= argocd
 APP_DEV_PORT        ?= 8080
 BUNDLE_DIR          ?= ./bundle
 # renovate: datasource=docker depName=plantuml/plantuml
-PLANTUML_VERSION    ?= 1.2026.6
+PLANTUML_VERSION    ?= 1.2026.8
 # renovate: datasource=npm depName=renovate
 RENOVATE_VERSION    ?= 44.140.0
 # renovate: datasource=npm depName=markdownlint-cli

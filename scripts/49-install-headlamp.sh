@@ -127,7 +127,7 @@ fi
 # Single-sourced deliberately: hand-composing "${HARBOR_URL}/${PROJECT}/..." here would be a second
 # way to spell the same ref, and this repo's image-alignment gate exists because that drifts.
 HL_IMG="$(mirror_target_ref "ghcr.io/headlamp-k8s/headlamp:v${HEADLAMP_VERSION}")"
-BUSYBOX_IMG="$(mirror_target_ref "docker.io/library/busybox:1.37.0")"
+BUSYBOX_IMG="$(mirror_target_ref "docker.io/library/busybox:1.38.0")"
 HL_REGISTRY="${HL_IMG%/*}"          # harbor/project/headlamp-k8s
 HL_REPO="${HL_IMG##*/}"; HL_REPO="${HL_REPO%%:*}"   # headlamp
 log_info "headlamp image : ${HL_IMG}"

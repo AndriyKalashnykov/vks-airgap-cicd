@@ -48,7 +48,7 @@ READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 
 CHART_REPO_NAME="istio"
-CHART_REPO_URL="https://istio-release.storage.googleapis.com/charts"
+CHART_REPO_URL="${ISTIO_CHART_REPO:-https://blob.istio.io/istio-release/charts}"
 HUB="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/istio"
 
 # We own this mesh, so we PIN the gateway's identity rather than discovering it. The
