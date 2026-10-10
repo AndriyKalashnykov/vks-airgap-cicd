@@ -77,6 +77,14 @@
 # touching the pins, and note that a REFUTED paragraph further down this file still argues the
 # opposite; it is marked SUPERSEDED at its head.
 #
+# OVERRIDE RAISED TO v0.22.1 on 2026-10-10 — MEASURED GREEN in a cold `make e2e-kind E2E_FRESH=1`:
+# 12/12 `-build` TaskRuns True across all six apps against the IP-addressed KinD Harbor, step image
+# `...executor:v1.25.19-gcr0.22.1-debug`, and `go version -m` on the carried executor reports
+# `go-containerregistry v0.22.1`. The pull limiter is unchanged in v0.22.x (defaultJobs = 4); the
+# fork's #477 is still what prevents the deadlock. NOT covered by KinD: v0.22.1 also applies the
+# redirect SSRF check to PUSH-side clients, so a Harbor that redirects blob requests to a storage
+# endpoint on a DIFFERENT private-IP host would be refused. Our Harbor serves blobs itself.
+#
 # THE DEADLOCK WAS NEVER A ggcr VERSION PROBLEM. It was kaniko's own bug: GetFSFromLayers had
 # `defer r.Close()` INSIDE `for i, l := range layers`, and Go's defer is FUNCTION-scoped, so every
 # layer reader stayed open until the whole image was unpacked. ggcr >= v0.21.6 gates concurrent
@@ -177,4 +185,4 @@
 # step for a completely different reason.
 #
 # renovate: datasource=github-releases depName=chainguard-forks/kaniko
-kaniko	https://github.com/chainguard-forks/kaniko	v1.25.19	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.19-gcr0.21.9-debug	github.com/google/go-containerregistry@v0.21.9	
+kaniko	https://github.com/chainguard-forks/kaniko	v1.25.19	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.19-gcr0.22.1-debug	github.com/google/go-containerregistry@v0.22.1	
