@@ -67,7 +67,11 @@ spec:
             - { name: GITEA__service__DISABLE_REGISTRATION, value: "true" }
             # Allow webhooks to the in-cluster EventListener (Gitea blocks
             # private/loopback targets by default — this is the key air-gap gotcha).
-            - { name: GITEA__webhook__ALLOWED_HOST_LIST, value: "*" }
+            # Gitea 28 moved this to [security] and REJECTS "*": the entry is dropped at startup,
+            # Gitea stays healthy and every delivery to the ClusterIP is refused. "private" covers
+            # 10/8, 172.16/12, 192.168/16, fc00::/7 and 100.64/10 — a guest whose SERVICE CIDR is
+            # outside those needs that CIDR added here.
+            - { name: GITEA__security__ALLOWED_HOST_LIST, value: "private" }
           ports:
             - { name: http, containerPort: 3000 }
             - { name: ssh,  containerPort: 2222 }
