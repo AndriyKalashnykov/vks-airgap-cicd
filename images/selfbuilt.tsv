@@ -177,4 +177,4 @@
 # step for a completely different reason.
 #
 # renovate: datasource=github-releases depName=chainguard-forks/kaniko
-kaniko	https://github.com/chainguard-forks/kaniko	v1.25.19	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.19-gcr0.21.9-debug	github.com/google/go-containerregistry@v0.21.9	
+kaniko	https://github.com/chainguard-forks/kaniko	v1.25.19	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.19-gcr0.21.9-debug	github.com/google/go-containerregistry@v0.22.1	
