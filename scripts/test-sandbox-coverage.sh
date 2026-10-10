@@ -99,7 +99,7 @@ scan() {
     # kept to word the refusal.)
     helper_line="$(awk '
       /^[[:space:]]*(#|$)/ { next }
-      /^set[[:space:]]/ { next }
+      /^set[[:space:]][^;|&<>()`$]*$/ { next }   # a bare `set ...` only: `set -u; exit 0` is a command line
       /^TEST_SANDBOX_[A-Z_]+=[^[:space:];|&<>()]*[[:space:]]*(#.*)?$/ { next }
       { l = $0; sub(/[[:space:]]#.*$/, "", l)
         if (l ~ /^(\.|source)[[:space:]].*lib\/test-sandbox[.]sh/) print NR
@@ -158,11 +158,13 @@ plant() { printf '%s\n' "$2" > "$P/test-$1.sh"; }
   plant heredoc     '#!/usr/bin/env bash'$'\n''cat > /dev/null <<EOF'$'\n'"$_helper"$'\n''EOF'$'\n'"$_use"
   plant afterexit   '#!/usr/bin/env bash'$'\n''[ -n "${RUN:-}" ] || exit 0'$'\n'"$_helper"$'\n'"$_use"
   plant trailing    '#!/usr/bin/env bash'$'\n''. "$R/other.sh"   # not lib/test-sandbox.sh, on purpose'$'\n'"$_use"
+  plant setheredoc  '#!/usr/bin/env bash'$'\n''set -u; cat > /dev/null <<EOF'$'\n'"$_helper"$'\n''EOF'$'\n'"$_use"
+  plant setexit     '#!/usr/bin/env bash'$'\n''set -u; exit 0'$'\n'"$_helper"$'\n'"$_use"
   plant firstok     '#!/usr/bin/env bash'$'\n''# a comment'$'\n''set -uo pipefail'$'\n'$'\n'"$_helper"'   # the fence'$'\n'"$_use"
 }
 pout="$(scan "$P")"
 pbad="$(printf '%s\n' "$pout" | grep -c '^BAD ' || true)"
-for want in inif infunc heredoc afterexit trailing; do
+for want in inif infunc heredoc afterexit trailing setheredoc setexit; do
   if printf '%s\n' "$pout" | grep -q "^BAD test-${want}[.]sh:"; then ok "planted '${want}' is FLAGGED (the helper line is there and is not the first command)"
   else bad "planted '${want}' was NOT flagged -- a helper line that does not run first reads as a fence" "$(printf '%s' "$pout" | tr '\n' '|')"; fi
 done
@@ -176,11 +178,11 @@ for want in fenced exempt onlycomment unrelated bgfenced notbg lifted; do
   if printf '%s\n' "$pout" | grep -q "^BAD test-${want}[.]sh:"; then bad "planted '${want}' was flagged -- a false positive"
   else ok "planted '${want}' is clean"; fi
 done
-if [ "$pbad" -eq 12 ] && [ "$(field "$pout" SCANNED)" -eq 20 ] && [ "$(field "$pout" NAMING)" -eq 17 ] \
+if [ "$pbad" -eq 14 ] && [ "$(field "$pout" SCANNED)" -eq 22 ] && [ "$(field "$pout" NAMING)" -eq 19 ] \
    && [ "$(field "$pout" FENCED)" -eq 4 ] && [ "$(field "$pout" EXEMPT)" -eq 1 ] \
    && [ "$(field "$pout" BACKGROUNDING)" -eq 3 ] && [ "$(field "$pout" LIFTED)" -eq 1 ] \
    && printf '%s\n' "$pout" | grep -q '^LIFT test-lifted[.]sh: REPO_ROOT=kept SKIP_DOTENV=0$'; then
-  ok "planted tree reconciles: 20 scanned, 17 in scope (3 backgrounding), 4 fenced (1 with pins lifted), 1 exempt, 12 flagged"
+  ok "planted tree reconciles: 22 scanned, 19 in scope (3 backgrounding), 4 fenced (1 with pins lifted), 1 exempt, 14 flagged"
 else
   bad "planted tree does not reconcile" "$(printf '%s' "$pout" | tr '\n' '|')"
 fi

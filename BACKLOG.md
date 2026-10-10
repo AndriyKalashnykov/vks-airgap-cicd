@@ -234,6 +234,18 @@ network namespace for the test set or recorded as accepted, with the three addre
 RFC 5737 ones. Item 4 is done when no test changes a path under the checkout (the six use the
 sandbox root, as `test-state-archives.sh` now does).
 
+**Found by the review of the follow-up change, not fixed:**
+- the runner prints "0 failed" and then FAILED when a set fails only on the guard log: the
+  count line should include the guard failure;
+- `check-count-fallback.sh` has no committed test for its "dead entry" and "too loose" arms,
+  and a `|` inside a fragment is cut at the `|`;
+- `.claude` is on the sandbox's skip list as "state" but holds two tracked files; no test reads
+  them through the sandbox root today;
+- `__TEST_GUARD_HANDED` stays in a let-through tool's environment, so a tool that re-invokes its
+  own name through PATH would get 127 (no such caller today);
+- eight tests start a child with `env -i` and their own PATH: a refusal there is still a
+  refusal but is not written to the per-set log.
+
 ## 🔴 B750 — what the Harbor-CA / time-limit / address work ([[B749]]) left open 🔴 open
 
 [[B749]] is closed: everything it lists is in the code and Step 8 was walked on the lab. This row
@@ -326,6 +338,18 @@ with the fix taken out; none of it has run against a lab.**
   value that was typed, the value in use and `PIN_OVERRIDE` as the way to do it for one run. Once
   per process tree (the winning value is exported, so a script started from there has nothing
   to report); silent when the typed value is the one in use or a `PIN_OVERRIDE` names it.
+
+**Found by the review of the follow-up change, not fixed:**
+- a login with a colon in the password and no `@` (`admin:pa:ss`) is read as a bare IPv6
+  address and passes; `admin:1234` cannot be told from a host and a port at all. The row above
+  about "a login with no @" is closed only for a port that is not a number;
+- the refusal for a port that is not a number says "a login typed without a host" also when
+  the cause is a trailing carriage return or space from a hand-edited `.env`: it should say
+  "the port is not a number" first;
+- a `.env` line `_LOAD_ENV_ON_REFUSED_ADDRESS=report` still reaches child scripts, because the
+  unset happens before the files are sourced;
+- the plugin-group notice is once per script, so a make target that starts several scripts
+  prints it once for each.
 
 ## ✅ B749 — DONE (#1377, #1379 and the change after them): the Harbor CA follow-ups, Step 8 walked on the lab ✅ closed 2026-10-09
 
