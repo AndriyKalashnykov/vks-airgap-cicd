@@ -40,7 +40,7 @@ require_cmd jq
 MANIFEST_DIR="${BUNDLE_DIR}/manifests"
 # CHARTS ARE AS AIR-GAP-CRITICAL AS IMAGES, AND WE WERE NOT CARRYING ANY.
 # The bundle carried `helm` (62 MB) and not one chart — so on the air-gapped box `make install-ingress`
-# (whose DEFAULT is istio) still died at `helm repo add https://istio-release.storage.googleapis.com`.
+# (whose DEFAULT is istio) still died at `helm repo add https://blob.istio.io/istio-release/charts`.
 # A helm with no charts is dead weight. `helm pull` them here, on the box that has the internet.
 CHART_DIR="${BUNDLE_DIR}/charts"
 # images.lock — the resolved source digest of every mirrored image, recorded at
@@ -196,7 +196,7 @@ log_info "next: dual-homed -> 'make mirror-push'  |  sneakernet -> 'make bundle'
 # Pinned to ISTIO_VERSION, the same var 46-install-istio.sh installs with — so the carried chart and the
 # installed version cannot drift.
 if have helm; then
-  ISTIO_CHART_REPO="${ISTIO_CHART_REPO:-https://istio-release.storage.googleapis.com/charts}"
+  ISTIO_CHART_REPO="${ISTIO_CHART_REPO:-https://blob.istio.io/istio-release/charts}"
   log_info "pulling the istio charts v${ISTIO_VERSION:-<unset>} into ${CHART_DIR} (the air-gap box cannot fetch them)"
   if [ -n "${ISTIO_VERSION:-}" ]; then
     # 1>&2, NOT >/dev/null -- helm puts THE CAUSE ON STDOUT AND ONLY A RESTATEMENT ON STDERR.

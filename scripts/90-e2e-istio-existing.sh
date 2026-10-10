@@ -94,7 +94,7 @@ fi
 log_info "PLATFORM: Gateway API CRDs are ABSENT (the honest tenant starting state) — installing them as the mesh admin"
 istio_ensure_gwapi_crds
 
-run helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
+run helm repo add istio "${ISTIO_CHART_REPO:-https://blob.istio.io/istio-release/charts}" --force-update
 run helm repo update istio
 run helm upgrade --install istio-base istio/base \
   --namespace "$PLATFORM_ISTIOD_NS" --create-namespace \
