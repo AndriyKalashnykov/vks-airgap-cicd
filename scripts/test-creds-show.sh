@@ -3673,6 +3673,75 @@ while True:
                        "the guard must match the '<not' prefix, not the whole '<not set>' string" ;;
   esac
 
+  # ── THE SAME SIGNATURE, WITH THE SUPERVISOR ANSWERING (2026-10-10) ─────────────────────────────
+  # MEASURED on a lab restored to a bare state: the Supervisor was up, nothing this repo had
+  # installed existed any more, and the headline above told the reader "Otherwise the lab is off:
+  # if you run it, start it". The signature is built from addresses an INSTALL created; the
+  # Supervisor is the one address in .env that is the lab itself, so the block asks it.
+  # Same fixture as _off_probe plus SUPERVISOR_HOST. Only the answer to ONE connect differs between
+  # the two renders: the `timeout` stand-in answers the connect to <host>:443 (a documentation
+  # address, and 443 cannot be bound here) and runs every other bounded command for real.
+  # Each arm's full wording is pinned in test-supervisor-anchor-advice.sh; this is the headline.
+  if grep -qxF 'lab-off-sup: skip' <<< "$_off_out"; then
+    ok "lab-off+supervisor: with no SUPERVISOR_HOST the Supervisor is not asked (skip), and the headline above is the one it was"
+  else
+    bad "lab-off+supervisor: the fixture with no SUPERVISOR_HOST does not read 'lab-off-sup: skip'" \
+        "a tenant may have no SUPERVISOR_HOST; nothing may be dialled for it"
+  fi
+  _off_sup_probe() {   # <rc of the connect to the Supervisor: 0 accepted, 1 refused>
+    local t out p dp rt
+    trap 'rm -rf "${t:-}"' EXIT INT TERM
+    t="$(mktemp -d)"; cp .env.example "$t/.env.example"; mkdir -p "$t/bin"
+    p="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    dp="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+    rt="$(command -v timeout)"
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\n'; printf 'printf "127.0.0.1 %%s\\n" "$2"\n'; } > "$t/bin/getent"
+    # shellcheck disable=SC2016
+    { printf '#!/bin/sh\ncase "$*" in *"/dev/tcp/"*" _ 192.0.2.10 443") exit %s ;; esac\n' "$1"
+      printf 'exec "%s" "$@"\n' "$rt"; } > "$t/bin/timeout"
+    chmod +x "$t/bin/getent" "$t/bin/timeout"
+    printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\nHARBOR_URL=127.0.0.1:%s\nHARBOR_PASSWORD=x\nHARBOR_INSECURE=1\nSUPERVISOR_HOST=192.0.2.10\n' "$p" "$dp" > "$t/.env"
+    out="$( cd "$t" && PATH="$t/bin:$PATH" VKS_LAB_STATE_DIR=/nonexistent VKS_SUPERVISOR_KUBECONFIG='' REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+              CREDS_NO_PROBE=0 CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )"
+    printf '%s' "$out"
+    rm -rf "$t"
+  }
+  _off_sup_up="$(_off_sup_probe 0)"
+  _off_sup_down="$(_off_sup_probe 1)"
+  if grep -qxF 'lab-off: 1' <<< "$_off_sup_up" && grep -qxF 'lab-off-sup: answers' <<< "$_off_sup_up" \
+     && grep -qxF 'lab-off: 1' <<< "$_off_sup_down" && grep -qxF 'lab-off-sup: silent' <<< "$_off_sup_down"; then
+    ok "lab-off+supervisor: both renders carry the signature; the Supervisor reads 'answers' in one and 'silent' in the other (the case is live)"
+  else
+    bad "lab-off+supervisor: want 'lab-off: 1' twice with 'lab-off-sup: answers' / 'silent', got '$(grep '^lab-off' <<< "$_off_sup_up" | tr '\n' ' ')' / '$(grep '^lab-off' <<< "$_off_sup_down" | tr '\n' ' ')'" \
+        "fix the fixture; every assertion below is vacuous"
+  fi
+  case "$_off_sup_up" in
+    *'Something answered at the Supervisor address '*', but nothing this repo installed did'*)
+      ok "lab-off+supervisor: with the Supervisor answering, the headline says so" ;;
+    *)  bad "lab-off+supervisor: the Supervisor answered and the headline does not say so" \
+            "the reader must not be left with 'NOTHING answered' when the lab itself did" ;;
+  esac
+  for _gone in 'Otherwise the lab is off' 'NOTHING answered on this run' 'start it' 'needs the lab answering'; do
+    case "$_off_sup_up" in
+      *"$_gone"*) bad "lab-off+supervisor: '$_gone' is printed although the Supervisor answered" \
+                      "this is the measured defect: it told the operator to start a lab that was running" ;;
+      *)          ok "lab-off+supervisor: '$_gone' is ABSENT when the Supervisor answered" ;;
+    esac
+  done
+  # The control, from the SAME fixture: refuse that one connect and the old block is back.
+  for _want in 'NOTHING answered on this run' 'Otherwise the lab is off: if you run it, start it' 'Every URL and login below needs the lab answering.'; do
+    case "$_off_sup_down" in
+      *"$_want"*) ok "lab-off+supervisor: with the Supervisor silent too, '$_want' is still printed" ;;
+      *)          bad "lab-off+supervisor: with the Supervisor silent too, '$_want' is missing" \
+                      "a Supervisor that does not answer must leave the block as it was" ;;
+    esac
+  done
+  case "$_off_sup_down" in
+    *'The Supervisor answered'*) bad "lab-off+supervisor: 'The Supervisor answered' is printed for a refused connect" "the claim needs an accepted connection" ;;
+    *)                           ok "lab-off+supervisor: a refused connect does not print 'The Supervisor answered'" ;;
+  esac
+
 
   # ── THE CLUSTER LEG, three ways (implementation round, 2026-09-14, ran-it) ─────────────────────
   # rc=1 used to read as "could not reach the cluster API" for a cluster that was never ASKED, and for

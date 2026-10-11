@@ -16,6 +16,79 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🟡 B754 — `make creds` told the operator to start a lab that was running 🟡 built and run on that lab; `make vks-cluster-status` there is not
+
+**MEASURED 2026-10-10 on a real lab** that had been restored to a bare state: its Supervisor was
+up and answering, and nothing this repo had installed existed any more (no guest cluster, no
+Harbor, no ArgoCD, no ingress). `make creds` printed
+
+    ⚠️  NOTHING answered on this run, and the cluster API did not answer either.
+        … The lab is still starting, is OFF, or this machine cannot reach it. …
+        2. Otherwise the lab is off: if you run it, start it; …
+
+**Why.** The powered-off signature (`lab-off: 1`) is built from the ingress, Harbor, ArgoCD and
+the guest cluster API. All four are things an install created, so the signature cannot tell "the
+lab is off" from "the lab is up and the install is gone". The Supervisor is the one address in
+`.env` that is the lab itself, and the block did not ask it: the credential-free anchor check
+(`_sup_anchor_probe`) ran only in the expired-token banner, which the signature suppresses.
+
+**What was built** (`scripts/creds.sh`, the block under `if [ "$_pre_off" = 1 ]`). When
+`SUPERVISOR_HOST` is set, the block makes one bounded TCP connect to it on 443 and, only if that
+is accepted, the same anchor check the login uses. `CREDS_TOKEN=1` prints the result as
+`lab-off-sup: <verdict>`:
+
+| verdict | what the block now says |
+|---|---|
+| `skip` (no `SUPERVISOR_HOST`, or probes off) and `silent` (no connection, or no TLS answer) | what it said before, byte for byte |
+| `stale` | the lab is UP and this is a different Supervisor from the one logged in to: re-pin, do not start the lab, do not renew |
+| `verifies`, `answers` | the Supervisor answered; three states the report cannot tell apart; wait, else `make vks-cluster-status`, else scenario-1 "6. Guest cluster" |
+| `dates`, `cadates` | the Supervisor answered; settle the certificate's dates / replace the stored CA file first |
+
+`answers` is a connection accepted with no verdict from the anchor check (no CA file stored, no
+`openssl`, or one of the login's own verdicts). It claims only that something listens at that
+address. `lab-off: 1` and everything the signature withholds are unchanged. The report still
+spends no login, sends no credential, never dials vCenter and exits 0.
+
+**MEASURED offline** (stand-ins, loopback only): `skip` and `silent` render the same bytes as
+before this change (3,925 of 3,925, powered-off fixture, old tree against new); a refused connect
+costs 0.01 s and a connect that is never answered costs the probe budget, 2.01 s at the default;
+no existing `test-creds-show.sh` fixture reaches the new connect with a `SUPERVISOR_HOST` set (9
+powered-off renders, 9 without one).
+
+**NOT measured, and each one can change what the block should say:**
+
+1. ~~The real verdict on a restored lab~~ **MEASURED 2026-10-10 on that lab, with the change:**
+   `lab-off: 1`, `lab-off-sup: stale`. The report said the lab is UP, that the Supervisor
+   presents a certificate the stored CA does not verify (a different Supervisor: rebuilt or
+   restored), not to start the lab and not to renew, and printed the re-pin steps. Run from a
+   checkout WITHOUT `secrets/supervisor-ca.crt` the same lab read `answers` (no file to judge the
+   certificate with), which has its own headline: "Something answered at the Supervisor address
+   …". NOT measured: a lab restored from a snapshot of the SAME build (expected `verifies`).
+2. **Whether the Supervisor's address accepts TLS before its control plane is ready during a
+   start.** If it does, a lab that is still starting reads `verifies`. Step 1 of that arm (wait and
+   re-run) covers it; how long that window is, is unknown.
+3. **Refused against no-route on the guest cluster's API address.** The cluster clause in the
+   headline is taken from kubectl's error text. Which of the two a deleted guest cluster produces
+   on a real lab (its VIP released, or still held by the load balancer) was not run.
+4. **`make vks-cluster-status` on a restored lab.** Step 3 quotes its `DOES NOT EXIST` line, which
+   it prints for a Cluster the Supervisor answers NotFound for (read in
+   `scripts/26-vks-cluster-status.sh`). What it prints when the vSphere Namespace is gone as well
+   (NotFound, or Forbidden for a namespace the login no longer has) was not run.
+
+**A separate idea, NOT built, needs its own idea review:** with a Supervisor token that is still
+valid, the report could read the guest cluster's existence itself and replace the three-way
+"cannot tell which" with the answer. That is a new Supervisor read from a read-only report (its
+time limit, what a tenant's login may read, and what it prints when the read is refused all need
+deciding), so it is not folded into this change.
+
+**Relation to [[B704]].** B704 is the cause on disk: after a restore, `.env`, `.env.state` and
+`secrets/` still describe the lab that was there before, and nothing prunes them. This entry is
+what the report says while that state is stale. It does not prune or rewrite anything; B704 stays
+open as it was.
+
+**Done when:** `make creds` is run on a lab restored to a bare state and on a lab that is still
+starting, the verdict and the wording of each are recorded here, and items 1 to 4 are answered.
+
 ## 🔴 B753 — what the 2026-10-10 Renovate batch (#1358, #1361, #1362, #1363) left open 🔴 open
 
 Landed and measured on KinD (cold `make e2e-kind E2E_FRESH=1`, then `make e2e-kind-istio-existing`, both

@@ -1288,69 +1288,6 @@ fi
 if [ "${CREDS_TOKEN:-0}" = 1 ]; then
   for _su in $_sup_unread_tok; do printf 'sup-unread: %s\n' "$_su"; done
 fi
-if [ "$_pre_off" = 1 ]; then
-  # Cells explaining WHY a value was not read are noise when nothing answered. Key on the FAILURE
-  # CODE, never on the cell text: a revealed secret can look like anything.
-  if [ "${_argo_rc:-0}" = 124 ]; then argo_pw='<not read — nothing answered>'; fi
-  # "(untrusted cert)" points at advice that is withheld in this state, so it would cite nothing.
-  harbor_url="${harbor_url% (untrusted cert)}"
-  argocd_url="${argocd_url/ (untrusted cert)/}"
-  # The cluster clause must agree with the Context line below it, so it says WHICH of the three it was.
-  case "${_cluster_state:-notasked}" in
-    noanswer) _cclause=', and the cluster API did not answer either' ;;
-    timeout)  _cclause=', and the cluster API did not answer in time either' ;;
-    unknown)  _cclause=' (and this report could not tell whether the cluster API answered)' ;;
-    *)
-      case "${_cluster_notasked_why:-unset}" in
-        nokubectl) _cclause=' (kubectl is not installed, so the cluster was not asked)' ;;
-        unset)     _cclause=' (KUBECONFIG is not set, so the cluster was not asked)' ;;
-        dns)       _cclause=" (the cluster's address could not be looked up on this machine, so it was not asked)" ;;
-        proxy)     _cclause=" (the connection failed at this machine's proxy, so the cluster was not asked)" ;;
-        noroute)   _cclause=' (this machine has no route to the cluster address, so it was not asked)' ;;
-        nofile)    _cclause=' (there is no kubeconfig file at KUBECONFIG, so the cluster was not asked)' ;;
-        *)         _cclause=' (this report had no usable kubeconfig to ask the cluster)' ;;
-      esac ;;
-  esac
-  printf '\n  %s\u26a0\ufe0f  NOTHING answered on this run%s.%s\n' "${_BOLD}${_RED}" "$_cclause" "${_RST}"
-  # A STORED address that survives a rebuild: it may be a previous lab's (the ingress paragraph this
-  # block replaces said so, and it is the right diagnosis when the lab was re-cut).
-  # The hedge covers the WHOLE list: ARGOCD_SERVER and HARBOR_URL are stored exactly like the ingress IP.
-  _sil="the ingress ${INGRESS_LB_IP:-?} (Gitea, Tekton, headlamp and the apps go through it)"
-  _unres=""
-  _ah="${ARGOCD_SERVER:-}"; [ -n "$_ah" ] || _ah="${argocd_url%% *}"
-  _ah="${_ah#https://}"; _ah="${_ah#http://}"; _ah="${_ah%%/*}"
-  case "$_reach_harbor_cell" in
-    silent)     _sil="${_sil}, Harbor ${HARBOR_URL:-}" ;;
-    unresolved) _unres="${HARBOR_URL:-}" ;;
-  esac
-  case "$_reach_argocd_cell" in
-    silent)     _sil="${_sil}, ArgoCD ${_ah}" ;;
-    unresolved) _unres="${_unres}${_unres:+, }${_ah}" ;;
-  esac
-  printf "      silent (stored addresses; after a rebuild they may be the previous lab's): %s\n" "$_sil"
-  if [ -n "$_unres" ]; then printf '      does not resolve on this machine: %s\n' "$_unres"; fi
-  printf '      The lab is still starting, is OFF, or this machine cannot reach it. Do this, in order:\n'
-  printf '        1. Check this machine can reach the lab network (VPN, route). If the lab was just\n'
-  printf '           started, wait and re-run make creds: its services come up after the cluster.\n'
-  printf '        2. Otherwise the lab is off: if you run it, start it; if not, ask whoever runs it.\n'
-  printf "           If it was REBUILT, the addresses and credentials in .env are the old lab's: get the new\n"
-  printf '           values (docs/scenario-1.md, or from your platform team per docs/scenario-2.md) first.\n'
-  _step=3
-  # Only when this report needed the token: the same `_sup_unread` list the banner prints. An expired
-  # token that nothing here reads is not a step.
-  if [ -n "$_sup_needed" ]; then
-    _rh="$(_renew_how)"
-    printf '        %s. Once it answers, renew the Supervisor token (it expired %s); this report needs it\n' "$_step" "${_SUP_DEAD_AT:-?}"
-    printf '           for %s:\n' "$_sup_needed"
-    printf '             %s\n' "${_rh#renew: }"
-    printf '           %s — do not retry blind.\n' "$(sso_lockout_note)"
-    _step=4
-  fi
-  printf '        %s. Re-run: make creds\n' "$_step"
-  # NOT "every command below": in several lab-off renders no command follows, and in others an
-  # OFFLINE one does (make state-show). URLs and logins are what always follow (adversary, ran-it).
-  printf '      Every URL and login below needs the lab answering.\n'
-fi
 # ── CAN A RENEW WORK AT ALL? Ask the Supervisor, without a credential, BEFORE naming the command ──
 # MEASURED 2026-10-08 on a lab that had been destroyed and rebuilt: the banner below said "the
 # recorded ingress did not answer either — check the lab is UP" while the same report showed Harbor
@@ -1396,8 +1333,221 @@ _sup_anchor_probe() {
     *) printf 'skip' ;;
   esac
 }
-# Set here, not inside the banner: the ingress paragraph further down reads it too.
+# _sup_off_probe <ca-file>: the same question, asked from the powered-off block. Prints one of
+# skip|silent|answers|verifies|stale|dates|cadates.
+# MEASURED 2026-10-10 on a lab restored to a bare state: the Supervisor was up and answering, nothing
+# this repo had installed existed any more, and the block below told the reader to start a lab that
+# was running. The powered-off signature is built from the ingress, Harbor, ArgoCD and the guest
+# cluster API: all four are things an INSTALL put there, so it cannot tell "the lab is off" from
+# "the lab is up and the install is gone". The Supervisor is the one address in .env that is the
+# lab itself.
+#   skip    not asked: probes forbidden, or no SUPERVISOR_HOST (a tenant may have none)
+#   silent  port 443 did not accept a connection in time (refused, no route, black hole), or it
+#           accepted one and the TLS handshake then got no answer in time
+#   answers port 443 accepted a connection and the anchor check gave no verdict: no CA file stored,
+#           no openssl here, or one of the login's own verdicts (wrong name, no certificate,
+#           unusable CA file). It is "something is listening there", nothing more.
+#   verifies|stale|dates|cadates  _sup_anchor_probe's, unchanged
+# skip and silent render the block exactly as it was before this check existed.
+# The TCP connect comes FIRST and is the only cost when nothing is there: one bounded connect
+# (CREDS_PROBE_TIMEOUT_SECONDS, 2s by default) instead of a TLS handshake's. It sends nothing; the
+# handshakes that follow an accept send no credential. Nothing here asks vCenter: it answers
+# minutes before the Supervisor during a start, it is on another network, and a tenant has none.
+_sup_off_probe() {
+  local _ca="${1:-}" _ov=""
+  if [ "$_no_probe_snapshot" = 1 ] || [ -z "${SUPERVISOR_HOST:-}" ]; then printf 'skip'; return 0; fi
+  if ! tls_port_accepts "$SUPERVISOR_HOST" 443 "${CREDS_PROBE_TIMEOUT_SECONDS:-2}"; then
+    printf 'silent'; return 0
+  fi
+  _ov="$(_sup_anchor_probe "$_ca")"
+  case "$_ov" in
+    verifies|stale|dates|cadates|silent) printf '%s' "$_ov" ;;
+    *)                                   printf 'answers' ;;
+  esac
+}
+# Set here, not inside the banner: the ingress paragraph further down reads it too, and so does
+# the powered-off block, which sets it from _sup_off_probe. Nothing below this line resets it.
 _sup_anchor=skip; _sup_ca=""
+# _off_up: 1 when the powered-off signature holds AND the Supervisor answered on this run. Every
+# sentence that says "the lab did not answer" reads it; `_pre_off` and its suppressions do not change.
+_off_up=0
+if [ "$_pre_off" = 1 ]; then
+  _sup_ca="$(_sup_anchor_ca)"
+  _sup_anchor="$(_sup_off_probe "$_sup_ca")"
+  [ "${CREDS_TOKEN:-0}" = 1 ] && printf 'lab-off-sup: %s\n' "$_sup_anchor"
+  case "$_sup_anchor" in stale|verifies|dates|cadates|answers) _off_up=1 ;; esac
+  # Cells explaining WHY a value was not read are noise when nothing answered. Key on the FAILURE
+  # CODE, never on the cell text: a revealed secret can look like anything.
+  if [ "${_argo_rc:-0}" = 124 ]; then
+    if [ "$_off_up" = 1 ]; then argo_pw='<not read — the install did not answer>'
+    else argo_pw='<not read — nothing answered>'; fi
+  fi
+  # "(untrusted cert)" points at advice that is withheld in this state, so it would cite nothing.
+  harbor_url="${harbor_url% (untrusted cert)}"
+  argocd_url="${argocd_url/ (untrusted cert)/}"
+  # The cluster clause must agree with the Context line below it, so it says WHICH of the three it was.
+  case "${_cluster_state:-notasked}" in
+    noanswer) _cclause=', and the cluster API did not answer either' ;;
+    timeout)  _cclause=', and the cluster API did not answer in time either' ;;
+    unknown)  _cclause=' (and this report could not tell whether the cluster API answered)' ;;
+    *)
+      case "${_cluster_notasked_why:-unset}" in
+        nokubectl) _cclause=' (kubectl is not installed, so the cluster was not asked)' ;;
+        unset)     _cclause=' (KUBECONFIG is not set, so the cluster was not asked)' ;;
+        dns)       _cclause=" (the cluster's address could not be looked up on this machine, so it was not asked)" ;;
+        proxy)     _cclause=" (the connection failed at this machine's proxy, so the cluster was not asked)" ;;
+        noroute)   _cclause=' (this machine has no route to the cluster address, so it was not asked)' ;;
+        nofile)    _cclause=' (there is no kubeconfig file at KUBECONFIG, so the cluster was not asked)' ;;
+        *)         _cclause=' (this report had no usable kubeconfig to ask the cluster)' ;;
+      esac ;;
+  esac
+  # A STORED address that survives a rebuild: it may be a previous lab's (the ingress paragraph this
+  # block replaces said so, and it is the right diagnosis when the lab was re-cut).
+  # The hedge covers the WHOLE list: ARGOCD_SERVER and HARBOR_URL are stored exactly like the ingress IP.
+  # Built BEFORE the headline: all three arms below print it.
+  _sil="the ingress ${INGRESS_LB_IP:-?} (Gitea, Tekton, headlamp and the apps go through it)"
+  _unres=""
+  _ah="${ARGOCD_SERVER:-}"; [ -n "$_ah" ] || _ah="${argocd_url%% *}"
+  _ah="${_ah#https://}"; _ah="${_ah#http://}"; _ah="${_ah%%/*}"
+  case "$_reach_harbor_cell" in
+    silent)     _sil="${_sil}, Harbor ${HARBOR_URL:-}" ;;
+    unresolved) _unres="${HARBOR_URL:-}" ;;
+  esac
+  case "$_reach_argocd_cell" in
+    silent)     _sil="${_sil}, ArgoCD ${_ah}" ;;
+    unresolved) _unres="${_unres}${_unres:+, }${_ah}" ;;
+  esac
+  # ── THREE ARMS, on what the Supervisor did (`_sup_anchor`, from _sup_off_probe above) ───────────
+  #   stale                            it answers, and it is NOT the Supervisor this repo logged in to
+  #   verifies|dates|cadates|answers   it answers: the lab is not off, and "start it" would be wrong
+  #   skip|silent                      the block as it was before the check existed, byte for byte
+  # Seven sentences in the last arm say "off" or "nothing". Each has its counterpart in the first
+  # two, and the three further down that key on `_off_up` (the Context line, the ArgoCD cell above,
+  # the headlamp cell) are the rest of the same set.
+  if [ "$_sup_anchor" = stale ]; then
+    printf '\n  %s\u26a0\ufe0f  The lab is UP, but nothing this repo installed on it answered%s.%s\n' "${_BOLD}${_RED}" "$_cclause" "${_RST}"
+    printf '      answered: the Supervisor %s, with a certificate the CA stored at\n' "$SUPERVISOR_HOST"
+    printf '                %s does NOT verify.\n' "$_sup_ca"
+    printf '                It is a DIFFERENT Supervisor from the one this repo logged in to: usually a lab that was\n'
+    printf '                destroyed and rebuilt, or restored from another build.\n'
+    printf "      silent (stored addresses; they are probably the previous lab's): %s\n" "$_sil"
+    if [ -n "$_unres" ]; then printf '      does not resolve on this machine: %s\n' "$_unres"; fi
+    printf '      Do not start the lab, and do not run make creds-renew (it stops before it sends the password).\n'
+    printf "      The service addresses and credentials below are probably the previous install's. Do this:\n"
+    supervisor_repin_how "$SUPERVISOR_HOST" "$_sup_ca" | sed 's/^/        /'
+    printf '        Then: make creds\n'
+    printf '      Every URL and login below except the Lab access rows needs what this repo installed.\n'
+  elif [ "$_off_up" = 1 ]; then
+    # `answers` is a TCP accept with no certificate judged: the headline must not call it the
+    # Supervisor. The other verdicts here read a certificate against the stored CA.
+    if [ "$_sup_anchor" = answers ]; then
+      printf '\n  %s\u26a0\ufe0f  Something answered at the Supervisor address %s, but nothing this repo installed did%s.%s\n' "${_BOLD}${_RED}" "$SUPERVISOR_HOST" "$_cclause" "${_RST}"
+    else
+      printf '\n  %s\u26a0\ufe0f  The Supervisor answered, but nothing this repo installed did%s.%s\n' "${_BOLD}${_RED}" "$_cclause" "${_RST}"
+    fi
+    case "$_sup_anchor" in
+      verifies)
+        printf '      answered: the Supervisor %s, and the CA stored at %s\n' "$SUPERVISOR_HOST" "$_sup_ca"
+        printf '                verifies it, so the lab is not off and this machine reaches it.\n' ;;
+      dates)
+        printf '      answered: the Supervisor %s, and the CA stored at %s\n' "$SUPERVISOR_HOST" "$_sup_ca"
+        printf "                is the right one (the certificate's dates are not valid on this machine: step 2),\n"
+        printf '                so the lab is not off and this machine reaches it.\n' ;;
+      cadates)
+        printf '      answered: the Supervisor %s; the CA stored at %s\n' "$SUPERVISOR_HOST" "$_sup_ca"
+        printf '                is outside its own dates (step 2), and with the dates ignored it verifies the\n'
+        printf '                certificate, so the lab is not off and this machine reaches it.\n' ;;
+      *)
+        # TCP only. No "the lab is not off": nothing here says WHAT accepted the connection.
+        printf '      answered: the Supervisor address %s accepted a connection on port 443. This report\n' "$SUPERVISOR_HOST"
+        printf '                could not check which Supervisor it is, so that is all it knows: something is\n'
+        printf '                running at that address, and this machine reaches it.\n' ;;
+    esac
+    printf '      silent (stored addresses): %s\n' "$_sil"
+    if [ -n "$_unres" ]; then printf '      does not resolve on this machine: %s\n' "$_unres"; fi
+    printf '      This report does not log in to the Supervisor, so it cannot tell which of these it is:\n'
+    printf '        - the lab was just started and the guest cluster is still coming up (it starts after the Supervisor);\n'
+    if [ -n "${VKS_CLUSTER_NAME:-}" ]; then
+      printf "        - the guest cluster '%s' was deleted, or the lab was restored to a point before the install;\n" "$VKS_CLUSTER_NAME"
+    else
+      printf '        - the guest cluster was deleted, or the lab was restored to a point before the install;\n'
+    fi
+    printf "        - this machine reaches the Supervisor's address but not the guest cluster's.\n"
+    printf '      Do this, in order:\n'
+    printf '        1. If the lab was just started, wait a few minutes and re-run: make creds\n'
+    if [ "$_sup_anchor" = dates ]; then
+      # The existing advice arm, in place of a login: no login can work until the dates are valid.
+      printf "        2. Otherwise settle the certificate's dates first. A Supervisor login stops on them before it\n"
+      printf '           sends the password, so do not run make creds-renew yet:\n'
+      supervisor_dates_how "$SUPERVISOR_HOST" "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" | sed 's/^/           /'
+      printf '           Once the time is inside those two dates: make creds\n'
+    elif [ "$_sup_anchor" = cadates ]; then
+      printf '        2. Otherwise replace the stored CA file first. A Supervisor login stops on it before it\n'
+      printf '           sends the password, so do not run make creds-renew yet:\n'
+      tls_ca_file_dates_advice "$_sup_ca" "$SUPERVISOR_HOST" | sed 's/^/           /'
+      supervisor_repin_how "$SUPERVISOR_HOST" "$_sup_ca" | sed 's/^/           /'
+      printf '           After the login: make creds\n'
+    else
+      # `make vks-cluster-status` (26-vks-cluster-status.sh) asks the Supervisor for the Cluster by
+      # name. It needs both names and a Supervisor kubeconfig whose token is still valid, so each
+      # of those is said HERE, before the reader runs it and is told by the command instead.
+      if [ -z "${VKS_NAMESPACE:-}" ] || [ -z "${VKS_CLUSTER_NAME:-}" ]; then
+        printf '        2. Otherwise ask whoever runs the lab whether the guest cluster still exists. (This repo can ask\n'
+        printf '           the Supervisor itself with make vks-cluster-status, once VKS_NAMESPACE and VKS_CLUSTER_NAME\n'
+        printf '           are both set in .env.)\n'
+      elif [ "${_SUP_DEAD:-0}" = 1 ]; then
+        _rh="$(_renew_how)"
+        printf '        2. Otherwise ask the Supervisor whether the guest cluster exists. The Supervisor token this\n'
+        printf '           repo has stored expired %s, so renew it first:\n' "${_SUP_DEAD_AT:-?}"
+        printf '             %s\n' "${_rh#renew: }"
+        printf '           %s — do not retry blind.\n' "$(sso_lockout_note)"
+        printf '           Then: make vks-cluster-status\n'
+      elif [ -z "$(supervisor_kubeconfig 2>/dev/null || true)" ]; then
+        printf '        2. Otherwise ask the Supervisor whether the guest cluster exists. This repo has no Supervisor\n'
+        printf '           login stored, so log in first. This command sends your SSO password; if it is rejected, STOP:\n'
+        printf '             VKS_AUTH_METHOD=vcf make vks-login\n'
+        printf '           %s — do not retry blind.\n' "$(sso_lockout_note)"
+        printf '           Then: make vks-cluster-status\n'
+      else
+        printf '        2. Otherwise ask the Supervisor whether the guest cluster exists: make vks-cluster-status\n'
+      fi
+      # "DOES NOT EXIST" is what 26-vks-cluster-status.sh prints for a Cluster the Supervisor answered
+      # NotFound for. With the names unset step 2 named no command, so there is no "it" to quote.
+      if [ -z "${VKS_NAMESPACE:-}" ] || [ -z "${VKS_CLUSTER_NAME:-}" ]; then
+        printf '        3. If the guest cluster is gone, start again at docs/scenario-1.md "6. Guest cluster"\n'
+      else
+        printf '        3. If it prints DOES NOT EXIST, start again at docs/scenario-1.md "6. Guest cluster"\n'
+      fi
+      printf '           (or "2. The vSphere Namespace" if the namespace is gone too). Not your lab? Ask whoever runs it.\n'
+    fi
+    printf '      Every URL and login below except the Lab access rows needs what this repo installed.\n'
+  else
+  printf '\n  %s\u26a0\ufe0f  NOTHING answered on this run%s.%s\n' "${_BOLD}${_RED}" "$_cclause" "${_RST}"
+  printf "      silent (stored addresses; after a rebuild they may be the previous lab's): %s\n" "$_sil"
+  if [ -n "$_unres" ]; then printf '      does not resolve on this machine: %s\n' "$_unres"; fi
+  printf '      The lab is still starting, is OFF, or this machine cannot reach it. Do this, in order:\n'
+  printf '        1. Check this machine can reach the lab network (VPN, route). If the lab was just\n'
+  printf '           started, wait and re-run make creds: its services come up after the cluster.\n'
+  printf '        2. Otherwise the lab is off: if you run it, start it; if not, ask whoever runs it.\n'
+  printf "           If it was REBUILT, the addresses and credentials in .env are the old lab's: get the new\n"
+  printf '           values (docs/scenario-1.md, or from your platform team per docs/scenario-2.md) first.\n'
+  _step=3
+  # Only when this report needed the token: the same `_sup_unread` list the banner prints. An expired
+  # token that nothing here reads is not a step.
+  if [ -n "$_sup_needed" ]; then
+    _rh="$(_renew_how)"
+    printf '        %s. Once it answers, renew the Supervisor token (it expired %s); this report needs it\n' "$_step" "${_SUP_DEAD_AT:-?}"
+    printf '           for %s:\n' "$_sup_needed"
+    printf '             %s\n' "${_rh#renew: }"
+    printf '           %s — do not retry blind.\n' "$(sso_lockout_note)"
+    _step=4
+  fi
+  printf '        %s. Re-run: make creds\n' "$_step"
+  # NOT "every command below": in several lab-off renders no command follows, and in others an
+  # OFFLINE one does (make state-show). URLs and logins are what always follow (adversary, ran-it).
+  printf '      Every URL and login below needs the lab answering.\n'
+  fi
+fi
 if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
   # F5: the old headline said "every <not read> below needs it" and MEASURED to ZERO referents in
   # a reachable state, while nine unrelated `<not read — …>` variants compete for the reader's eye.
@@ -1475,7 +1625,8 @@ if [ "$_pre_off" != 1 ] && [ -n "$_sup_unread" ]; then
 fi
 printf '\n  Context\n'
 case "$_prov" in
-  DISCOVERED) if [ "${_pre_off:-0}" = 1 ]; then printf '    values below : install-time discovery for this cluster; the lab did not answer, so treat them as last known, not current. Reachable is probed live.\n'
+  DISCOVERED) if [ "${_off_up:-0}" = 1 ]; then printf '    values below : install-time discovery for this cluster; nothing this repo installed answered, so treat them as last known, not current. Reachable is probed live.\n'
+              elif [ "${_pre_off:-0}" = 1 ]; then printf '    values below : install-time discovery for this cluster; the lab did not answer, so treat them as last known, not current. Reachable is probed live.\n'
               else printf '    values below : read from the cluster you are talking to now\n'; fi ;;
   # ⚠️ REWORDED 2026-09-07. It used to read "saved by an earlier run, and not tied to this cluster
   # — some may be from a lab that no longer exists." Every word of that is defensible and the whole
@@ -1536,6 +1687,8 @@ case "$_prov" in
                 # line — "live reads … probed live" contradicted it (implementation review, measured).
                 if [ "$_no_probe_snapshot" = 1 ]; then
                   printf '    values below : your .env + install-time discovery — nothing was read live (CREDS_NO_PROBE=1).\n'
+                elif [ "${_off_up:-0}" = 1 ]; then
+                  printf '    values below : your .env + install-time discovery; nothing this repo installed answered, so treat them as last known, not current. Reachable is probed live.\n'
                 elif [ "${_pre_off:-0}" = 1 ]; then
                   printf '    values below : your .env + install-time discovery; the lab did not answer, so treat them as last known, not current. Reachable is probed live.\n'
                 else
@@ -1595,6 +1748,8 @@ case "$_prov" in
                 # is false. (2026-09-15: the headlamp-only clause was cut; it named one of four.)
                 if [ "$_no_probe_snapshot" = 1 ]; then
                   printf '    values below : your .env — nothing was read live (CREDS_NO_PROBE=1).\n'
+                elif [ "${_off_up:-0}" = 1 ]; then
+                  printf '    values below : your .env; nothing this repo installed answered, so treat them as last known, not current. Reachable is probed live.\n'
                 elif [ "${_pre_off:-0}" = 1 ]; then
                   printf '    values below : your .env; the lab did not answer, so treat them as last known, not current. Reachable is probed live.\n'
                 else
@@ -1706,7 +1861,8 @@ elif [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
   echo "      Do not add /etc/hosts entries for it yet — a hosts entry pointing at nothing sends you"
   # ⚠️ NOT "check the lab is up" when the Supervisor has just ANSWERED this run (the banner at the
   # top said so): that clause sent the reader to check a lab the same report shows is up. Only the
-  # clause changes; `_sup_anchor` is `skip` unless the expired-token banner ran its check.
+  # clause changes; `_sup_anchor` is `skip` unless the expired-token banner ran its check. (The
+  # powered-off block sets it too, and this paragraph is not printed then: the first arm above.)
   case "${_sup_anchor:-skip}" in
     stale|dates|cadates|verifies)
   echo "      to debug your browser. The Supervisor answered on this run, so the lab is UP: settle the"
@@ -2183,7 +2339,8 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
   elif [ "${_hl_rc:-0}" = 124 ]; then
     # OUR budget, not the lab's. Saying "is headlamp installed?" here is a claim about the world
     # made on the strength of us not waiting -- and its remedy reinstalls a working component.
-    if [ "${_pre_off:-0}" = 1 ]; then headlamp_tok='<not read — nothing answered>'
+    if [ "${_off_up:-0}" = 1 ]; then headlamp_tok='<not read — the install did not answer>'
+    elif [ "${_pre_off:-0}" = 1 ]; then headlamp_tok='<not read — nothing answered>'
     else headlamp_tok="<not read — no answer within this report's ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s limit>"; fi
   elif [ "${_hl_rc:-0}" = 137 ]; then
     headlamp_tok="<could not ask — the probe was KILLED (rc=137)>"
@@ -2218,7 +2375,8 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
             # naming an SSO bind for a credential we did not test could spend a lockout attempt.
             headlamp_tok="<auth failed — the GUEST kubeconfig was rejected for this namespace>" ;;
           UNREACHABLE)
-            if [ "${_pre_off:-0}" = 1 ]; then headlamp_tok='<not read — nothing answered>'
+            if [ "${_off_up:-0}" = 1 ]; then headlamp_tok='<not read — the install did not answer>'
+            elif [ "${_pre_off:-0}" = 1 ]; then headlamp_tok='<not read — nothing answered>'
             else headlamp_tok="<unreachable — the guest cluster did not answer>"; fi ;;
           STALE_CA|PLAINTEXT|NO_KUBE_TARGET|KUBECONFIG_UNUSABLE)
             headlamp_tok="<not read — the guest kubeconfig is unusable for this call>" ;;
