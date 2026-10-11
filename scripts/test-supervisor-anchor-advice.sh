@@ -187,6 +187,7 @@ else ok "repin: no empty quoted name when the namespace and cluster are unset"; 
 echo "== 2. the access report's expired-token banner =="
 _b64u() { printf '%s' "$1" | { base64 -w0 2>/dev/null || base64 | tr -d '\n'; } | tr -d '=' | tr '+/' '-_'; }
 EXPIRED_TOKEN="h.$(_b64u "{\"exp\":$(( $(date +%s) - 3600 ))}").s"
+VALID_TOKEN="h.$(_b64u "{\"exp\":$(( $(date +%s) + 86400 ))}").s"
 DEAD_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()' 2>/dev/null || true)"
 [ -n "$DEAD_PORT" ] || { bad "harness: could not pick a closed port (python3 missing?)"; DEAD_PORT=1; }
 
@@ -198,12 +199,24 @@ DEAD_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0))
 #   X509RC   the exit status of `openssl x509` (1 = the anchor file does not parse)
 #   NOPROBE  CREDS_NO_PROBE for the run
 #   VERIFYOUT what `openssl verify` prints (the anchor FILE's own date check reads it; empty = in date)
-knobs() { SC2=""; X509RC=0; NOPROBE=0; VERIFYOUT=""; }
+# Five more, for the nothing-answered block (section 2b):
+#   OFF      1 = the powered-off signature holds: Harbor is silent too (curl completes nothing) and
+#            the guest cluster API refuses the connection. 0 = Harbor serves, as in the measured report.
+#   TCPRC    what the TCP connect to ${HOST}:443 returns (0 accepted, 1 refused). The address is in a
+#            documentation range and 443 cannot be bound here, so the `timeout` stand-in answers for
+#            that ONE connect and records it; every other bounded command still runs for real.
+#   TOKEN    expired | valid: the Supervisor token in the stored kubeconfig
+#   SUPKC    yes | no: whether a Supervisor kubeconfig is stored at all
+#   NAMES    yes | no: whether VKS_NAMESPACE and VKS_CLUSTER_NAME are in .env
+#   HANG     argocd | headlamp: that one read hangs past this report's limit (it then ends 124)
+knobs() { SC2=""; X509RC=0; NOPROBE=0; VERIFYOUT=""; OFF=0; TCPRC=0; TOKEN=expired; SUPKC=yes; NAMES=yes; HANG=no; }
 CA_EXPIRED_OUT='error 10 at 0 depth lookup: certificate has expired'
 CA_DATES_HEAD='The CA file itself is outside its validity period on this machine:'
 knobs
 creds_render() {
-  local sc="$1" scrc="$2" ing="$3" extra="${4:-}" anchor="${5:-yes}" t="$T/creds"
+  local sc="$1" scrc="$2" ing="$3" extra="${4:-}" anchor="${5:-yes}" t="$T/creds" tok supkc
+  tok="$EXPIRED_TOKEN"; [ "$TOKEN" = valid ] && tok="$VALID_TOKEN"
+  supkc="$t/sup"; [ "$SUPKC" = no ] && supkc=""
   rm -rf "$t"; mkdir -p "$t/bin" "$t/secrets"; : > "$T/creds.log"
   cp .env.example "$t/.env.example"
   [ "$anchor" = yes ] && printf 'stand-in anchor\n' > "$t/secrets/supervisor-ca.crt"
@@ -211,7 +224,8 @@ creds_render() {
   printf '%s\n' "${SC2:-$sc}" > "$t/sclient-nct.txt"
   {
     printf "HARBOR_URL=harbor.lab.example\nHARBOR_USERNAME='robot\$probe'\nHARBOR_PASSWORD=x\n"
-    printf 'VCENTER_HOST=%s\nVKS_NAMESPACE=%s\nVKS_CLUSTER_NAME=%s\n' "$VC" "$NS" "$GC"
+    printf 'VCENTER_HOST=%s\n' "$VC"
+    [ "$NAMES" = yes ] && printf 'VKS_NAMESPACE=%s\nVKS_CLUSTER_NAME=%s\n' "$NS" "$GC"
     printf "VCF_CLI_VSPHERE_PASSWORD='%s'\n" "$CANARY"
     [ "$ing" = silent ] && printf 'INGRESS_LB_IP=127.0.0.1\nINGRESS_PROBE_PORT=%s\n' "$DEAD_PORT"
     [ -n "$extra" ] && printf '%s\n' "$extra"
@@ -219,15 +233,23 @@ creds_render() {
   : > "$t/kc"; printf 'apiVersion: v1\nkind: Config\n' > "$t/sup"
   # kubectl: an EXPIRED Supervisor token, and an Unauthorized answer to every read.
   { printf '#!/bin/sh\ncase "$*" in\n'
-    printf '  *user.token*) printf %%s %s; exit 0 ;;\n' "'$EXPIRED_TOKEN'"
+    [ "$HANG" = argocd ] && printf '  *argocd-initial-admin-secret*) sleep 6; exit 0 ;;\n'
+    [ "$HANG" = headlamp ] && printf '  *"create token"*) sleep 6; exit 0 ;;\n'
+    printf '  *user.token*) printf %%s %s; exit 0 ;;\n' "'$tok'"
     printf '  *current-context*) echo stub-ctx; exit 0 ;;\n'
-    printf '  *version*) exit 0 ;;\n'
+    if [ "$OFF" = 1 ]; then
+      # The guest cluster is gone, so its API refuses the headlamp token request too.
+      printf '  *version*|*"create token"*) echo "The connection to the server 192.0.2.1:6443 was refused - did you specify the right host or port?" >&2; exit 1 ;;\n'
+    else
+      printf '  *version*) exit 0 ;;\n'
+    fi
     printf '  *"get ns"*|*"get secret"*) echo "error: You must be logged in to the server (Unauthorized)" >&2; exit 1 ;;\n'
     printf 'esac\nexit 0\n'; } > "$t/bin/kubectl"
   # Harbor resolves and serves, as it did in the measured report (so the report is NOT "nothing answered").
   # shellcheck disable=SC2016
   printf '#!/bin/sh\nprintf "10.0.0.1 %%s\\n" "$2"\n' > "$t/bin/getent"
-  printf '#!/bin/sh\nprintf 200\n' > "$t/bin/curl"
+  if [ "$OFF" = 1 ]; then printf '#!/bin/sh\nprintf 000\nexit 7\n' > "$t/bin/curl"
+  else printf '#!/bin/sh\nprintf 200\n' > "$t/bin/curl"; fi
   # openssl: logs its argv and how many bytes it was fed, then replays a transcript: one for an
   # ordinary handshake, ANOTHER when -no_check_time is on the command line.
   cat > "$t/bin/openssl" <<STUB
@@ -251,13 +273,20 @@ STUB
   # The budget is the first argument that is not `--foreground` (lib/tls.sh passes that flag
   # first when this machine's timeout has it).
   { printf '#!/bin/sh\nb="$1"; [ "$b" = "--foreground" ] && b="$2"\ncase "$*" in *"openssl s_client"*) printf "timeout-budget=%%s\\n" "$b" >> "%s" ;; esac\n' "$T/creds.log"
+    # The ONE connect this stand-in answers itself: tls_port_accepts to the Supervisor on 443.
+    # shellcheck disable=SC2016
+    printf 'case "$*" in *"/dev/tcp/"*" _ %s 443") printf "tcp-connect=%%s budget=%%s\\n" "%s:443" "$b" >> "%s"; exit %s ;; esac\n' \
+      "$HOST" "$HOST" "$T/creds.log" "$TCPRC"
     printf 'exec "%s" "$@"\n' "$REAL_TIMEOUT"; } > "$t/bin/timeout"
   # vcf: must never run from a read-only report. It only records that it did.
   # shellcheck disable=SC2016
   printf '#!/bin/sh\nprintf "vcf %%s\\n" "$*" >> "%s"\nexit 1\n' "$T/creds.log" > "$t/bin/vcf"
   chmod +x "$t/bin/"*
-  ( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
-      KUBECONFIG="$t/kc" VKS_SUPERVISOR_KUBECONFIG="$t/sup" VKS_LAB_STATE_DIR="$t/no-lab" \
+  # Proxies cleared: a refused cluster connection is judged against the proxy environment, and the
+  # machine running the suite must not decide whether the powered-off signature holds.
+  ( cd "$t" && env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u NO_PROXY -u no_proxy \
+      PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+      KUBECONFIG="$t/kc" VKS_SUPERVISOR_KUBECONFIG="$supkc" VKS_LAB_STATE_DIR="$t/no-lab" \
       CREDS_TOKEN=1 CREDS_NO_PROBE="$NOPROBE" "${REPO}/scripts/creds.sh" 2>/dev/null )
 }
 banner() { sed -n '/Supervisor token EXPIRED/,/^  Context$/p' <<< "$1"; }
@@ -467,6 +496,286 @@ for _pv in '0 verifies' '2 silent' '6 dates' '7 cadates' '3 skip' '4 skip' '5 sk
   if [ "$_pc" = "${_pv#* } called=1" ]; then ok "probe: verdict ${_pv%% *} -> ${_pv#* }"
   else bad "probe: verdict ${_pv%% *} should read '${_pv#* }', got '${_pc}'"; fi
 done
+
+# ── 2b. the nothing-answered block, when the Supervisor DOES answer ──────────────────────────────
+# MEASURED 2026-10-10 on a lab restored to a bare state: the Supervisor was up, nothing this repo
+# had installed existed any more, and the report said "NOTHING answered ... Otherwise the lab is
+# off: if you run it, start it". Every case here holds the powered-off signature (`lab-off: 1`:
+# the ingress refuses, Harbor completes nothing, the guest cluster API refuses) and varies only
+# what the Supervisor does.
+# WHAT THIS DOES NOT PROVE: that a real Supervisor accepts a connection on 443 (the connect is a
+# stand-in here; tls_port_accepts itself runs against real listeners in
+# test-harbor-ca-refetch-advice.sh and test-url-host-port.sh), nor which of these verdicts a
+# restored lab really produces.
+echo "== 2b. the nothing-answered block, by what the Supervisor did =="
+# The block: from the token line that precedes it to the Context heading.
+top() { sed -n '/^lab-off-sup:/,/^  Context$/p' <<< "$1"; }
+# off_render <creds_render args>: the report is left in OFF_OUT and its exit status in OFF_RC (not
+# printed: a command substitution would lose the status).
+off_render() { OFF=1; OFF_RC=0; OFF_OUT="$(creds_render "$@")" || OFF_RC=$?; OFF=0; }
+OLD_HEAD='NOTHING answered on this run'
+UP_HEAD='The Supervisor answered, but nothing this repo installed did, and the cluster API did not answer either.'
+ANS_HEAD="Something answered at the Supervisor address ${HOST}, but nothing this repo installed did, and the cluster API did not answer either."
+STALE_HEAD='The lab is UP, but nothing this repo installed on it answered, and the cluster API did not answer either.'
+CLOSE_OLD='Every URL and login below needs the lab answering.'
+CLOSE_NEW='Every URL and login below except the Lab access rows needs what this repo installed.'
+STATUS='make vks-cluster-status'
+# The seven sentences of the old block that say "off" or "nothing", plus the Context line's clause.
+# Each must be ABSENT from an arm in which the Supervisor answered.
+old_absent() {  # old_absent <label> <report>
+  local label="$1" o="$2" s miss=""
+  for s in "$OLD_HEAD" 'The lab is still starting, is OFF, or this machine cannot reach it' \
+           'Check this machine can reach the lab network' 'Otherwise the lab is off' \
+           'Once it answers, renew the Supervisor token' "$CLOSE_OLD" 'nothing answered>' \
+           'the lab did not answer'; do
+    has "$o" "$s" && miss="${miss}[${s}] "
+  done
+  if [ -z "$miss" ]; then ok "${label}: none of the sentences that say the lab is off or that nothing answered is printed"
+  else bad "${label}: still printed although the Supervisor answered: ${miss}"; fi
+}
+# The suppressions the powered-off signature already makes must hold in every arm.
+off_kept() {  # off_kept <label> <report> <want lab-off-sup verdict>
+  local label="$1" o="$2" want="$3"
+  if hasline "$o" 'lab-off: 1' && hasline "$o" "lab-off-sup: ${want}"; then ok "${label}: the powered-off signature holds, and the Supervisor's verdict is '${want}'"
+  else bad "${label}: want 'lab-off: 1' and 'lab-off-sup: ${want}', got '$(command grep '^lab-off' <<< "$o" | tr '\n' ' ')' — every case below is vacuous"; fi
+  if has "$o" 'Supervisor token EXPIRED' || has "$o" 'sup-anchor:' || has "$o" 'is NOT ANSWERING on port' || has "$o" 're-check: make'; then
+    bad "${label}: something the powered-off signature withholds is printed (the token banner, the ingress paragraph or the re-check line)"
+  else ok "${label}: what the powered-off signature withholds is still withheld"; fi
+}
+
+# -- stale: it answers, and it is not the Supervisor this repo logged in to --
+off_render "$SC_STALE" 0 silent "$ANCHOR_ENV"; out="$OFF_OUT"; tb="$(top "$out")"; lg="$(cat "$T/creds.log")"
+off_kept "off+stale" "$out" stale
+if has "$tb" "$STALE_HEAD"; then ok "off+stale: the headline says the lab is UP and that nothing this repo installed on it answered"
+else bad "off+stale: the headline is not '$STALE_HEAD'"; fi
+old_absent "off+stale" "$out"
+if hasflat "$tb" "answered: the Supervisor ${HOST}, with a certificate the CA stored at ./secrets/supervisor-ca.crt does NOT verify." \
+   && hasflat "$tb" 'It is a DIFFERENT Supervisor from the one this repo logged in to: usually a lab that was destroyed and rebuilt, or restored from another build.'; then
+  ok "off+stale: names the Supervisor that answered, the CA file, and that it is a different Supervisor"
+else bad "off+stale: does not say which Supervisor answered, with which CA file, or that it is a different one"; fi
+if has "$tb" "silent (stored addresses; they are probably the previous lab's): the ingress 127.0.0.1" && has "$tb" 'Harbor harbor.lab.example'; then
+  ok "off+stale: lists the silent stored addresses as probably the previous lab's"
+else bad "off+stale: the silent list (the ingress and Harbor, probably the previous lab's) is missing"; fi
+if has "$tb" 'Do not start the lab, and do not run make creds-renew (it stops before it sends the password).' \
+   && ! has "$tb" "$RENEW" && ! has "$tb" "$STATUS"; then ok "off+stale: says not to start the lab and not to renew, and offers neither a renew nor a cluster read"
+else bad "off+stale: 'do not start the lab / do not renew' is missing, or a renew or ${STATUS} is offered"; fi
+if hasline "$tb" '          make fetch-supervisor-ca' \
+   && hasline "$tb" '          openssl x509 -in ./secrets/supervisor-ca.crt -noout -fingerprint -sha256' \
+   && hasline "$tb" '          VKS_AUTH_METHOD=vcf make vks-login' && hasline "$tb" '        Then: make creds'; then
+  ok "off+stale: prints the re-pin commands, each a whole line with the real file, then 'make creds'"
+else bad "off+stale: the re-pin commands or the closing 'Then: make creds' are missing"; fi
+if has "$tb" "$CLOSE_NEW"; then ok "off+stale: the closing line excepts the Lab access rows"
+else bad "off+stale: the closing line is not '$CLOSE_NEW'"; fi
+if command grep -q '[<>]' <<< "$tb"; then bad "off+stale: a <placeholder> is printed in the block: $(command grep '[<>]' <<< "$tb" | head -1)"
+else ok "off+stale: no <placeholder> in the block"; fi
+if has "$out" 'nothing this repo installed answered, so treat them as last known'; then ok "off+stale: the Context line says what did not answer (the install), not 'the lab'"
+else bad "off+stale: the Context line does not say 'nothing this repo installed answered'"; fi
+# The check itself, on this path: one connect first, then the two handshakes; nothing sent; no login.
+if [ "$(command grep -c "^tcp-connect=${HOST}:443 budget=2$" <<< "$lg" || true)" = 1 ] \
+   && [ "$(command grep -c "^openssl s_client -connect ${HOST}:443" <<< "$lg" || true)" = 2 ]; then
+  ok "off check: one TCP connect to ${HOST}:443 (2s), then the two handshakes"
+else bad "off check: want 1 connect and 2 handshakes to ${HOST}:443, got: $(command grep -c '^tcp-connect' <<< "$lg" || true) / $(command grep -c '^openssl s_client' <<< "$lg" || true)"; fi
+if [ "$(command grep -cx 's_client-stdin-bytes=0' <<< "$lg" || true)" = 2 ] && ! has "$lg" "$CANARY" && ! command grep -q '^vcf ' <<< "$lg" \
+   && ! has "$lg" "$VC"; then ok "off check: nothing is written to a connection, no password is on a command line, vcf never runs, vCenter is never dialled"
+else bad "off check: something was sent, the password or the vCenter name reached a command line, or vcf ran"; fi
+if [ "$OFF_RC" = 0 ] && ! has "$out" "$CANARY"; then ok "off check: the report exits 0 and the password is not in it"
+else bad "off check: exit status ${OFF_RC} (want 0), or the password is in the report"; fi
+
+# -- verifies, the stored token expired: renew, then ask the Supervisor --
+knobs; off_render "$SC_OK" 0 silent "$ANCHOR_ENV"; out="$OFF_OUT"; tb="$(top "$out")"
+off_kept "off+verifies" "$out" verifies
+if has "$tb" "$UP_HEAD"; then ok "off+verifies: the headline says the Supervisor answered and nothing this repo installed did"
+else bad "off+verifies: the headline is not '$UP_HEAD'"; fi
+old_absent "off+verifies" "$out"
+if hasflat "$tb" "answered: the Supervisor ${HOST}, and the CA stored at ./secrets/supervisor-ca.crt verifies it, so the lab is not off and this machine reaches it."; then
+  ok "off+verifies: says the stored CA verifies the Supervisor, so the lab is not off"
+else bad "off+verifies: does not say the stored CA verifies the Supervisor and the lab is not off"; fi
+if has "$tb" 'silent (stored addresses): the ingress 127.0.0.1' \
+   && has "$tb" 'This report does not log in to the Supervisor, so it cannot tell which of these it is:' \
+   && has "$tb" '- the lab was just started and the guest cluster is still coming up' \
+   && has "$tb" "- the guest cluster '${GC}' was deleted, or the lab was restored to a point before the install;" \
+   && has "$tb" "- this machine reaches the Supervisor's address but not the guest cluster's."; then
+  ok "off+verifies: the silent list, and the three states it cannot tell apart (naming the guest cluster)"
+else bad "off+verifies: the silent list or one of the three states is missing"; fi
+if hasline "$tb" '        1. If the lab was just started, wait a few minutes and re-run: make creds' \
+   && has "$tb" '2. Otherwise ask the Supervisor whether the guest cluster exists. The Supervisor token this' \
+   && has "$tb" "$RENEW" && has "$tb" "$(sso_lockout_note) — do not retry blind." \
+   && hasline "$tb" "           Then: ${STATUS}"; then
+  ok "off+verifies (token expired): wait and re-run; else renew (with the lockout note), then ${STATUS}"
+else bad "off+verifies (token expired): step 1, the renew with its lockout note, or 'Then: ${STATUS}' is missing"; fi
+if has "$tb" '3. If it prints DOES NOT EXIST, start again at docs/scenario-1.md "6. Guest cluster"' \
+   && has "$tb" '(or "2. The vSphere Namespace" if the namespace is gone too).' && has "$tb" "$CLOSE_NEW"; then
+  ok "off+verifies: step 3 names what ${STATUS} prints and the two doc sections; the closing line excepts the Lab access rows"
+else bad "off+verifies: step 3 (DOES NOT EXIST, the two doc sections) or the closing line is missing"; fi
+if has "$tb" 'fetch-supervisor-ca' || has "$tb" 'DIFFERENT Supervisor' || has "$tb" 'start it'; then
+  bad "off+verifies: offers a re-pin, blames a different Supervisor, or says to start the lab"
+else ok "off+verifies: no re-pin, no 'different Supervisor', no 'start it'"; fi
+if command grep -q '[<>]' <<< "$tb"; then bad "off+verifies: a <placeholder> is printed in the block"
+else ok "off+verifies: no <placeholder> in the block"; fi
+# What step 3 quotes must be what the command prints, and the two section titles must exist.
+if command grep -qF 'DOES NOT EXIST — the Supervisor answered, and has no such Cluster.' scripts/26-vks-cluster-status.sh \
+   && command grep -qxF '## 6. Guest cluster' docs/scenario-1.md && command grep -qxF '## 2. The vSphere Namespace' docs/scenario-1.md \
+   && command grep -q '^vks-cluster-status:' Makefile; then
+  ok "off+verifies: ${STATUS} exists and prints DOES NOT EXIST; both doc sections exist under those titles"
+else bad "off+verifies: step 3 cites a string ${STATUS} no longer prints, a target that is gone, or a doc section that was renamed"; fi
+
+# -- verifies, the stored token still valid: no renew, no login, one command --
+knobs; TOKEN=valid; off_render "$SC_OK" 0 silent "$ANCHOR_ENV"; out="$OFF_OUT"; tb="$(top "$out")"; knobs
+off_kept "off+verifies+valid token" "$out" verifies
+if hasline "$tb" "        2. Otherwise ask the Supervisor whether the guest cluster exists: ${STATUS}" \
+   && ! has "$tb" "$RENEW" && ! has "$tb" 'make vks-login' && ! has "$tb" 'SSO'; then
+  ok "off+verifies (token valid): step 2 is ${STATUS} alone — no renew, no login, no SSO note"
+else bad "off+verifies (token valid): step 2 is not the one command, or a renew/login is offered for a token that is valid"; fi
+
+# -- verifies, no Supervisor login stored: log in first --
+knobs; SUPKC=no; off_render "$SC_OK" 0 silent "$ANCHOR_ENV"; out="$OFF_OUT"; tb="$(top "$out")"; knobs
+off_kept "off+verifies+no login" "$out" verifies
+if has "$tb" 'This repo has no Supervisor' && hasline "$tb" '             VKS_AUTH_METHOD=vcf make vks-login' \
+   && has "$tb" "$(sso_lockout_note) — do not retry blind." && hasline "$tb" "           Then: ${STATUS}" && ! has "$tb" "$RENEW"; then
+  ok "off+verifies (no login stored): says so, names the login with the lockout note, then ${STATUS}"
+else bad "off+verifies (no login stored): does not say there is no stored login, or the login/lockout note/${STATUS} is missing"; fi
+
+# -- verifies, the names unset: the command cannot run, so it is not prescribed --
+knobs; NAMES=no; off_render "$SC_OK" 0 silent "$ANCHOR_ENV"; out="$OFF_OUT"; tb="$(top "$out")"; knobs
+off_kept "off+verifies+no names" "$out" verifies
+if has "$tb" '2. Otherwise ask whoever runs the lab whether the guest cluster still exists.' \
+   && has "$tb" 'VKS_NAMESPACE and VKS_CLUSTER_NAME' && has "$tb" '- the guest cluster was deleted' && ! has "$tb" "''" \
+   && has "$tb" '3. If the guest cluster is gone, start again at docs/scenario-1.md "6. Guest cluster"' && ! has "$tb" 'If it prints'; then
+  ok "off+verifies (names unset): asks the operator of the lab, says which two names ${STATUS} needs, prints no empty quoted name, and step 3 quotes no command output"
+else bad "off+verifies (names unset): prescribes a command that stops on the unset names, prints an empty quoted name, or step 3 quotes the output of a command step 2 did not name"; fi
+
+# -- answers: the address accepts a connection and there is no CA file to check it with --
+knobs; off_render "$SC_STALE" 0 silent "$ANCHOR_ENV" no; out="$OFF_OUT"; tb="$(top "$out")"; lg="$(cat "$T/creds.log")"
+off_kept "off+answers" "$out" answers
+if has "$tb" "$ANS_HEAD" && ! has "$tb" "The Supervisor answered" && hasflat "$tb" "answered: the Supervisor address ${HOST} accepted a connection on port 443. This report could not check which Supervisor it is, so that is all it knows: something is running at that address, and this machine reaches it."; then
+  ok "off+answers: says a connection was accepted, and that this is all the report knows"
+else bad "off+answers: does not say the address accepted a connection and that the report could not check which Supervisor it is"; fi
+old_absent "off+answers" "$out"
+if has "$tb" 'verifies it' || has "$tb" 'the lab is not off' || has "$tb" 'DIFFERENT Supervisor' || has "$tb" 'fetch-supervisor-ca'; then
+  bad "off+answers: makes a claim only a handshake could support (verifies / the lab is not off / a different Supervisor / a re-pin)"
+else ok "off+answers: claims nothing a handshake would have had to establish"; fi
+if has "$lg" 'openssl s_client'; then bad "off+answers: a handshake was attempted with no CA file"
+else ok "off+answers: no handshake attempted (there is no CA file)"; fi
+if has "$tb" "$STATUS" && has "$tb" "$CLOSE_NEW"; then ok "off+answers: the same steps and closing line as 'verifies'"
+else bad "off+answers: ${STATUS} or the closing line is missing"; fi
+# One of the login's own verdicts (wrong name) after an accepted connection is 'answers' too.
+off_render "$SC_NAME" 0 silent "$ANCHOR_ENV"; out="$OFF_OUT"
+if hasline "$out" 'lab-off-sup: answers' && ! has "$out" 'verifies it' && ! has "$out" "$OLD_HEAD"; then ok "off+answers: a wrong-name verdict after an accepted connection is 'answers', not 'verifies'"
+else bad "off+answers: a wrong-name verdict reads '$(command grep '^lab-off-sup:' <<< "$out" || echo none)', want answers"; fi
+
+# -- dates: the anchor is right; a login cannot work until the dates are valid --
+knobs; SC2="$SC_OK"; off_render "$SC_EXPIRED" 0 silent "$ANCHOR_ENV"; out="$OFF_OUT"; tb="$(top "$out")"; knobs
+off_kept "off+dates" "$out" dates
+old_absent "off+dates" "$out"
+if has "$tb" "$UP_HEAD" && hasflat "$tb" "answered: the Supervisor ${HOST}, and the CA stored at ./secrets/supervisor-ca.crt is the right one (the certificate's dates are not valid on this machine: step 2), so the lab is not off and this machine reaches it."; then
+  ok "off+dates: says the stored CA is the right one and points at step 2 for the dates"
+else bad "off+dates: does not say the stored CA is the right one with dates that are not valid here"; fi
+if has "$tb" "2. Otherwise settle the certificate's dates first." && has "$tb" 'valid from:' && has "$tb" 'valid until:' \
+   && hasflat "$tb" 'Do NOT replace the CA file.' && hasline "$tb" '           Once the time is inside those two dates: make creds'; then
+  ok "off+dates: step 2 is the shared dates text (the two dates, this machine's clock), then 'make creds'"
+else bad "off+dates: step 2 does not carry the shared dates text, or its closing 'make creds' is missing"; fi
+if has "$tb" "$RENEW" || has "$tb" 'fetch-supervisor-ca' || has "$tb" "$STATUS" || has "$tb" 'DIFFERENT Supervisor'; then
+  bad "off+dates: offers a renew, a re-pin, ${STATUS} or 'different Supervisor' for a clock/expiry problem"
+else ok "off+dates: no renew, no re-pin, no ${STATUS} (none can work until the dates are valid)"; fi
+
+# -- cadates: the stored CA FILE is out of date; replacing it is the fix --
+knobs; SC2="$SC_OK"; VERIFYOUT="$CA_EXPIRED_OUT"; off_render "$SC_EXPIRED" 0 silent "$ANCHOR_ENV"; out="$OFF_OUT"; tb="$(top "$out")"; knobs
+off_kept "off+cadates" "$out" cadates
+old_absent "off+cadates" "$out"
+if has "$tb" "$UP_HEAD" && hasflat "$tb" "answered: the Supervisor ${HOST}; the CA stored at ./secrets/supervisor-ca.crt is outside its own dates (step 2)" \
+   && has "$tb" '2. Otherwise replace the stored CA file first.' && has "$tb" "$CA_DATES_HEAD" \
+   && hasline "$tb" '             make fetch-supervisor-ca' && hasline "$tb" '           After the login: make creds'; then
+  ok "off+cadates: says the CA file is outside its dates; step 2 is the file's dates and the re-pin commands"
+else bad "off+cadates: the CA-file dates text or the re-pin commands are missing from step 2"; fi
+if has "$tb" "$RENEW" || hasflat "$tb" 'is the right one' || has "$tb" 'DIFFERENT Supervisor'; then
+  bad "off+cadates: offers a renew, says the CA is the right one to keep, or blames a different Supervisor"
+else ok "off+cadates: no renew, no 'the right one', no 'different Supervisor'"; fi
+
+# -- the cells: a read that ran out of time says what did not answer --
+# With the Supervisor answering, '<not read — nothing answered>' would contradict the headline.
+knobs; TOKEN=valid; HANG=argocd; off_render "$SC_OK" 0 silent "$ANCHOR_ENV
+CREDS_KUBE_TIMEOUT_SECONDS=1"; out="$OFF_OUT"; knobs
+off_kept "off+verifies+cells" "$out" verifies
+# TWO cells: ArgoCD's password (the read ran out of time) and the headlamp token (the guest
+# cluster's API refused the request). Both must say it, so the count is asserted, not presence.
+_nc="$(command grep -c '<not read — the install did not answer>' <<< "$out" || true)"
+if [ "$_nc" = 2 ] && ! has "$out" 'nothing answered>'; then
+  ok "off+verifies: the ArgoCD and headlamp cells both read '<not read — the install did not answer>'"
+else bad "off+verifies: want 2 cells reading '<not read — the install did not answer>' and none saying 'nothing answered', got ${_nc} (cells: $(command grep -o '<not read[^>]*>' <<< "$out" | sort | uniq -c | tr '\n' ' '))"; fi
+knobs; TOKEN=valid; HANG=argocd; TCPRC=1; off_render "$SC_OK" 0 silent "$ANCHOR_ENV
+CREDS_KUBE_TIMEOUT_SECONDS=1"; out="$OFF_OUT"; knobs
+_nc="$(command grep -c '<not read — nothing answered>' <<< "$out" || true)"
+if hasline "$out" 'lab-off-sup: silent' && [ "$_nc" = 2 ] && ! has "$out" 'the install did not answer'; then
+  ok "off+silent: the same two cells still read '<not read — nothing answered>' when the Supervisor did not answer"
+else bad "off+silent: want 2 cells reading '<not read — nothing answered>', got ${_nc} (cells: $(command grep -o '<not read[^>]*>' <<< "$out" | sort | uniq -c | tr '\n' ' '))"; fi
+# The headlamp token has a second way to get no reply: the request itself runs out of time.
+knobs; TOKEN=valid; HANG=headlamp; off_render "$SC_OK" 0 silent "$ANCHOR_ENV
+CREDS_KUBE_TIMEOUT_SECONDS=1"; out="$OFF_OUT"; knobs
+_nc="$(command grep -c '<not read — the install did not answer>' <<< "$out" || true)"
+if hasline "$out" 'lab-off-sup: verifies' && [ "$_nc" = 1 ] && ! has "$out" 'nothing answered>'; then
+  ok "off+verifies: a headlamp token request that ran out of time reads '<not read — the install did not answer>' too"
+else bad "off+verifies: a timed-out headlamp token request: want 1 cell reading '<not read — the install did not answer>', got ${_nc} (cells: $(command grep -o '<not read[^>]*>' <<< "$out" | sort | uniq -c | tr '\n' ' '))"; fi
+
+# -- silent and skip: the block as it was before the check existed --
+# `silent` two ways (the connect is refused; the connect is accepted and the handshake gets no
+# answer) and `skip` (no SUPERVISOR_HOST). The three blocks must be the SAME TEXT, and that text
+# must be the old one: its seven sentences are pinned in test-creds-show.sh's powered-off fixture.
+knobs; TCPRC=1; off_render "$SC_OK" 0 silent "$ANCHOR_ENV"; out_ref="$OFF_OUT"; lg="$(cat "$T/creds.log")"; knobs
+off_kept "off+silent (refused)" "$out_ref" silent
+if has "$lg" 'openssl s_client'; then bad "off+silent (refused): a handshake was attempted after the connect was refused"
+else ok "off+silent (refused): the refused connect is the whole cost — no handshake follows"; fi
+off_render "$SC_SILENT" 1 silent "$ANCHOR_ENV"; out_hs="$OFF_OUT"
+off_kept "off+silent (handshake)" "$out_hs" silent
+off_render "$SC_STALE" 0 silent "VKS_CA_CERT_FILE=./secrets/supervisor-ca.crt"; out_skip="$OFF_OUT"; lg="$(cat "$T/creds.log")"
+off_kept "off+skip (no SUPERVISOR_HOST)" "$out_skip" skip
+if has "$lg" 'tcp-connect=' || has "$lg" 'openssl s_client'; then bad "off+skip: a connect or a handshake was made with no SUPERVISOR_HOST"
+else ok "off+skip: nothing is dialled when SUPERVISOR_HOST is not set"; fi
+_blk() { top "$1" | command grep -v '^lab-off-sup:'; }
+if [ -n "$(_blk "$out_ref")" ] && [ "$(_blk "$out_ref")" = "$(_blk "$out_hs")" ] && [ "$(_blk "$out_ref")" = "$(_blk "$out_skip")" ]; then
+  ok "off+silent/skip: the three blocks are the same text"
+else bad "off+silent/skip: the block differs between a refused connect, a silent handshake and no SUPERVISOR_HOST"; fi
+for _o in "$out_ref" "$out_skip"; do
+  if has "$_o" "$OLD_HEAD" && has "$_o" 'The lab is still starting, is OFF, or this machine cannot reach it. Do this, in order:' \
+     && has "$_o" 'Otherwise the lab is off: if you run it, start it; if not, ask whoever runs it.' && has "$_o" "$CLOSE_OLD" \
+     && has "$_o" 'the lab did not answer, so treat them as last known' \
+     && ! has "$_o" 'The Supervisor answered' && ! has "$_o" 'The lab is UP' && ! has "$_o" "$CLOSE_NEW" && ! has "$_o" 'the install did not answer'; then
+    ok "off+$(command grep '^lab-off-sup:' <<< "$_o" | cut -d' ' -f2): the old block, and no sentence from the new arms"
+  else bad "off+$(command grep '^lab-off-sup:' <<< "$_o" | cut -d' ' -f2): the old block lost a sentence, or carries one from the new arms"; fi
+done
+
+# -- a report that is NOT in the powered-off state pays nothing for this check --
+knobs; out="$(creds_render "$SC_STALE" 0 silent "$ANCHOR_ENV")"; lg="$(cat "$T/creds.log")"
+if hasline "$out" 'lab-off: 0' && ! has "$out" 'lab-off-sup:' && ! has "$lg" 'tcp-connect='; then
+  ok "not off: no 'lab-off-sup' token and no extra connect when the signature does not hold"
+else bad "not off: the Supervisor connect ran (or its token printed) although 'lab-off' is 0"; fi
+
+# -- the function alone: every guard, with stand-ins that record whether they were called --
+_off_fn="$(awk 'index($0,"_sup_off_probe() {")==1{p=1} p{print} p&&/^\}/{exit}' scripts/creds.sh)"
+[ -n "$_off_fn" ] || bad "harness: could not extract _sup_off_probe() from creds.sh (renamed or reshaped)"
+off_says() {  # off_says <no-probe 0|1> <host> <connect rc> <anchor word> ; prints "<word> tcp=<0|1> anchor=<0|1>"
+  bash -c 'eval "$1"; _no_probe_snapshot="$2"; SUPERVISOR_HOST="$3"; _trc="$4"; _aw="$5"; _m="$6"
+           tls_port_accepts() { : > "$_m.tcp"; return "$_trc"; }
+           _sup_anchor_probe() { : > "$_m.anchor"; printf "%s" "$_aw"; }
+           w="$(_sup_off_probe /some/ca)"; t=0; a=0; [ -e "$_m.tcp" ] && t=1; [ -e "$_m.anchor" ] && a=1
+           printf "%s tcp=%s anchor=%s" "$w" "$t" "$a"' \
+    _ "$_off_fn" "$1" "$2" "$3" "$4" "$T/off-mark"
+  rm -f "$T/off-mark.tcp" "$T/off-mark.anchor"
+}
+for _oc in "0|${HOST}|0|stale|stale tcp=1 anchor=1"     "0|${HOST}|0|verifies|verifies tcp=1 anchor=1" \
+           "0|${HOST}|0|dates|dates tcp=1 anchor=1"     "0|${HOST}|0|cadates|cadates tcp=1 anchor=1" \
+           "0|${HOST}|0|silent|silent tcp=1 anchor=1"   "0|${HOST}|0|skip|answers tcp=1 anchor=1" \
+           "0|${HOST}|1|stale|silent tcp=1 anchor=0"    "1|${HOST}|0|stale|skip tcp=0 anchor=0" \
+           "0||0|stale|skip tcp=0 anchor=0"; do
+  IFS='|' read -r _o1 _o2 _o3 _o4 _o5 <<< "$_oc"
+  _og="$(off_says "$_o1" "$_o2" "$_o3" "$_o4")"
+  if [ "$_og" = "$_o5" ]; then ok "off probe: no-probe=${_o1} host='${_o2}' connect-rc=${_o3} anchor=${_o4} -> ${_o5}"
+  else bad "off probe: no-probe=${_o1} host='${_o2}' connect-rc=${_o3} anchor=${_o4} should give '${_o5}', got '${_og}'"; fi
+done
+_oa="$(bash -c 'eval "$1"; _no_probe_snapshot=0; SUPERVISOR_HOST="$2"; CREDS_PROBE_TIMEOUT_SECONDS=3
+                tls_port_accepts() { printf "%s %s %s" "$1" "$2" "$3" >&2; return 1; }
+                _sup_anchor_probe() { :; }; _sup_off_probe /some/ca >/dev/null' _ "$_off_fn" "$HOST" 2>&1)"
+if [ "$_oa" = "${HOST} 443 3" ]; then ok "off probe: the connect goes to SUPERVISOR_HOST on 443 with this report's probe budget (3s when it is 3)"
+else bad "off probe: the connect was asked as '${_oa}', want '${HOST} 443 3'"; fi
 
 # ── 3. 30-vks-login.sh's refusal ─────────────────────────────────────────────────────────────────
 echo "== 3. the login's refusal =="

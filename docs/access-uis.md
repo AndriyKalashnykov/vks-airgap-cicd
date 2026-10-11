@@ -52,7 +52,10 @@ make creds-show
 
 ⚠️ `<not read — token expired>` is **not** the same as a missing value. It means *this report did
 not ask*, because the token had already expired, and the banner names which cells it affects. A
-cell reading `<not read — nothing answered>` was asked and got no reply. Other placeholders in that
+cell reading `<not read — nothing answered>` was asked and got no reply. A cell reading
+`<not read — the install did not answer>` got no reply either, in a report whose first lines say
+the Supervisor's address answered: what is silent is what this repo installed on it. Other
+placeholders in that
 column (`<forbidden>`, `<no key>`, `<no harbor ns>`) mean different things and each carries its own
 footnote. A cell reading `<see note below>` means the reason is too long for the table: it is printed
 under the table as `note — <Service> (too long for the table):`.
